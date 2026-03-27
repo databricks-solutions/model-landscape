@@ -11,8 +11,10 @@ variables:
     description: Existing SQL warehouse for the app and refresh workflow
   lakebase_instance_name:
     description: Existing Lakebase instance for fast Model Lens UI reads
+    default: ""
   lakebase_database_name:
     description: Existing Lakebase database name for Model Lens projections
+    default: ""
   lakebase_pguser:
     default: ""
   lakebase_schema:
@@ -26,6 +28,55 @@ targets:
     default: true
     workspace:
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+  warehouse_only:
+    mode: development
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    resources:
+      apps:
+        control_plane:
+          config:
+            command:
+              - python
+              - -m
+              - model_lens.app
+            env:
+              - name: APP_TITLE
+                value: Model Lens
+              - name: PYTHONPATH
+                value: src
+              - name: CONTROL_PLANE_CATALOG
+                value: model_observability
+              - name: CONTROL_PLANE_SCHEMA
+                value: control_plane
+              - name: SQL_WAREHOUSE_ID
+                valueFrom: sql_warehouse
+              - name: USE_LAKEBASE_READ_MODEL
+                value: "false"
+              - name: LAKEBASE_SCHEMA
+                value: ${var.lakebase_schema}
+              - name: REFRESH_JOB_ID
+                valueFrom: refresh_job
+              - name: GENIE_SPACE_ID
+                value: ${var.genie_space_id}
+          resources:
+            - name: sql_warehouse
+              sql_warehouse:
+                id: ${var.sql_warehouse_id}
+                permission: CAN_USE
+            - name: refresh_job
+              job:
+                id: ${resources.jobs.refresh_control_plane.id}
+                permission: CAN_MANAGE_RUN
+      jobs:
+        refresh_control_plane:
+          tasks:
+            - task_key: refresh_control_plane
+              spark_python_task:
+                python_file: scripts/model_lens_refresh.py
+                parameters:
+                  - --warehouse-id
+                  - ${var.sql_warehouse_id}
   prod:
     mode: production
     workspace:

@@ -35,9 +35,14 @@ You need:
 - Databricks CLI auth configured for the target workspace
 - a SQL warehouse you can use
 - serverless jobs enabled in the target workspace
-- a Lakebase instance and database for the UI read model
 - privileges to create tables in a test catalog/schema
 - privileges to deploy Databricks Asset Bundles and open Databricks Apps
+
+If you are testing the Lakebase path, you also need:
+
+- a Lakebase instance
+- a Lakebase database
+- a Lakebase DB user for the refresh workflow
 
 ## Step 1: Local Validation
 
@@ -48,11 +53,7 @@ cd /Users/volo.vragov/Desktop/work/model-lens
 python3 -m pytest
 python3 scripts/model_lens_setup.py --help
 python3 scripts/model_lens_refresh.py --help
-BUNDLE_VAR_sql_warehouse_id=<sql-warehouse-id> \
-BUNDLE_VAR_lakebase_instance_name=<lakebase-instance-name> \
-BUNDLE_VAR_lakebase_database_name=<lakebase-database-name> \
-BUNDLE_VAR_lakebase_pguser=<lakebase-db-user> \
-databricks bundle validate
+databricks bundle validate -t warehouse_only --var "sql_warehouse_id=<sql-warehouse-id>"
 ```
 
 Expected result:
@@ -103,11 +104,8 @@ Deploy into your test target:
 
 ```bash
 databricks bundle deploy \
-  -t dev \
-  --var "sql_warehouse_id=<sql-warehouse-id>" \
-  --var "lakebase_instance_name=<lakebase-instance-name>" \
-  --var "lakebase_database_name=<lakebase-database-name>" \
-  --var "lakebase_pguser=<lakebase-db-user>"
+  -t warehouse_only \
+  --var "sql_warehouse_id=<sql-warehouse-id>"
 ```
 
 Expected result:
@@ -115,7 +113,6 @@ Expected result:
 - bundle deploy succeeds
 - the Databricks app `model-lens` exists
 - the workflow `model-lens-refresh` exists
-- the app has a Lakebase database resource
 
 ## Step 4: Open The App
 
@@ -125,8 +122,7 @@ Check immediately:
 
 - the app title reads `Model Lens`
 - `SQL_WAREHOUSE_ID` is populated
-- `USE_LAKEBASE_READ_MODEL` is `true`
-- `LAKEBASE_DATABASE_NAME` is shown
+- `USE_LAKEBASE_READ_MODEL` is `false`
 - there is no pre-rename product naming anywhere
 
 ## Step 5: Initialize The Control Plane
@@ -152,7 +148,7 @@ Expected tables:
 - `performance_metrics`
 - `incidents`
 
-If you have Lakebase SQL access, also verify:
+If you are testing the Lakebase target instead of `warehouse_only`, also verify:
 
 ```sql
 SELECT table_name
@@ -280,7 +276,7 @@ Expected:
 - zero or more rows
 - with this dataset, at least one drift incident is likely
 
-If you can query Lakebase directly, also verify:
+If you are testing the Lakebase target instead of `warehouse_only`, also verify:
 
 ```sql
 SELECT * FROM model_lens_ui.monitor_inventory ORDER BY display_name;
@@ -391,7 +387,7 @@ Do not send to a client until all of these are true:
 - control-plane setup succeeds
 - one monitor can be onboarded end to end
 - warehouse tables contain the expected rows
-- Lakebase tables contain the expected projected rows
+- if you tested the Lakebase target, Lakebase tables contain the expected projected rows
 - the app summary matches the persisted state
 - the workflow refresh path works outside the app
 - there are no old names left in the product surface

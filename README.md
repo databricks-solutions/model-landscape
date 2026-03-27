@@ -2,7 +2,7 @@
 
 Model Lens is a private, Databricks-native model observability product for customer workspaces.
 
-It is built for teams that want an in-house alternative to external observability vendors without moving inference data out of Databricks. The product keeps monitoring state in Unity Catalog, uses a Databricks App for onboarding and investigation, and uses Lakebase as a fast read model so the UI stays responsive.
+It is built for teams that want an in-house alternative to external observability vendors without moving inference data out of Databricks. The product keeps monitoring state in Unity Catalog, uses a Databricks App for onboarding and investigation, and can run either warehouse-only or with Lakebase as a fast read model.
 
 ## What It Does
 
@@ -10,7 +10,7 @@ It is built for teams that want an in-house alternative to external observabilit
 - map source columns into one stable monitoring contract
 - compute drift, quality, and performance-contributor summaries on a refresh workflow
 - persist durable monitoring state in Unity Catalog Delta tables
-- project hot UI state into Lakebase for fast monitor and incident views
+- optionally project hot UI state into Lakebase for fast monitor and incident views
 - keep the whole stack deployable inside a customer Databricks workspace
 
 ## Product Shape
@@ -20,7 +20,7 @@ Model Lens has three layers:
 1. `Warehouse system of record`
    - Unity Catalog Delta tables under `model_observability.control_plane`
    - full monitor configs, metrics, and incidents
-2. `Lakebase read model`
+2. `Optional Lakebase read model`
    - fast monitor-summary and incident projection for the app
    - not the source of truth
 3. `Operator app + refresh workflow`
@@ -31,14 +31,12 @@ Model Lens has three layers:
 flowchart LR
   User["Operator"] --> App["Model Lens Databricks App"]
   App -->|scan source tables / write configs| Warehouse["Databricks SQL Warehouse"]
-  App -->|fast summary + incident reads| Lakebase["Lakebase Read Model"]
-
   Refresh["Model Lens Refresh Workflow"] -->|read inference + labels| Warehouse
   Refresh -->|write metrics + incidents| Control["Unity Catalog Control Plane"]
-  Refresh -->|sync UI projection| Lakebase
-
   Warehouse --> Source["Unity Catalog Inference Tables"]
   Control --> Warehouse
+  App -->|optional accelerated reads| Lakebase["Lakebase Read Model"]
+  Refresh -->|optional UI sync| Lakebase
 ```
 
 ## Monitoring Contract
@@ -64,6 +62,16 @@ Current engine behavior:
 - non-numeric selected features are kept in the contract and projected into the UI
 - labels can come from the source table or an external labels table
 
+## Deployment Modes
+
+Model Lens now supports two deployment modes:
+
+1. `warehouse_only`
+   Use this first if you want the simplest deployment and do not have Lakebase ready yet.
+
+2. `dev` or `prod`
+   Use these when you want the Lakebase-backed fast UI path.
+
 ## Deploy Prerequisites
 
 You need all of the following in the target Databricks workspace:
@@ -71,23 +79,34 @@ You need all of the following in the target Databricks workspace:
 - Databricks CLI auth configured
 - one SQL warehouse for Model Lens reads and writes
 - serverless jobs enabled
-- one Lakebase instance and database for the UI read model
 - permissions to deploy Databricks Asset Bundles and Databricks Apps
 - permissions to create/write:
   - source test tables
   - `model_observability.control_plane`
-  - the target Lakebase database
+  - the target Lakebase database if using Lakebase mode
 
-The scheduled refresh job also needs to be able to connect to Lakebase. In practice, that means the job identity must be allowed to mint database credentials and connect to the target Lakebase database.
+If you use Lakebase mode, the scheduled refresh job also needs to be able to connect to Lakebase. In practice, that means the job identity must be allowed to mint database credentials and connect to the target Lakebase database.
 
 ## Quick Deploy
 
-From the repo root:
+Warehouse-only:
 
 ```bash
 cd /Users/volo.vragov/Desktop/work/model-lens
 python3 -m pytest
 
+databricks bundle validate \
+  -t warehouse_only \
+  --var "sql_warehouse_id=<sql-warehouse-id>"
+
+databricks bundle deploy \
+  -t warehouse_only \
+  --var "sql_warehouse_id=<sql-warehouse-id>"
+```
+
+Lakebase-enabled:
+
+```bash
 databricks bundle validate \
   -t dev \
   --var "sql_warehouse_id=<sql-warehouse-id>" \
@@ -164,7 +183,7 @@ PYTHONPATH=src python3 scripts/model_lens_refresh.py \
 Implemented now:
 
 - warehouse-backed control plane
-- Lakebase-backed monitor summary and incident inbox reads
+- optional Lakebase-backed monitor summary and incident inbox reads
 - app-driven setup, onboarding, and refresh
 - serverless refresh workflow
 - external labels joins

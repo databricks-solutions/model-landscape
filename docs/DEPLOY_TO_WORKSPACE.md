@@ -2,6 +2,16 @@
 
 This is the step-by-step path to deploy Model Lens into your own Databricks workspace before handing it to a client.
 
+## Choose A Deployment Mode
+
+Model Lens supports two modes:
+
+1. `warehouse_only`
+   Use this if you want the simplest path today.
+
+2. `dev` or `prod`
+   Use this when you want the Lakebase-accelerated UI.
+
 ## What You Need Before Deploy
 
 You need a workspace with:
@@ -9,19 +19,21 @@ You need a workspace with:
 - Databricks CLI auth already working
 - one SQL warehouse
 - serverless jobs enabled
-- one Lakebase instance
-- one Lakebase database for Model Lens UI projections
 - privileges to deploy apps and workflows
 - privileges to create and write:
   - `model_observability.control_plane`
   - a test catalog/schema for scratch data
-  - the Lakebase database
+  - the Lakebase database if using Lakebase mode
 
-You also need a Lakebase database user for the refresh workflow. In many workspaces this is the user or service principal that will run the job.
+If you use Lakebase mode, you also need a Lakebase database user for the refresh workflow. In many workspaces this is the user or service principal that will run the job.
 
 ## Variables You Must Supply
 
-At deploy time, Model Lens expects:
+For `warehouse_only`, Model Lens expects:
+
+- `sql_warehouse_id`
+
+For `dev` or `prod`, Model Lens expects:
 
 - `sql_warehouse_id`
 - `lakebase_instance_name`
@@ -32,10 +44,20 @@ At deploy time, Model Lens expects:
 
 From the repo root:
 
+Warehouse-only:
+
 ```bash
 cd /Users/volo.vragov/Desktop/work/model-lens
 python3 -m pytest
 
+databricks bundle validate \
+  -t warehouse_only \
+  --var "sql_warehouse_id=<sql-warehouse-id>"
+```
+
+Lakebase-enabled:
+
+```bash
 databricks bundle validate \
   -t dev \
   --var "sql_warehouse_id=<sql-warehouse-id>" \
@@ -51,6 +73,16 @@ Expected result:
 
 ## 2. Deploy The Bundle
 
+Warehouse-only:
+
+```bash
+databricks bundle deploy \
+  -t warehouse_only \
+  --var "sql_warehouse_id=<sql-warehouse-id>"
+```
+
+Lakebase-enabled:
+
 ```bash
 databricks bundle deploy \
   -t dev \
@@ -64,7 +96,7 @@ Expected result:
 
 - the app `model-lens` is created
 - the workflow `model-lens-refresh` is created
-- the app gets warehouse access and a Lakebase database resource
+- in Lakebase mode, the app gets a Lakebase database resource
 
 ## 3. Open The App
 
@@ -74,8 +106,8 @@ Verify:
 
 - the title is `Model Lens`
 - `SQL_WAREHOUSE_ID` is populated
-- `USE_LAKEBASE_READ_MODEL` is `true`
-- `LAKEBASE_DATABASE_NAME` is shown
+- in warehouse-only mode, `USE_LAKEBASE_READ_MODEL` is `false`
+- in Lakebase mode, `USE_LAKEBASE_READ_MODEL` is `true` and `LAKEBASE_DATABASE_NAME` is shown
 
 ## 4. Initialize The Control Plane
 
@@ -84,7 +116,7 @@ In the app, click `Setup Control Plane`.
 Expected result:
 
 - the Unity Catalog control-plane tables are created
-- the Lakebase projection schema is created
+- in Lakebase mode, the Lakebase projection schema is created
 
 Verify in SQL:
 
@@ -157,7 +189,7 @@ WHERE model_key = 'fraud_model_demo'
 ORDER BY feature_name, metric_name;
 ```
 
-Verify the Lakebase UI projection:
+If you deployed Lakebase mode, verify the Lakebase UI projection:
 
 ```sql
 SELECT * FROM model_lens_ui.monitor_inventory ORDER BY display_name;
@@ -168,19 +200,19 @@ SELECT * FROM model_lens_ui.open_incidents ORDER BY observed_at DESC;
 Expected result:
 
 - warehouse tables contain the durable metrics
-- Lakebase tables contain the latest monitor inventory, summary, and open incidents
+- in Lakebase mode, Lakebase tables contain the latest monitor inventory, summary, and open incidents
 
 ## 8. Verify The Workflow
 
 Open the workflow `model-lens-refresh` and run it once manually.
 
-Then repeat the same warehouse and Lakebase checks.
+Then repeat the same warehouse checks and, if applicable, the Lakebase checks.
 
 Expected result:
 
 - the workflow completes successfully
 - warehouse metrics update
-- Lakebase projection updates too
+- in Lakebase mode, the Lakebase projection updates too
 
 ## 9. What To Check Before Sending To A Client
 
@@ -191,7 +223,7 @@ Do not send this to a client until all of the following are true:
 - a real or scratch monitor can be created
 - the refresh workflow completes
 - warehouse tables populate correctly
-- Lakebase tables populate correctly
+- in Lakebase mode, Lakebase tables populate correctly
 - the app loads summary and incidents without errors
 
 ## Common Failure Modes
