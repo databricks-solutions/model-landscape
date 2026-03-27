@@ -13,6 +13,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--schema", required=False)
     parser.add_argument("--warehouse-id", required=False)
     parser.add_argument("--model-key", required=False, default="")
+    parser.add_argument("--use-lakebase-read-model", action="store_true")
+    parser.add_argument("--lakebase-instance-name", required=False, default="")
+    parser.add_argument("--lakebase-database-name", required=False, default="")
+    parser.add_argument("--lakebase-host", required=False, default="")
+    parser.add_argument("--lakebase-port", required=False, type=int, default=5432)
+    parser.add_argument("--lakebase-pguser", required=False, default="")
+    parser.add_argument("--lakebase-password", required=False, default="")
+    parser.add_argument("--lakebase-sslmode", required=False, default="require")
+    parser.add_argument("--lakebase-schema", required=False, default="")
     return parser.parse_args()
 
 
@@ -22,6 +31,15 @@ def main() -> int:
         warehouse_id=args.warehouse_id or "",
         catalog=args.catalog,
         schema=args.schema,
+        use_lakebase_read_model=args.use_lakebase_read_model,
+        lakebase_instance_name=args.lakebase_instance_name or None,
+        lakebase_database_name=args.lakebase_database_name or None,
+        lakebase_host=args.lakebase_host or None,
+        lakebase_port=args.lakebase_port,
+        lakebase_pguser=args.lakebase_pguser or None,
+        lakebase_password=args.lakebase_password or None,
+        lakebase_sslmode=args.lakebase_sslmode or None,
+        lakebase_schema=args.lakebase_schema or None,
     )
     counts = run_refresh_cycle(repository, model_key=args.model_key)
     print(

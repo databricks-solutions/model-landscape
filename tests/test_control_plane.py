@@ -18,12 +18,57 @@ class FakeWarehouse:
         self.executed_params: list[tuple[str, tuple]] = []
         self.batch_calls: list[tuple[str, list[tuple]]] = []
         self.queries: list[str] = []
+        self.monitor_row = {
+            "model_key": "payments_risk_v1",
+            "display_name": "Payments Risk",
+            "source_table": "catalog.schema.inference_logs",
+            "timestamp_col": "event_ts",
+            "model_id_col": "model_id",
+            "prediction_col": "prediction",
+            "model_version_col": "",
+            "prediction_score_col": "",
+            "label_col": "label",
+            "entity_id_col": "entity_id",
+            "feature_columns": '["amount","segment"]',
+            "slice_columns": '["segment"]',
+            "categorical_columns": '["segment"]',
+            "baseline_kind": "first_n_days",
+            "baseline_n_days": 7,
+            "baseline_max_comparison_days": 90,
+            "problem_type": "classification",
+            "labels_table": "",
+            "labels_join_col": "",
+            "created_by": "app",
+        }
 
     def execute(self, sql: str) -> None:
         self.executed.append(sql)
 
     def execute_params(self, sql: str, params: tuple) -> None:
         self.executed_params.append((sql, params))
+        if "INSERT INTO" in sql and "monitor_configs" in sql:
+            self.monitor_row = {
+                "model_key": params[0],
+                "display_name": params[1],
+                "source_table": params[2],
+                "timestamp_col": params[3],
+                "model_id_col": params[4],
+                "prediction_col": params[5],
+                "model_version_col": params[6],
+                "prediction_score_col": params[7],
+                "label_col": params[8],
+                "entity_id_col": params[9],
+                "feature_columns": '["amount","segment"]',
+                "slice_columns": '["segment"]',
+                "categorical_columns": '["segment"]',
+                "baseline_kind": params[10],
+                "baseline_n_days": params[11],
+                "baseline_max_comparison_days": params[12],
+                "problem_type": params[13],
+                "labels_table": params[14],
+                "labels_join_col": params[15],
+                "created_by": params[16],
+            }
 
     def execute_batch(self, insert_template: str, rows: list[tuple], batch_size: int = 200) -> None:
         del batch_size
@@ -34,6 +79,28 @@ class FakeWarehouse:
         self.queries.append(sql)
         if "MIN(CAST" in sql:
             return pd.DataFrame([{"min_date": "2026-01-01", "max_date": "2026-01-20"}])
+        if "WITH latest_window AS" in sql:
+            return pd.DataFrame([{
+                "model_key": self.monitor_row["model_key"],
+                "display_name": self.monitor_row["display_name"],
+                "max_psi": 0.34,
+                "feature_count": 2,
+                "latest_window_end": "2026-01-20",
+                "total_rows": 120,
+                "latest_data_date": "2026-01-20",
+                "last_refresh_at": "2026-01-20T12:00:00+00:00",
+                "open_incident_count": 1,
+            }])
+        if "FROM model_observability.control_plane.incidents" in sql and "WHERE status = 'open'" in sql:
+            return pd.DataFrame([{
+                "model_key": self.monitor_row["model_key"],
+                "feature_name": "amount",
+                "metric_name": "psi",
+                "severity": "critical",
+                "metric_value": 0.34,
+                "window_end": "2026-01-20",
+                "observed_at": "2026-01-20T12:00:00+00:00",
+            }])
         return pd.DataFrame([
             {
                 "event_ts": "2026-01-10T00:00:00",
@@ -46,7 +113,9 @@ class FakeWarehouse:
         ])
 
     def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
-        del sql, params
+        del params
+        if "SELECT * FROM" in sql and "monitor_configs" in sql:
+            return pd.DataFrame([self.monitor_row])
         return pd.DataFrame()
 
     def describe_table(self, table_name: str) -> pd.DataFrame:
@@ -175,3 +244,77 @@ def test_run_refresh_cycle_skips_replacing_results_when_not_enough_data() -> Non
     assert counts.performance_rows == 0
     assert counts.incident_rows == 0
     assert repository.replaced == []
+
+
+class FakeReadModel:
+    def __init__(self) -> None:
+        self.configured = True
+        self.ensured = 0
+        self.synced: list[dict] = []
+
+    def ensure_schema(self) -> None:
+        self.ensured += 1
+
+    def replace_dashboard_projection(self, *, configs, summary, incidents) -> None:
+        self.synced.append({
+            "configs": configs,
+            "summary": summary,
+            "incidents": incidents,
+        })
+
+    def get_monitor_summary(self) -> pd.DataFrame:
+        return pd.DataFrame([{
+            "model_key": "payments_risk_v1",
+            "display_name": "Payments Risk",
+            "max_psi": 0.51,
+            "feature_count": 2,
+            "latest_window_end": "2026-01-21",
+            "total_rows": 140,
+            "latest_data_date": "2026-01-21",
+            "last_refresh_at": "2026-01-21T12:00:00+00:00",
+            "open_incident_count": 2,
+        }])
+
+    def get_open_incidents(self) -> pd.DataFrame:
+        return pd.DataFrame([{
+            "model_key": "payments_risk_v1",
+            "feature_name": "amount",
+            "metric_name": "psi",
+            "severity": "critical",
+            "metric_value": 0.51,
+            "window_end": "2026-01-21",
+            "observed_at": "2026-01-21T12:00:00+00:00",
+        }])
+
+
+def test_upsert_monitor_config_syncs_lakebase_projection() -> None:
+    warehouse = FakeWarehouse()
+    read_model = FakeReadModel()
+    repository = ControlPlaneRepository(
+        warehouse=warehouse,
+        table_names=TableNames("model_observability", "control_plane"),
+        read_model=read_model,
+    )
+
+    repository.upsert_monitor_config(_monitor_config())
+
+    assert read_model.ensured >= 1
+    assert len(read_model.synced) == 1
+    assert read_model.synced[0]["configs"][0].model_key == "payments_risk_v1"
+    assert read_model.synced[0]["summary"].iloc[0]["max_psi"] == 0.34
+
+
+def test_summary_and_incidents_prefer_lakebase_projection_when_available() -> None:
+    warehouse = FakeWarehouse()
+    read_model = FakeReadModel()
+    repository = ControlPlaneRepository(
+        warehouse=warehouse,
+        table_names=TableNames("model_observability", "control_plane"),
+        read_model=read_model,
+    )
+
+    summary = repository.get_monitor_summary()
+    incidents = repository.get_open_incidents()
+
+    assert summary.iloc[0]["max_psi"] == 0.51
+    assert incidents.iloc[0]["severity"] == "critical"

@@ -9,6 +9,11 @@ resources:
           sql_warehouse:
             id: ${var.sql_warehouse_id}
             permission: CAN_USE
+        - name: ui_read_db
+          database:
+            instance_name: ${var.lakebase_instance_name}
+            database_name: ${var.lakebase_database_name}
+            permission: CAN_USE
         - name: refresh_job
           job:
             id: ${resources.jobs.refresh_control_plane.id}

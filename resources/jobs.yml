@@ -9,6 +9,15 @@ resources:
             parameters:
               - --warehouse-id
               - ${var.sql_warehouse_id}
+              - --use-lakebase-read-model
+              - --lakebase-instance-name
+              - ${var.lakebase_instance_name}
+              - --lakebase-database-name
+              - ${var.lakebase_database_name}
+              - --lakebase-pguser
+              - ${var.lakebase_pguser}
+              - --lakebase-schema
+              - ${var.lakebase_schema}
           environment_key: refresh_runtime
           max_retries: 2
           min_retry_interval_millis: 60000
@@ -25,4 +34,5 @@ resources:
               - numpy>=1.26,<3.0
               - pandas>=2.2,<3.0
               - plotly>=5.24,<6.0
+              - psycopg[binary]>=3.2,<4.0
               - scikit-learn>=1.5,<2.0

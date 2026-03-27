@@ -1,49 +1,45 @@
 # Model Lens
 
-Model Lens is a Databricks-native model observability product for customer workspaces.
+Model Lens is a private, Databricks-native model observability product for customer workspaces.
 
-It is built to live inside the customer environment, monitor production inference tables, and give operators a simple control plane for:
+It is built for teams that want an in-house alternative to external observability vendors without moving inference data out of Databricks. The product keeps monitoring state in Unity Catalog, uses a Databricks App for onboarding and investigation, and uses Lakebase as a fast read model so the UI stays responsive.
 
-- onboarding models from warehouse tables
-- computing drift, quality, and performance summaries
-- tracking open incidents
-- refreshing monitoring state from one managed workflow
+## What It Does
 
-## Product Scope
+- onboard monitors from Unity Catalog inference tables
+- map source columns into one stable monitoring contract
+- compute drift, quality, and performance-contributor summaries on a refresh workflow
+- persist durable monitoring state in Unity Catalog Delta tables
+- project hot UI state into Lakebase for fast monitor and incident views
+- keep the whole stack deployable inside a customer Databricks workspace
 
-Model Lens is intended to be the in-workspace monitoring layer for teams that want Arize-style visibility without shipping inference data out of Databricks.
+## Product Shape
 
-The product currently includes:
+Model Lens has three layers:
 
-- a Databricks App for setup, onboarding, refresh, and readback
-- a Databricks workflow for scheduled or manual refreshes
-- Unity Catalog control-plane tables for configs, metrics, and incidents
-- a canonical inference-log contract
-- idempotent writes for refreshed model state
+1. `Warehouse system of record`
+   - Unity Catalog Delta tables under `model_observability.control_plane`
+   - full monitor configs, metrics, and incidents
+2. `Lakebase read model`
+   - fast monitor-summary and incident projection for the app
+   - not the source of truth
+3. `Operator app + refresh workflow`
+   - Databricks App for setup, onboarding, and investigation
+   - serverless refresh workflow for all active monitors
 
-## How It Works
+```mermaid
+flowchart LR
+  User["Operator"] --> App["Model Lens Databricks App"]
+  App -->|scan source tables / write configs| Warehouse["Databricks SQL Warehouse"]
+  App -->|fast summary + incident reads| Lakebase["Lakebase Read Model"]
 
-1. Deploy the app and refresh workflow with Databricks Asset Bundles.
-2. Open Model Lens and initialize the control-plane schema.
-3. Scan a fully qualified inference table.
-4. Map the table into the monitoring contract.
-5. Save the monitor and run the initial refresh.
-6. Review model summaries and open incidents in the app.
+  Refresh["Model Lens Refresh Workflow"] -->|read inference + labels| Warehouse
+  Refresh -->|write metrics + incidents| Control["Unity Catalog Control Plane"]
+  Refresh -->|sync UI projection| Lakebase
 
-The default control-plane namespace is:
-
-- catalog: `model_observability`
-- schema: `control_plane`
-
-## Architecture
-
-- `app.yaml` defines the Databricks App entrypoint and runtime bindings.
-- `resources/app.yml` defines the Databricks App resource.
-- `resources/jobs.yml` defines the refresh workflow.
-- `src/model_lens/app.py` implements the Model Lens UI.
-- `src/model_lens/services/control_plane.py` owns Databricks SQL reads and writes.
-- `src/model_lens/services/refresh_engine.py` and `src/model_lens/services/refresh_runner.py` compute and persist monitoring output.
-- `src/model_lens/analytics/` contains reusable drift and performance logic.
+  Warehouse --> Source["Unity Catalog Inference Tables"]
+  Control --> Warehouse
+```
 
 ## Monitoring Contract
 
@@ -60,77 +56,70 @@ Optional mapped fields:
 - `label`
 - `entity_id`
 
-All other mapped fields become monitored features, categorical fields, or slice fields.
+All other mapped fields become feature columns, categorical columns, or slice columns.
 
-Current behavior:
+Current engine behavior:
 
-- drift metrics run on numeric feature columns
-- quality metrics summarize table coverage and volume
-- degradation contributors are computed only when labels are available
-- incidents are generated from breached drift thresholds
+- numeric features participate in drift calculations
+- non-numeric selected features are kept in the contract and projected into the UI
+- labels can come from the source table or an external labels table
 
-## Customer Deployment
+## Deploy Prerequisites
 
-Model Lens is deployed with Databricks Asset Bundles.
+You need all of the following in the target Databricks workspace:
 
-Required input:
+- Databricks CLI auth configured
+- one SQL warehouse for Model Lens reads and writes
+- serverless jobs enabled
+- one Lakebase instance and database for the UI read model
+- permissions to deploy Databricks Asset Bundles and Databricks Apps
+- permissions to create/write:
+  - source test tables
+  - `model_observability.control_plane`
+  - the target Lakebase database
 
-- `sql_warehouse_id`: SQL warehouse used by the app and the refresh workflow
+The scheduled refresh job also needs to be able to connect to Lakebase. In practice, that means the job identity must be allowed to mint database credentials and connect to the target Lakebase database.
 
-Validate:
+## Quick Deploy
+
+From the repo root:
 
 ```bash
+cd /Users/volo.vragov/Desktop/work/model-lens
+python3 -m pytest
+
 databricks bundle validate \
-  --var "sql_warehouse_id=<sql-warehouse-id>"
+  -t dev \
+  --var "sql_warehouse_id=<sql-warehouse-id>" \
+  --var "lakebase_instance_name=<lakebase-instance-name>" \
+  --var "lakebase_database_name=<lakebase-database-name>" \
+  --var "lakebase_pguser=<lakebase-db-user>"
+
+databricks bundle deploy \
+  -t dev \
+  --var "sql_warehouse_id=<sql-warehouse-id>" \
+  --var "lakebase_instance_name=<lakebase-instance-name>" \
+  --var "lakebase_database_name=<lakebase-database-name>" \
+  --var "lakebase_pguser=<lakebase-db-user>"
 ```
 
-Deploy:
+After deploy:
 
-```bash
-databricks bundle deploy -t dev \
-  --var "sql_warehouse_id=<sql-warehouse-id>"
-```
+1. Open the `model-lens` app.
+2. Click `Setup Control Plane`.
+3. Scan a source table.
+4. Save a monitor.
+5. Run the initial refresh.
+6. Confirm the monitor summary and incidents load.
 
-The refresh workflow is configured for Databricks serverless jobs. Serverless jobs must be enabled in the target workspace.
+## Full Docs
 
-## First-Run Onboarding
+- [Deployment Guide](/Users/volo.vragov/Desktop/work/model-lens/docs/DEPLOY_TO_WORKSPACE.md)
+- [Architecture](/Users/volo.vragov/Desktop/work/model-lens/docs/ARCHITECTURE.md)
+- [Workspace Smoke Test](/Users/volo.vragov/Desktop/work/model-lens/docs/WORKSPACE_SMOKE_TEST.md)
+- [Scratch Dataset](/Users/volo.vragov/Desktop/work/model-lens/examples/scratch_dataset.sql)
 
-After deployment:
-
-1. Open the `model-lens` Databricks App.
-2. Confirm that `SQL_WAREHOUSE_ID` is bound.
-3. Click `Setup Control Plane`.
-4. Enter a fully qualified source table such as `catalog.schema.inference_logs`.
-5. Click `Scan`.
-6. Review the detected schema and sample rows.
-7. Adjust the inferred field mapping.
-8. Select at least one feature column.
-9. Save the monitor and run the initial refresh.
-10. Review summary metrics and open incidents.
-
-The onboarding UI is schema-aware:
-
-- it shows Databricks column types during scan
-- it keeps reserved contract fields out of the feature selector
-- it warns when selected feature columns are non-numeric and will not participate in the current drift engine
-
-## Control-Plane Tables
-
-Model Lens manages these Delta tables:
-
-- `monitor_configs`
-- `drift_metrics`
-- `quality_metrics`
-- `performance_metrics`
-- `incidents`
-
-Write behavior is idempotent at the model/window level:
-
-- one active config per `model_key`
-- drift and performance rows replaced for the refreshed model window
-- quality and incident rows replaced for the refreshed model snapshot
-
-## Local Development
+## Local Commands
 
 Run tests:
 
@@ -144,40 +133,50 @@ Run the app locally:
 PYTHONPATH=src python3 -m model_lens.app
 ```
 
-Run setup locally:
+Run control-plane setup:
 
 ```bash
 PYTHONPATH=src python3 scripts/model_lens_setup.py --warehouse-id <sql-warehouse-id>
 ```
 
-Run refresh locally:
+Run refresh:
 
 ```bash
-PYTHONPATH=src python3 scripts/model_lens_refresh.py --warehouse-id <sql-warehouse-id>
+PYTHONPATH=src python3 scripts/model_lens_refresh.py \
+  --warehouse-id <sql-warehouse-id> \
+  --use-lakebase-read-model \
+  --lakebase-instance-name <lakebase-instance-name> \
+  --lakebase-database-name <lakebase-database-name> \
+  --lakebase-pguser <lakebase-db-user>
 ```
 
-Build the container:
+## Repo Layout
 
-```bash
-docker build -t model-lens .
-docker run --rm -p 8080:8080 model-lens
-```
+- `src/model_lens/app.py`: Databricks App UI
+- `src/model_lens/services/control_plane.py`: warehouse-backed system-of-record repository with Lakebase sync hooks
+- `src/model_lens/services/lakebase.py`: Lakebase connection and read-model projection
+- `src/model_lens/services/refresh_engine.py`: drift, quality, and performance calculations
+- `src/model_lens/workflows/refresh_job.py`: refresh workflow entrypoint
+- `resources/`: Databricks bundle resources for app and job deployment
 
-## Product Limits
+## Current Scope
 
-Current limits in this version:
+Implemented now:
 
-- categorical-specific drift metrics are not implemented yet
-- slice-level rollups are not exposed in the UI yet
-- alert delivery integrations are not implemented yet
-- incident lifecycle is still current-state oriented rather than full acknowledge/resolve workflow
+- warehouse-backed control plane
+- Lakebase-backed monitor summary and incident inbox reads
+- app-driven setup, onboarding, and refresh
+- serverless refresh workflow
+- external labels joins
+- scratch data and workspace smoke test path
+
+Still intentionally limited:
+
+- categorical-specific drift metrics
+- slice-level UI rollups
+- alert delivery integrations
+- full incident lifecycle with acknowledge / resolve / history
 
 ## Positioning
 
-Model Lens is meant to be a product, not a demo repo:
-
-- deployable inside customer Databricks workspaces
-- minimal infrastructure outside Databricks
-- explicit monitoring contract
-- one control plane instead of per-model orchestration sprawl
-- customer-visible setup and onboarding path from the app itself
+Model Lens is meant to be deployed into a client workspace as a product, not handed over as a notebook exercise. The codebase is structured so the durable monitoring contract lives in Unity Catalog, while the Lakebase layer only accelerates the operator experience.

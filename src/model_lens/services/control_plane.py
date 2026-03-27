@@ -9,6 +9,7 @@ import pandas as pd
 
 from model_lens.config import settings
 from model_lens.domain.models import BaselinePolicy, InferenceContract, MonitorConfig, RefreshResult
+from model_lens.services.lakebase import LakebaseConnection, LakebaseReadModel
 from model_lens.services.schema import ddl
 from model_lens.services.sql_utils import array_literal, parse_string_array, quote_column, validate_identifier
 from model_lens.services.table_names import TableNames
@@ -25,9 +26,15 @@ def _as_text(value: Any) -> str:
 
 
 class ControlPlaneRepository:
-    def __init__(self, warehouse: WarehouseConnection, table_names: TableNames):
+    def __init__(
+        self,
+        warehouse: WarehouseConnection,
+        table_names: TableNames,
+        read_model: LakebaseReadModel | None = None,
+    ):
         self._warehouse = warehouse
         self._table_names = table_names
+        self._read_model = read_model
 
     @property
     def table_names(self) -> TableNames:
@@ -38,6 +45,8 @@ class ControlPlaneRepository:
         self._warehouse.execute(f"CREATE SCHEMA IF NOT EXISTS {self._table_names.namespace}")
         for statement in ddl(self._table_names).values():
             self._warehouse.execute(statement)
+        if self._read_model and self._read_model.configured:
+            self._read_model.ensure_schema()
 
     def scan_source_table(self, table_name: str, preview_rows: int = 5) -> tuple[list[str], pd.DataFrame, pd.DataFrame]:
         validate_identifier(table_name)
@@ -100,6 +109,7 @@ class ControlPlaneRepository:
                 now,
             ),
         )
+        self._sync_read_model()
 
     def list_monitor_configs(self, status: str = "active") -> list[MonitorConfig]:
         self.ensure_control_plane()
@@ -243,6 +253,7 @@ class ControlPlaneRepository:
         self._insert_quality_rows(result.quality_rows)
         self._insert_performance_rows(result.performance_rows)
         self._insert_incident_rows(result.incident_rows)
+        self._sync_read_model()
 
     def _insert_drift_rows(self, rows: list[dict]) -> None:
         payload = [
@@ -358,7 +369,7 @@ class ControlPlaneRepository:
             payload,
         )
 
-    def get_monitor_summary(self) -> pd.DataFrame:
+    def _get_monitor_summary_from_warehouse(self) -> pd.DataFrame:
         self.ensure_control_plane()
         return self._warehouse.query(
             f"""
@@ -415,7 +426,7 @@ class ControlPlaneRepository:
             """
         )
 
-    def get_open_incidents(self) -> pd.DataFrame:
+    def _get_open_incidents_from_warehouse(self) -> pd.DataFrame:
         self.ensure_control_plane()
         return self._warehouse.query(
             f"""
@@ -428,6 +439,73 @@ class ControlPlaneRepository:
             """
         )
 
+    def _sync_read_model(self) -> None:
+        if not self._read_model or not self._read_model.configured:
+            return
+        try:
+            self._read_model.replace_dashboard_projection(
+                configs=self.list_monitor_configs(status="active"),
+                summary=self._get_monitor_summary_from_warehouse(),
+                incidents=self._get_open_incidents_from_warehouse(),
+            )
+        except Exception as error:
+            logger.warning("Lakebase read-model sync failed: %s", error)
+
+    def get_monitor_summary(self) -> pd.DataFrame:
+        if self._read_model and self._read_model.configured:
+            try:
+                return self._read_model.get_monitor_summary()
+            except Exception as error:
+                logger.warning("Lakebase summary read failed, falling back to warehouse: %s", error)
+        return self._get_monitor_summary_from_warehouse()
+
+    def get_open_incidents(self) -> pd.DataFrame:
+        if self._read_model and self._read_model.configured:
+            try:
+                return self._read_model.get_open_incidents()
+            except Exception as error:
+                logger.warning("Lakebase incidents read failed, falling back to warehouse: %s", error)
+        return self._get_open_incidents_from_warehouse()
+
+
+def _build_read_model(
+    *,
+    use_lakebase_read_model: bool | None = None,
+    lakebase_instance_name: str | None = None,
+    lakebase_database_name: str | None = None,
+    lakebase_host: str | None = None,
+    lakebase_port: int | None = None,
+    lakebase_pguser: str | None = None,
+    lakebase_password: str | None = None,
+    lakebase_sslmode: str | None = None,
+    lakebase_schema: str | None = None,
+) -> LakebaseReadModel | None:
+    enabled = settings.use_lakebase_read_model if use_lakebase_read_model is None else use_lakebase_read_model
+    if not enabled and not any((
+        lakebase_instance_name,
+        lakebase_database_name,
+        lakebase_host,
+        settings.lakebase_instance_name,
+        settings.lakebase_database_name,
+        settings.lakebase_host,
+    )):
+        return None
+    connection = LakebaseConnection(
+        instance_name=lakebase_instance_name if lakebase_instance_name is not None else settings.lakebase_instance_name,
+        database_name=lakebase_database_name if lakebase_database_name is not None else settings.lakebase_database_name,
+        host=lakebase_host if lakebase_host is not None else settings.lakebase_host,
+        port=lakebase_port if lakebase_port is not None else settings.lakebase_port,
+        user=lakebase_pguser if lakebase_pguser is not None else settings.lakebase_pguser,
+        password=lakebase_password if lakebase_password is not None else settings.lakebase_password,
+        sslmode=lakebase_sslmode if lakebase_sslmode is not None else settings.lakebase_sslmode,
+    )
+    if not connection.configured:
+        return None
+    return LakebaseReadModel(
+        connection=connection,
+        schema=lakebase_schema or settings.lakebase_schema,
+    )
+
 
 @lru_cache(maxsize=1)
 def get_default_repository() -> ControlPlaneRepository:
@@ -438,6 +516,7 @@ def get_default_repository() -> ControlPlaneRepository:
     return ControlPlaneRepository(
         warehouse=get_warehouse(),
         table_names=table_names,
+        read_model=_build_read_model(),
     )
 
 
@@ -446,11 +525,31 @@ def build_repository(
     warehouse_id: str = "",
     catalog: str | None = None,
     schema: str | None = None,
+    use_lakebase_read_model: bool | None = None,
+    lakebase_instance_name: str | None = None,
+    lakebase_database_name: str | None = None,
+    lakebase_host: str | None = None,
+    lakebase_port: int | None = None,
+    lakebase_pguser: str | None = None,
+    lakebase_password: str | None = None,
+    lakebase_sslmode: str | None = None,
+    lakebase_schema: str | None = None,
 ) -> ControlPlaneRepository:
     return ControlPlaneRepository(
         warehouse=get_warehouse(warehouse_id=warehouse_id or settings.sql_warehouse_id),
         table_names=TableNames(
             catalog=catalog or settings.control_plane_catalog,
             schema=schema or settings.control_plane_schema,
+        ),
+        read_model=_build_read_model(
+            use_lakebase_read_model=use_lakebase_read_model,
+            lakebase_instance_name=lakebase_instance_name,
+            lakebase_database_name=lakebase_database_name,
+            lakebase_host=lakebase_host,
+            lakebase_port=lakebase_port,
+            lakebase_pguser=lakebase_pguser,
+            lakebase_password=lakebase_password,
+            lakebase_sslmode=lakebase_sslmode,
+            lakebase_schema=lakebase_schema,
         ),
     )

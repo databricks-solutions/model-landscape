@@ -14,6 +14,10 @@ env:
     value: control_plane
   - name: SQL_WAREHOUSE_ID
     valueFrom: sql_warehouse
+  - name: USE_LAKEBASE_READ_MODEL
+    value: "true"
+  - name: LAKEBASE_SCHEMA
+    value: model_lens_ui
   - name: REFRESH_JOB_ID
     valueFrom: refresh_job
   - name: GENIE_SPACE_ID

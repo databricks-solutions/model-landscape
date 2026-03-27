@@ -9,6 +9,14 @@ variables:
     default: model-lens
   sql_warehouse_id:
     description: Existing SQL warehouse for the app and refresh workflow
+  lakebase_instance_name:
+    description: Existing Lakebase instance for fast Model Lens UI reads
+  lakebase_database_name:
+    description: Existing Lakebase database name for Model Lens projections
+  lakebase_pguser:
+    default: ""
+  lakebase_schema:
+    default: model_lens_ui
   genie_space_id:
     default: ""
 
