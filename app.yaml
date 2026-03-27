@@ -1,0 +1,20 @@
+command:
+  - python
+  - -m
+  - ml_drift_monitor_next.app
+
+env:
+  - name: APP_TITLE
+    value: ML Drift Monitor Next
+  - name: PYTHONPATH
+    value: src
+  - name: CONTROL_PLANE_CATALOG
+    value: model_observability
+  - name: CONTROL_PLANE_SCHEMA
+    value: control_plane
+  - name: SQL_WAREHOUSE_ID
+    valueFrom: sql_warehouse
+  - name: REFRESH_JOB_ID
+    valueFrom: refresh_job
+  - name: GENIE_SPACE_ID
+    value: ""

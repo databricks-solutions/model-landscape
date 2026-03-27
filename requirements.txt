@@ -1,0 +1,9 @@
+dash>=2.18,<3.0
+dash-bootstrap-components>=1.6,<2.0
+databricks-sdk>=0.81,<1.0
+databricks-sql-connector>=3.0,<4.0
+numpy>=1.26,<3.0
+pandas>=2.2,<3.0
+plotly>=5.24,<6.0
+scikit-learn>=1.5,<2.0
+

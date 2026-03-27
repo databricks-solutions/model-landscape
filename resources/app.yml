@@ -1,0 +1,15 @@
+resources:
+  apps:
+    control_plane:
+      name: ${var.app_name}
+      description: Databricks-native model observability control plane
+      source_code_path: .
+      resources:
+        - name: sql_warehouse
+          sql_warehouse:
+            id: ${var.sql_warehouse_id}
+            permission: CAN_USE
+        - name: refresh_job
+          job:
+            id: ${resources.jobs.refresh_control_plane.id}
+            permission: CAN_MANAGE_RUN

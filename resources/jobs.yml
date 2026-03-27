@@ -1,0 +1,27 @@
+resources:
+  jobs:
+    refresh_control_plane:
+      name: ${var.app_name}-refresh
+      tasks:
+        - task_key: refresh_control_plane
+          job_cluster_key: control_plane_cluster
+          spark_python_task:
+            python_file: ../scripts/refresh_control_plane.py
+            parameters:
+              - --catalog
+              - ${var.catalog}
+              - --schema
+              - ${var.schema}
+              - --warehouse-id
+              - ${var.sql_warehouse_id}
+      job_clusters:
+        - job_cluster_key: control_plane_cluster
+          new_cluster:
+            spark_version: ${var.job_spark_version}
+            node_type_id: ${var.job_node_type_id}
+            num_workers: 0
+            spark_conf:
+              spark.master: local[*]
+              spark.databricks.cluster.profile: singleNode
+            custom_tags:
+              ResourceClass: SingleNode

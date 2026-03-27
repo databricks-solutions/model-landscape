@@ -1,0 +1,33 @@
+bundle:
+  name: ml-drift-monitor-next
+
+include:
+  - resources/*.yml
+
+variables:
+  app_name:
+    default: ml-drift-monitor-next
+  catalog:
+    default: model_observability
+  schema:
+    default: control_plane
+  sql_warehouse_id:
+    description: Existing SQL warehouse for the app and refresh workflow
+  genie_space_id:
+    default: ""
+  job_spark_version:
+    default: 15.4.x-scala2.12
+  job_node_type_id:
+    description: Cloud-specific node type or policy-backed default
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+  prod:
+    mode: production
+    workspace:
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
+

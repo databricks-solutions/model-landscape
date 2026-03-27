@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ml-drift-monitor-next"
+version = "0.1.0"
+description = "Databricks-native model observability control plane"
+requires-python = ">=3.11"
+dependencies = [
+  "dash>=2.18,<3.0",
+  "dash-bootstrap-components>=1.6,<2.0",
+  "databricks-sdk>=0.81,<1.0",
+  "databricks-sql-connector>=3.0,<4.0",
+  "numpy>=1.26,<3.0",
+  "pandas>=2.2,<3.0",
+  "plotly>=5.24,<6.0",
+  "scikit-learn>=1.5,<2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<10.0",
+]
+
+[project.scripts]
+ml-drift-monitor-next = "ml_drift_monitor_next.app:main"
+refresh-control-plane = "ml_drift_monitor_next.workflows.refresh_job:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
