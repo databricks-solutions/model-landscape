@@ -1,6 +1,6 @@
-from ml_drift_monitor_next.domain.models import MonitorConfig
-from ml_drift_monitor_next.services.contracts import build_contract
-from ml_drift_monitor_next.services.onboarding import build_default_baseline, build_monitor_config_payload
+from model_lens.domain.models import MonitorConfig
+from model_lens.services.contracts import build_contract
+from model_lens.services.onboarding import build_default_baseline, build_monitor_config_payload
 
 
 def test_monitor_payload_keeps_all_features_and_categorical_columns() -> None:
@@ -23,4 +23,3 @@ def test_monitor_payload_keeps_all_features_and_categorical_columns() -> None:
     )
     assert len(payload["feature_columns"]) == 20
     assert payload["categorical_columns"] == ["f18", "f19"]
-

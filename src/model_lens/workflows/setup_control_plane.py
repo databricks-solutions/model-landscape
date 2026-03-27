@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 
-from ml_drift_monitor_next.services.control_plane import build_repository
+from model_lens.services.control_plane import build_repository
 
 
 def parse_args() -> argparse.Namespace:

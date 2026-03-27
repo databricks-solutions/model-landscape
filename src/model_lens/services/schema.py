@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ml_drift_monitor_next.services.table_names import TableNames
+from model_lens.services.table_names import TableNames
 
 
 def ddl(table_names: TableNames) -> dict[str, str]:
@@ -95,4 +95,3 @@ def ddl(table_names: TableNames) -> dict[str, str]:
             ) USING DELTA
         """.strip(),
     }
-

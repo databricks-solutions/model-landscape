@@ -5,7 +5,7 @@ resources:
       tasks:
         - task_key: refresh_control_plane
           spark_python_task:
-            python_file: ../scripts/refresh_control_plane.py
+            python_file: ../scripts/model_lens_refresh.py
             parameters:
               - --warehouse-id
               - ${var.sql_warehouse_id}

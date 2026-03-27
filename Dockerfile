@@ -8,5 +8,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 ENV PYTHONPATH=/app/src
-CMD ["python", "-m", "ml_drift_monitor_next.app"]
-
+CMD ["python", "-m", "model_lens.app"]

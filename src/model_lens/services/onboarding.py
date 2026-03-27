@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ml_drift_monitor_next.domain.models import BaselinePolicy, MonitorConfig
+from model_lens.domain.models import BaselinePolicy, MonitorConfig
 
 
 def build_monitor_config_payload(config: MonitorConfig) -> dict:
@@ -37,4 +37,3 @@ def build_default_baseline(n_days: int = 7, max_comparison_days: int = 90) -> Ba
         n_days=n_days,
         max_comparison_days=max_comparison_days,
     )
-

@@ -1,4 +1,4 @@
-from ml_drift_monitor_next.services.incidents import build_incidents
+from model_lens.services.incidents import build_incidents
 
 
 def test_build_incidents_deduplicates_by_business_key() -> None:
@@ -21,4 +21,3 @@ def test_build_incidents_deduplicates_by_business_key() -> None:
     assert len(incidents) == 1
     assert incidents[0]["severity"] == "critical"
     assert incidents[0]["metric_value"] == 0.31
-

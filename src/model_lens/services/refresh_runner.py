@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ml_drift_monitor_next.services.control_plane import ControlPlaneRepository
-from ml_drift_monitor_next.services.refresh_engine import refresh_monitor
+from model_lens.services.control_plane import ControlPlaneRepository
+from model_lens.services.refresh_engine import refresh_monitor
 
 
 @dataclass(frozen=True)

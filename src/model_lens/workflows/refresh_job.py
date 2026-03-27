@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import argparse
 
-from ml_drift_monitor_next.services.control_plane import build_repository
-from ml_drift_monitor_next.services.refresh_engine import refresh_monitor, split_baseline_current
-from ml_drift_monitor_next.services.refresh_runner import run_refresh_cycle
+from model_lens.services.control_plane import build_repository
+from model_lens.services.refresh_engine import refresh_monitor, split_baseline_current
+from model_lens.services.refresh_runner import run_refresh_cycle
 
 
 def parse_args() -> argparse.Namespace:
@@ -35,4 +35,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from ml_drift_monitor_next.domain.models import InferenceContract
+from model_lens.domain.models import InferenceContract
 
 
 def build_contract(
@@ -70,4 +70,3 @@ def build_contract(
         slice_columns=slices,
         categorical_columns=categorical,
     )
-

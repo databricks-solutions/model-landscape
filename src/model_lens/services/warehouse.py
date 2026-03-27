@@ -7,7 +7,7 @@ import threading
 
 import pandas as pd
 
-from ml_drift_monitor_next.services.sql_utils import validate_identifier
+from model_lens.services.sql_utils import validate_identifier
 
 
 logger = logging.getLogger(__name__)

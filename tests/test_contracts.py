@@ -1,4 +1,4 @@
-from ml_drift_monitor_next.services.contracts import build_contract
+from model_lens.services.contracts import build_contract
 
 
 def test_build_contract_preserves_full_feature_list() -> None:

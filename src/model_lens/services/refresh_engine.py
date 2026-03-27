@@ -5,10 +5,10 @@ from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
-from ml_drift_monitor_next.analytics.drift import compute_feature_drift
-from ml_drift_monitor_next.analytics.performance import rank_degradation_contributors
-from ml_drift_monitor_next.domain.models import MonitorConfig, RefreshResult
-from ml_drift_monitor_next.services.incidents import build_incidents
+from model_lens.analytics.drift import compute_feature_drift
+from model_lens.analytics.performance import rank_degradation_contributors
+from model_lens.domain.models import MonitorConfig, RefreshResult
+from model_lens.services.incidents import build_incidents
 
 
 def _safe_float(value: object) -> float | None:

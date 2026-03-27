@@ -9,7 +9,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from ml_drift_monitor_next.workflows.setup_control_plane import main
+from model_lens.workflows.setup_control_plane import main
 
 
 if __name__ == "__main__":

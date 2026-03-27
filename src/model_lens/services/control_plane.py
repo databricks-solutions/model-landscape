@@ -7,12 +7,12 @@ from typing import Any
 
 import pandas as pd
 
-from ml_drift_monitor_next.config import settings
-from ml_drift_monitor_next.domain.models import BaselinePolicy, InferenceContract, MonitorConfig, RefreshResult
-from ml_drift_monitor_next.services.schema import ddl
-from ml_drift_monitor_next.services.sql_utils import array_literal, parse_string_array, quote_column, validate_identifier
-from ml_drift_monitor_next.services.table_names import TableNames
-from ml_drift_monitor_next.services.warehouse import WarehouseConnection, get_warehouse
+from model_lens.config import settings
+from model_lens.domain.models import BaselinePolicy, InferenceContract, MonitorConfig, RefreshResult
+from model_lens.services.schema import ddl
+from model_lens.services.sql_utils import array_literal, parse_string_array, quote_column, validate_identifier
+from model_lens.services.table_names import TableNames
+from model_lens.services.warehouse import WarehouseConnection, get_warehouse
 
 
 logger = logging.getLogger(__name__)

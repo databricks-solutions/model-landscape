@@ -4,7 +4,7 @@ from collections.abc import Iterator
 
 from dash.development.base_component import Component
 
-from ml_drift_monitor_next.app import _feature_candidates, _non_numeric_features, create_app
+from model_lens.app import _feature_candidates, _non_numeric_features, create_app
 
 
 def _walk(component: Component) -> Iterator[Component]:

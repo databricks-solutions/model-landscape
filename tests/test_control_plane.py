@@ -4,12 +4,12 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
-from ml_drift_monitor_next.domain.models import MonitorConfig
-from ml_drift_monitor_next.services.contracts import build_contract
-from ml_drift_monitor_next.services.control_plane import ControlPlaneRepository
-from ml_drift_monitor_next.services.onboarding import build_default_baseline
-from ml_drift_monitor_next.services.refresh_runner import run_refresh_cycle
-from ml_drift_monitor_next.services.table_names import TableNames
+from model_lens.domain.models import MonitorConfig
+from model_lens.services.contracts import build_contract
+from model_lens.services.control_plane import ControlPlaneRepository
+from model_lens.services.onboarding import build_default_baseline
+from model_lens.services.refresh_runner import run_refresh_cycle
+from model_lens.services.table_names import TableNames
 
 
 class FakeWarehouse:

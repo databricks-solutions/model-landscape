@@ -9,7 +9,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from ml_drift_monitor_next.workflows.refresh_job import main
+from model_lens.workflows.refresh_job import main
 
 
 if __name__ == "__main__":

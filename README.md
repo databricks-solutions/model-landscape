@@ -40,10 +40,10 @@ The default control-plane namespace is:
 - `app.yaml` defines the Databricks App entrypoint and runtime bindings.
 - `resources/app.yml` defines the Databricks App resource.
 - `resources/jobs.yml` defines the refresh workflow.
-- `src/ml_drift_monitor_next/app.py` implements the Model Lens UI.
-- `src/ml_drift_monitor_next/services/control_plane.py` owns Databricks SQL reads and writes.
-- `src/ml_drift_monitor_next/services/refresh_engine.py` and `src/ml_drift_monitor_next/services/refresh_runner.py` compute and persist monitoring output.
-- `src/ml_drift_monitor_next/analytics/` contains reusable drift and performance logic.
+- `src/model_lens/app.py` implements the Model Lens UI.
+- `src/model_lens/services/control_plane.py` owns Databricks SQL reads and writes.
+- `src/model_lens/services/refresh_engine.py` and `src/model_lens/services/refresh_runner.py` compute and persist monitoring output.
+- `src/model_lens/analytics/` contains reusable drift and performance logic.
 
 ## Monitoring Contract
 
@@ -141,19 +141,19 @@ python3 -m pytest
 Run the app locally:
 
 ```bash
-PYTHONPATH=src python3 -m ml_drift_monitor_next.app
+PYTHONPATH=src python3 -m model_lens.app
 ```
 
 Run setup locally:
 
 ```bash
-PYTHONPATH=src python3 scripts/setup_control_plane.py --warehouse-id <sql-warehouse-id>
+PYTHONPATH=src python3 scripts/model_lens_setup.py --warehouse-id <sql-warehouse-id>
 ```
 
 Run refresh locally:
 
 ```bash
-PYTHONPATH=src python3 scripts/refresh_control_plane.py --warehouse-id <sql-warehouse-id>
+PYTHONPATH=src python3 scripts/model_lens_refresh.py --warehouse-id <sql-warehouse-id>
 ```
 
 Build the container:
