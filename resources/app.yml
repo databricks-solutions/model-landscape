@@ -4,30 +4,6 @@ resources:
       name: ${var.app_name}
       description: Model Lens model observability app for Databricks
       source_code_path: .
-      config:
-        command:
-          - python
-          - -m
-          - model_lens.app
-        env:
-          - name: APP_TITLE
-            value: Model Lens
-          - name: PYTHONPATH
-            value: src
-          - name: CONTROL_PLANE_CATALOG
-            value: model_observability
-          - name: CONTROL_PLANE_SCHEMA
-            value: control_plane
-          - name: SQL_WAREHOUSE_ID
-            valueFrom: sql_warehouse
-          - name: USE_LAKEBASE_READ_MODEL
-            value: "true"
-          - name: LAKEBASE_SCHEMA
-            value: ${var.lakebase_schema}
-          - name: REFRESH_JOB_ID
-            valueFrom: refresh_job
-          - name: GENIE_SPACE_ID
-            value: ${var.genie_space_id}
       resources:
         - name: sql_warehouse
           sql_warehouse:

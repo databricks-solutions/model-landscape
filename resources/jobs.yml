@@ -4,8 +4,9 @@ resources:
       name: ${var.app_name}-refresh
       tasks:
         - task_key: refresh_control_plane
-          spark_python_task:
-            python_file: ../scripts/model_lens_refresh.py
+          python_wheel_task:
+            package_name: model-lens
+            entry_point: model-lens-refresh
             parameters:
               - --warehouse-id
               - ${var.sql_warehouse_id}
@@ -18,6 +19,8 @@ resources:
               - ${var.lakebase_pguser}
               - --lakebase-schema
               - ${var.lakebase_schema}
+          libraries:
+            - whl: ./dist/*.whl
           environment_key: refresh_runtime
           max_retries: 2
           min_retry_interval_millis: 60000

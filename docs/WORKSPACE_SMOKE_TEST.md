@@ -106,6 +106,9 @@ Deploy into your test target:
 databricks bundle deploy \
   -t warehouse_only \
   --var "sql_warehouse_id=<sql-warehouse-id>"
+
+databricks apps deploy model-lens \
+  --source-code-path /Workspace/Users/<your-email>/.bundle/model-lens/warehouse_only/files
 ```
 
 Expected result:

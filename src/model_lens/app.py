@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
+from functools import lru_cache
 
 import dash
 import dash_bootstrap_components as dbc
@@ -21,6 +22,23 @@ def _repo():
 
 
 _NUMERIC_TYPE_TOKENS = ("tinyint", "smallint", "int", "bigint", "float", "double", "decimal", "numeric", "real")
+
+
+@lru_cache(maxsize=1)
+def _workspace_lakebase_instances() -> tuple[str, ...]:
+    try:
+        from databricks.sdk import WorkspaceClient
+
+        names: list[str] = []
+        for instance in WorkspaceClient().database.list_database_instances(page_size=20):
+            name = str(getattr(instance, "name", "") or "").strip()
+            if name:
+                names.append(name)
+            if len(names) >= 5:
+                break
+        return tuple(names)
+    except Exception:
+        return ()
 
 
 def _option_list(columns: list[str], include_blank: bool = False) -> list[dict]:
@@ -104,6 +122,27 @@ def _status_block(items: list[tuple[str, str]]) -> html.Div:
     return html.Div([_status_alert(message, color) for message, color in items])
 
 
+def _deployment_mode_prompt() -> dbc.Alert:
+    instances = _workspace_lakebase_instances()
+    if settings.use_lakebase_read_model:
+        detail = settings.lakebase_database_name or settings.lakebase_instance_name or "managed resource"
+        return _status_alert(
+            f"Lakebase mode is active. Model Lens will prefer the Lakebase read model for monitor summaries and incidents ({detail}).",
+            "success",
+        )
+    if instances:
+        preview = ", ".join(instances[:3])
+        return _status_alert(
+            "Warehouse-only mode is active, but Lakebase appears to be available in this workspace "
+            f"({preview}). Redeploy with the Lakebase-enabled target to accelerate the UI.",
+            "info",
+        )
+    return _status_alert(
+        "Warehouse-only mode is active. If Lakebase is added later, redeploy with the Lakebase-enabled target for faster monitor and incident views.",
+        "secondary",
+    )
+
+
 def _schema_frame(scan_data: dict | None) -> pd.DataFrame:
     if not scan_data or not scan_data.get("schema"):
         return pd.DataFrame(columns=["col_name", "data_type"])
@@ -149,6 +188,7 @@ def _build_layout() -> html.Div:
             "Set up the control plane, scan a source table, create a monitor, and run a refresh from one place.",
             className="text-muted mb-4",
         ),
+        _deployment_mode_prompt(),
         html.Div(id="action-status"),
         dbc.Row([
             dbc.Col(dbc.Card(dbc.CardBody([
@@ -167,6 +207,7 @@ def _build_layout() -> html.Div:
             dbc.Col(dbc.Card(dbc.CardBody([
                 html.H5("Deployment Inputs", className="mb-3"),
                 _render_frame(pd.DataFrame([
+                    {"name": "DEPLOYMENT_MODE", "value": "lakebase" if settings.use_lakebase_read_model else "warehouse_only"},
                     {"name": "CONTROL_PLANE_CATALOG", "value": settings.control_plane_catalog},
                     {"name": "CONTROL_PLANE_SCHEMA", "value": settings.control_plane_schema},
                     {"name": "SQL_WAREHOUSE_ID", "value": settings.sql_warehouse_id or "(missing)"},

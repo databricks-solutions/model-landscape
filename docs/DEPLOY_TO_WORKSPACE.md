@@ -79,6 +79,9 @@ Warehouse-only:
 databricks bundle deploy \
   -t warehouse_only \
   --var "sql_warehouse_id=<sql-warehouse-id>"
+
+databricks apps deploy model-lens \
+  --source-code-path /Workspace/Users/<your-email>/.bundle/model-lens/warehouse_only/files
 ```
 
 Lakebase-enabled:
@@ -90,6 +93,9 @@ databricks bundle deploy \
   --var "lakebase_instance_name=<lakebase-instance-name>" \
   --var "lakebase_database_name=<lakebase-database-name>" \
   --var "lakebase_pguser=<lakebase-db-user>"
+
+databricks apps deploy model-lens \
+  --source-code-path /Workspace/Users/<your-email>/.bundle/model-lens/dev/files
 ```
 
 Expected result:
@@ -97,6 +103,7 @@ Expected result:
 - the app `model-lens` is created
 - the workflow `model-lens-refresh` is created
 - in Lakebase mode, the app gets a Lakebase database resource
+- after `databricks apps deploy`, the app source is deployed to compute
 
 ## 3. Open The App
 
