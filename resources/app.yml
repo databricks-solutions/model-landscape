@@ -2,7 +2,7 @@ resources:
   apps:
     control_plane:
       name: ${var.app_name}
-      description: Databricks-native model observability control plane
+      description: Model Lens model observability app for Databricks
       source_code_path: .
       resources:
         - name: sql_warehouse

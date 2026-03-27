@@ -3,16 +3,13 @@ from __future__ import annotations
 import argparse
 
 from ml_drift_monitor_next.services.control_plane import build_repository
-from ml_drift_monitor_next.services.refresh_engine import refresh_monitor, split_baseline_current
-from ml_drift_monitor_next.services.refresh_runner import run_refresh_cycle
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Refresh control-plane metrics")
+    parser = argparse.ArgumentParser(description="Create control-plane catalog, schema, and tables")
     parser.add_argument("--catalog", required=False)
     parser.add_argument("--schema", required=False)
     parser.add_argument("--warehouse-id", required=False)
-    parser.add_argument("--model-key", required=False, default="")
     return parser.parse_args()
 
 
@@ -23,16 +20,13 @@ def main() -> int:
         catalog=args.catalog,
         schema=args.schema,
     )
-    counts = run_refresh_cycle(repository, model_key=args.model_key)
+    repository.ensure_control_plane()
     print(
-        "refresh-control-plane complete: "
-        f"models={counts.models} drift_rows={counts.drift_rows} "
-        f"quality_rows={counts.quality_rows} performance_rows={counts.performance_rows} "
-        f"incident_rows={counts.incident_rows}"
+        "setup-control-plane complete: "
+        f"{repository.table_names.catalog}.{repository.table_names.schema}"
     )
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

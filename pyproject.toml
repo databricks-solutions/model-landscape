@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ml-drift-monitor-next"
+name = "model-lens"
 version = "0.1.0"
-description = "Databricks-native model observability control plane"
+description = "Model Lens: Databricks-native model observability"
 requires-python = ">=3.11"
 dependencies = [
   "dash>=2.18,<3.0",
@@ -24,8 +24,9 @@ dev = [
 ]
 
 [project.scripts]
-ml-drift-monitor-next = "ml_drift_monitor_next.app:main"
-refresh-control-plane = "ml_drift_monitor_next.workflows.refresh_job:main"
+model-lens = "ml_drift_monitor_next.app:main"
+model-lens-refresh = "ml_drift_monitor_next.workflows.refresh_job:main"
+model-lens-setup = "ml_drift_monitor_next.workflows.setup_control_plane:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -36,4 +37,3 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
-

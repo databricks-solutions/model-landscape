@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Settings:
-    app_title: str = os.getenv("APP_TITLE", "ML Drift Monitor Next")
+    app_title: str = os.getenv("APP_TITLE", "Model Lens")
     control_plane_catalog: str = os.getenv("CONTROL_PLANE_CATALOG", "model_observability")
     control_plane_schema: str = os.getenv("CONTROL_PLANE_SCHEMA", "control_plane")
     sql_warehouse_id: str = os.getenv("SQL_WAREHOUSE_ID", "")
@@ -16,4 +16,3 @@ class Settings:
 
 
 settings = Settings()
-

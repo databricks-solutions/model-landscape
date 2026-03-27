@@ -1,51 +1,134 @@
-# ML Drift Monitor Next
+# Model Lens
 
-Databricks-native model observability control plane for customer workspaces.
+Model Lens is a Databricks-native model observability product for customer workspaces.
 
-This repo is a ground-up rework of the original prototype. The product goal is:
+It is built to live inside the customer environment, monitor production inference tables, and give operators a simple control plane for:
 
-- deploy cleanly into a customer Databricks workspace
-- keep workspace state declarative and bundle-managed
-- use one control-plane job instead of per-model job sprawl
-- enforce one canonical inference log contract
-- keep metrics and incidents idempotent
-- stay portable across Databricks clouds
+- onboarding models from warehouse tables
+- computing drift, quality, and performance summaries
+- tracking open incidents
+- refreshing monitoring state from one managed workflow
 
-## What Changed
+## Product Scope
 
-The original prototype mixed app concerns, job provisioning, workspace discovery, and metrics computation in the same runtime path. This repo separates those responsibilities:
+Model Lens is intended to be the in-workspace monitoring layer for teams that want Arize-style visibility without shipping inference data out of Databricks.
 
-- `databricks.yml` and `resources/` define the app and workflow as bundle-managed resources
-- `src/ml_drift_monitor_next/domain/` defines the customer-facing contract
-- `src/ml_drift_monitor_next/services/` owns naming, onboarding payloads, schemas, and incident lifecycle
-- `src/ml_drift_monitor_next/workflows/refresh_job.py` is the single refresh entry point
-- `src/ml_drift_monitor_next/analytics/` contains reusable drift and performance logic
+The product currently includes:
+
+- a Databricks App for setup, onboarding, refresh, and readback
+- a Databricks workflow for scheduled or manual refreshes
+- Unity Catalog control-plane tables for configs, metrics, and incidents
+- a canonical inference-log contract
+- idempotent writes for refreshed model state
+
+## How It Works
+
+1. Deploy the app and refresh workflow with Databricks Asset Bundles.
+2. Open Model Lens and initialize the control-plane schema.
+3. Scan a fully qualified inference table.
+4. Map the table into the monitoring contract.
+5. Save the monitor and run the initial refresh.
+6. Review model summaries and open incidents in the app.
+
+The default control-plane namespace is:
+
+- catalog: `model_observability`
+- schema: `control_plane`
 
 ## Architecture
 
-1. Customer maps an inference table into the canonical contract.
-2. App writes one `monitor_configs` row per model.
-3. One bundle-managed workflow refreshes active models.
-4. Refresh writes global metrics tables into one Unity Catalog schema.
-5. Incident generation deduplicates on business keys.
-6. Dash app reads control-plane tables and lets operators trigger refreshes.
+- `app.yaml` defines the Databricks App entrypoint and runtime bindings.
+- `resources/app.yml` defines the Databricks App resource.
+- `resources/jobs.yml` defines the refresh workflow.
+- `src/ml_drift_monitor_next/app.py` implements the Model Lens UI.
+- `src/ml_drift_monitor_next/services/control_plane.py` owns Databricks SQL reads and writes.
+- `src/ml_drift_monitor_next/services/refresh_engine.py` and `src/ml_drift_monitor_next/services/refresh_runner.py` compute and persist monitoring output.
+- `src/ml_drift_monitor_next/analytics/` contains reusable drift and performance logic.
 
-## Canonical Inference Contract
+## Monitoring Contract
 
-Required columns:
+Required mapped fields:
 
 - `event_ts`
 - `model_id`
 - `prediction`
 
-Recommended columns:
+Optional mapped fields:
 
 - `model_version`
 - `prediction_proba`
 - `label`
 - `entity_id`
 
-All remaining mapped columns are monitored features or slice dimensions.
+All other mapped fields become monitored features, categorical fields, or slice fields.
+
+Current behavior:
+
+- drift metrics run on numeric feature columns
+- quality metrics summarize table coverage and volume
+- degradation contributors are computed only when labels are available
+- incidents are generated from breached drift thresholds
+
+## Customer Deployment
+
+Model Lens is deployed with Databricks Asset Bundles.
+
+Required input:
+
+- `sql_warehouse_id`: SQL warehouse used by the app and the refresh workflow
+
+Validate:
+
+```bash
+databricks bundle validate \
+  --var "sql_warehouse_id=<sql-warehouse-id>"
+```
+
+Deploy:
+
+```bash
+databricks bundle deploy -t dev \
+  --var "sql_warehouse_id=<sql-warehouse-id>"
+```
+
+The refresh workflow is configured for Databricks serverless jobs. Serverless jobs must be enabled in the target workspace.
+
+## First-Run Onboarding
+
+After deployment:
+
+1. Open the `model-lens` Databricks App.
+2. Confirm that `SQL_WAREHOUSE_ID` is bound.
+3. Click `Setup Control Plane`.
+4. Enter a fully qualified source table such as `catalog.schema.inference_logs`.
+5. Click `Scan`.
+6. Review the detected schema and sample rows.
+7. Adjust the inferred field mapping.
+8. Select at least one feature column.
+9. Save the monitor and run the initial refresh.
+10. Review summary metrics and open incidents.
+
+The onboarding UI is schema-aware:
+
+- it shows Databricks column types during scan
+- it keeps reserved contract fields out of the feature selector
+- it warns when selected feature columns are non-numeric and will not participate in the current drift engine
+
+## Control-Plane Tables
+
+Model Lens manages these Delta tables:
+
+- `monitor_configs`
+- `drift_metrics`
+- `quality_metrics`
+- `performance_metrics`
+- `incidents`
+
+Write behavior is idempotent at the model/window level:
+
+- one active config per `model_key`
+- drift and performance rows replaced for the refreshed model window
+- quality and incident rows replaced for the refreshed model snapshot
 
 ## Local Development
 
@@ -61,26 +144,40 @@ Run the app locally:
 PYTHONPATH=src python3 -m ml_drift_monitor_next.app
 ```
 
-Run in a container:
+Run setup locally:
 
 ```bash
-docker build -t ml-drift-monitor-next .
-docker run --rm -p 8080:8080 ml-drift-monitor-next
+PYTHONPATH=src python3 scripts/setup_control_plane.py --warehouse-id <sql-warehouse-id>
 ```
 
-## Databricks Deployment
-
-The intended deployment path is Databricks Asset Bundles.
+Run refresh locally:
 
 ```bash
-databricks bundle validate
-databricks bundle deploy -t dev
+PYTHONPATH=src python3 scripts/refresh_control_plane.py --warehouse-id <sql-warehouse-id>
 ```
 
-Then bind app resources in Databricks Apps:
+Build the container:
 
-- SQL warehouse
-- refresh job
-- optional Genie space
+```bash
+docker build -t model-lens .
+docker run --rm -p 8080:8080 model-lens
+```
 
-`app.yaml` uses `valueFrom` instead of hardcoded IDs so deployments stay portable.
+## Product Limits
+
+Current limits in this version:
+
+- categorical-specific drift metrics are not implemented yet
+- slice-level rollups are not exposed in the UI yet
+- alert delivery integrations are not implemented yet
+- incident lifecycle is still current-state oriented rather than full acknowledge/resolve workflow
+
+## Positioning
+
+Model Lens is meant to be a product, not a demo repo:
+
+- deployable inside customer Databricks workspaces
+- minimal infrastructure outside Databricks
+- explicit monitoring contract
+- one control plane instead of per-model orchestration sprawl
+- customer-visible setup and onboarding path from the app itself

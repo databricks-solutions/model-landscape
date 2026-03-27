@@ -5,7 +5,7 @@ command:
 
 env:
   - name: APP_TITLE
-    value: ML Drift Monitor Next
+    value: Model Lens
   - name: PYTHONPATH
     value: src
   - name: CONTROL_PLANE_CATALOG
