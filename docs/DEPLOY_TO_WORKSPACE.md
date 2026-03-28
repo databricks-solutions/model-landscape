@@ -27,6 +27,8 @@ You need a workspace with:
 
 If you use Lakebase mode, you also need a Lakebase database user for the refresh workflow. In many workspaces this is the user or service principal that will run the job.
 
+You do not need to set manual Postgres environment variables for the app. In Lakebase mode, the Databricks App resource supplies the managed database connection context.
+
 ## Variables You Must Supply
 
 For `warehouse_only`, Model Lens expects:
@@ -70,6 +72,7 @@ Expected result:
 
 - tests pass
 - bundle validation succeeds
+- the wheel build path is valid when the bundle packages the refresh job
 
 ## 2. Deploy The Bundle
 
@@ -82,6 +85,8 @@ databricks bundle deploy \
 
 databricks apps deploy model-lens \
   --source-code-path /Workspace/Users/<your-email>/.bundle/model-lens/warehouse_only/files
+
+databricks apps get model-lens
 ```
 
 Lakebase-enabled:
@@ -96,6 +101,8 @@ databricks bundle deploy \
 
 databricks apps deploy model-lens \
   --source-code-path /Workspace/Users/<your-email>/.bundle/model-lens/dev/files
+
+databricks apps get model-lens
 ```
 
 Expected result:
@@ -115,6 +122,7 @@ Verify:
 - `SQL_WAREHOUSE_ID` is populated
 - in warehouse-only mode, `USE_LAKEBASE_READ_MODEL` is `false`
 - in Lakebase mode, `USE_LAKEBASE_READ_MODEL` is `true` and `LAKEBASE_DATABASE_NAME` is shown
+- in warehouse-only mode, the app may show an informational banner recommending Lakebase if the workspace exposes Lakebase instances
 
 ## 4. Initialize The Control Plane
 
@@ -241,5 +249,9 @@ Do not send this to a client until all of the following are true:
   - monitor summary falls back to the warehouse or fails to accelerate
 - Missing Lakebase access for the job identity:
   - warehouse metrics refresh, but the Lakebase projection does not update
+- App compute stopped:
+  - `databricks apps get model-lens` shows stopped or unavailable compute; run `databricks apps start model-lens`
+- App resource exists but source is not deployed:
+  - the app reports that source code has not been deployed yet; rerun `databricks apps deploy model-lens --source-code-path ...`
 - Insufficient source history:
   - the monitor saves, but refresh reports that no comparable baseline/current window exists yet

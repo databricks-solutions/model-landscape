@@ -26,6 +26,7 @@ Model Lens has three layers:
 3. `Operator app + refresh workflow`
    - Databricks App for setup, onboarding, and investigation
    - serverless refresh workflow for all active monitors
+   - bundle-built wheel packaging for the workflow runtime
 
 ```mermaid
 flowchart LR
@@ -72,6 +73,12 @@ Model Lens now supports two deployment modes:
 2. `dev` or `prod`
    Use these when you want the Lakebase-backed fast UI path.
 
+Mode selection is automatic inside the app:
+
+- if Lakebase connection details are available through the deployed app resources, Model Lens runs in Lakebase mode
+- if not, it runs in warehouse-only mode
+- in warehouse-only mode, the app checks whether Lakebase instances are visible in the workspace and shows a prompt recommending the Lakebase-enabled target when appropriate
+
 ## Deploy Prerequisites
 
 You need all of the following in the target Databricks workspace:
@@ -105,6 +112,8 @@ databricks bundle deploy \
 
 databricks apps deploy model-lens \
   --source-code-path /Workspace/Users/<your-email>/.bundle/model-lens/warehouse_only/files
+
+databricks apps get model-lens
 ```
 
 Lakebase-enabled:
@@ -126,16 +135,19 @@ databricks bundle deploy \
 
 databricks apps deploy model-lens \
   --source-code-path /Workspace/Users/<your-email>/.bundle/model-lens/dev/files
+
+databricks apps get model-lens
 ```
 
 After deploy:
 
 1. Open the `model-lens` app.
-2. Click `Setup Control Plane`.
-3. Scan a source table.
-4. Save a monitor.
-5. Run the initial refresh.
-6. Confirm the monitor summary and incidents load.
+2. If compute is stopped, run `databricks apps start model-lens`.
+3. Click `Setup Control Plane`.
+4. Scan a source table.
+5. Save a monitor.
+6. Run the initial refresh.
+7. Confirm the monitor summary and incidents load.
 
 ## Full Docs
 
@@ -150,6 +162,12 @@ Run tests:
 
 ```bash
 python3 -m pytest
+```
+
+Build the workflow wheel artifact locally:
+
+```bash
+python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
 ```
 
 Run the app locally:
@@ -182,6 +200,7 @@ PYTHONPATH=src python3 scripts/model_lens_refresh.py \
 - `src/model_lens/services/lakebase.py`: Lakebase connection and read-model projection
 - `src/model_lens/services/refresh_engine.py`: drift, quality, and performance calculations
 - `src/model_lens/workflows/refresh_job.py`: refresh workflow entrypoint
+- `app.yaml`: app runtime definition used by Databricks Apps
 - `resources/`: Databricks bundle resources for app and job deployment
 
 ## Current Scope

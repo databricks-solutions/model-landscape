@@ -12,8 +12,8 @@ By the end of this test, you should have verified:
 - the app can initialize the control plane
 - a monitor can be onboarded from a real table
 - the refresh workflow writes metrics and incidents
-- the Lakebase projection is populated
-- the UI readback matches the persisted warehouse and Lakebase state
+- if you test the Lakebase target, the Lakebase projection is populated
+- the UI readback matches the persisted state for the mode you deployed
 
 ## Test Strategy
 
@@ -53,6 +53,7 @@ cd /Users/volo.vragov/Desktop/work/model-lens
 python3 -m pytest
 python3 scripts/model_lens_setup.py --help
 python3 scripts/model_lens_refresh.py --help
+python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
 databricks bundle validate -t warehouse_only --var "sql_warehouse_id=<sql-warehouse-id>"
 ```
 
@@ -60,6 +61,7 @@ Expected result:
 
 - tests pass
 - both wrapper scripts parse
+- wheel build succeeds
 - bundle validation passes
 
 ## Step 2: Create Scratch Data
@@ -109,6 +111,8 @@ databricks bundle deploy \
 
 databricks apps deploy model-lens \
   --source-code-path /Workspace/Users/<your-email>/.bundle/model-lens/warehouse_only/files
+
+databricks apps get model-lens
 ```
 
 Expected result:
@@ -126,6 +130,7 @@ Check immediately:
 - the app title reads `Model Lens`
 - `SQL_WAREHOUSE_ID` is populated
 - `USE_LAKEBASE_READ_MODEL` is `false`
+- if Lakebase exists in the workspace and is visible to the app identity, an informational banner recommends the Lakebase-enabled target
 - there is no pre-rename product naming anywhere
 
 ## Step 5: Initialize The Control Plane
@@ -321,6 +326,8 @@ Expected:
 ## Step 10: Verify Workflow Outside The App
 
 Open the Databricks workflow `model-lens-refresh` and run it manually once.
+
+This workflow is packaged as a wheel task. If the job fails before your code runs, re-run bundle deploy first so the latest wheel artifact is uploaded.
 
 Then rerun:
 

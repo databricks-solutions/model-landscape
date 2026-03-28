@@ -4,7 +4,8 @@ from collections.abc import Iterator
 
 from dash.development.base_component import Component
 
-from model_lens.app import _feature_candidates, _non_numeric_features, create_app
+from model_lens import app as app_module
+from model_lens.app import _feature_candidates, _non_numeric_features, _workspace_lakebase_instances, create_app
 
 
 def _walk(component: Component) -> Iterator[Component]:
@@ -47,3 +48,10 @@ def test_schema_helpers_flag_non_numeric_selected_features() -> None:
 
     assert _feature_candidates(scan_data, ["event_ts", "model_id", "prediction"]) == ["amount", "country"]
     assert _non_numeric_features(["amount", "country"], scan_data) == ["country"]
+
+
+def test_workspace_lakebase_probe_is_skipped_outside_databricks_app(monkeypatch) -> None:
+    monkeypatch.delenv("DATABRICKS_APP_PORT", raising=False)
+    app_module._workspace_lakebase_instances.cache_clear()
+
+    assert _workspace_lakebase_instances() == ()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -26,6 +27,10 @@ _NUMERIC_TYPE_TOKENS = ("tinyint", "smallint", "int", "bigint", "float", "double
 
 @lru_cache(maxsize=1)
 def _workspace_lakebase_instances() -> tuple[str, ...]:
+    # Only probe the workspace when running inside a Databricks App.
+    # Local dev and tests should not block on network-bound workspace discovery.
+    if not os.getenv("DATABRICKS_APP_PORT"):
+        return ()
     try:
         from databricks.sdk import WorkspaceClient
 

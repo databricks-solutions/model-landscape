@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes the deployed Model Lens architecture.
+This document describes the deployed Model Lens architecture across both supported deployment modes.
 
 ## Design Goals
 
@@ -12,13 +12,27 @@ Model Lens is optimized for four things:
 4. Keep monitoring state durable and auditable.
 5. Keep the UI responsive without turning Lakebase into the system of record.
 
+## Deployment Modes
+
+Model Lens supports two runtime shapes:
+
+1. `warehouse_only`
+   - Unity Catalog + SQL warehouse only
+   - no Lakebase resource attached to the app
+   - app reads summaries and incidents directly from the warehouse-backed repository
+
+2. `dev` / `prod` with Lakebase
+   - Unity Catalog remains the system of record
+   - Lakebase is attached as a read model for fast monitor and incident views
+   - refresh workflow also syncs the Lakebase projection
+
 ## Architecture Overview
 
 ```mermaid
 flowchart LR
   User["Operator in Browser"] --> App["Databricks App: Model Lens"]
   App -->|scan source tables + write configs| Warehouse["Databricks SQL Warehouse"]
-  App -->|hot summary + incident reads| Lakebase["Lakebase Read Model"]
+  App -->|optional hot summary + incident reads| Lakebase["Lakebase Read Model"]
 
   Refresh["Serverless Refresh Workflow"] -->|read inference + labels| Warehouse
   Warehouse --> Source["Unity Catalog Source Tables"]
@@ -43,6 +57,7 @@ Responsibilities:
 - save monitor configs
 - trigger refreshes
 - render monitor summaries and incidents from Lakebase when configured
+- recommend the Lakebase-enabled target when running warehouse-only in a workspace that appears to have Lakebase available
 
 Primary code:
 
@@ -86,7 +101,7 @@ Current Lakebase projection tables:
 - `monitor_summary`
 - `open_incidents`
 
-The app uses Lakebase for hot UI reads when configured. If Lakebase is unavailable, Model Lens falls back to the warehouse-backed queries.
+The app uses Lakebase for hot UI reads when configured. If Lakebase is unavailable or not configured, Model Lens falls back to the warehouse-backed queries.
 
 ### 5. Refresh Workflow
 
@@ -101,6 +116,12 @@ Responsibilities:
 - compute drift, quality, and degradation summaries
 - replace the current persisted snapshot for the refreshed model
 - sync the current UI projection into Lakebase
+
+Packaging/runtime shape:
+
+- the bundle builds a wheel artifact from the repo
+- the workflow runs a `python_wheel_task`
+- this avoids workspace-file import issues in Databricks serverless
 
 Primary code:
 
@@ -117,7 +138,7 @@ Primary code:
 2. The app loads schema metadata and sample rows through the SQL warehouse.
 3. The operator maps fields into the monitoring contract.
 4. The app writes one active row into `monitor_configs`.
-5. The repository syncs the projected monitor inventory into Lakebase.
+5. If Lakebase mode is active, the repository syncs the projected monitor inventory into Lakebase.
 6. The app can immediately trigger the first refresh.
 
 ### Refresh Flow
@@ -128,12 +149,12 @@ Primary code:
 4. It builds baseline and current windows from the configured baseline policy.
 5. It computes numeric drift metrics, quality metrics, performance contributors, and incident rows.
 6. It replaces the persisted current snapshot for that model.
-7. It refreshes the Lakebase monitor summary and open-incident projection.
+7. If Lakebase mode is active, it refreshes the Lakebase monitor summary and open-incident projection.
 
 ### Readback Flow
 
-1. The app reads monitor summary and incident inbox data from Lakebase.
-2. If the Lakebase projection is unavailable, it falls back to warehouse-backed reads.
+1. In Lakebase mode, the app reads monitor summary and incident inbox data from Lakebase.
+2. In warehouse-only mode, or if Lakebase is unavailable, it reads those views from the warehouse-backed repository.
 3. The app renders the current state for operators.
 
 ## Why The System Of Record Stays In Unity Catalog
@@ -178,3 +199,4 @@ The product now follows this split:
 - If Lakebase is configured for the app but unavailable at runtime, the UI falls back to warehouse reads instead of crashing.
 - The refresh workflow can also sync the Lakebase projection when it has the Lakebase instance/database inputs.
 - The scheduled job identity must be permitted to connect to the target Lakebase database if you want the projection kept fresh by the workflow rather than only by app-driven refreshes.
+- `databricks bundle deploy` creates the app resource, but `databricks apps deploy ... --source-code-path ...` is still required to deploy the app source onto compute.
