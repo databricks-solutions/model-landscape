@@ -10,7 +10,7 @@ Model Lens supports two modes:
    Use this if you want the simplest path today.
 
 2. `dev` or `prod`
-   Use this when you want the Lakebase-accelerated UI.
+   Use this when you want the scheduled refresh workflow to keep a Lakebase projection current.
 
 ## What You Need Before Deploy
 
@@ -28,7 +28,11 @@ You need a workspace with:
 
 If you use Lakebase mode, you also need a Lakebase database user for the refresh workflow. In many workspaces this is the user or service principal that will run the job.
 
-You do not need to set manual Postgres environment variables for the app. In Lakebase mode, the Databricks App resource supplies the managed database connection context.
+On Databricks CLI `v0.260.0`, the bundle can bind the SQL warehouse to the app but cannot automatically attach app-level `job` or `database` resources. That means:
+
+- `warehouse_only` is fully automated
+- `dev` / `prod` automate the workflow-side Lakebase sync inputs
+- the app-side Lakebase read path is enabled either from the workspace setup fields in the UI or by pre-populating `LAKEBASE_INSTANCE_NAME` / `LAKEBASE_DATABASE_NAME` in `app.yaml` before `databricks apps deploy`
 
 ## Variables You Must Supply
 
@@ -56,6 +60,7 @@ Warehouse-only:
 ```bash
 cd /Users/volo.vragov/Desktop/work/model-lens
 python3 -m pytest
+python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
 
 databricks bundle validate \
   -t warehouse_only \
@@ -67,6 +72,8 @@ databricks bundle validate \
 Lakebase-enabled:
 
 ```bash
+python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
+
 databricks bundle validate \
   -t dev \
   --var "sql_warehouse_id=<sql-warehouse-id>" \
@@ -81,7 +88,7 @@ Expected result:
 
 - tests pass
 - bundle validation succeeds
-- the wheel build path is valid when the bundle packages the refresh job
+- the wheel build succeeds and the bundle can resolve `../dist/*.whl` for the serverless workflow environment
 
 ## 2. Deploy The Bundle
 
@@ -122,8 +129,8 @@ Expected result:
 
 - the app `model-lens` is created
 - the workflow `model-lens-refresh` is created
-- in Lakebase mode, the app gets a Lakebase database resource
 - after `databricks apps deploy`, the app source is deployed to compute
+- on CLI `v0.260.0`, the app resource only binds the SQL warehouse; Lakebase app reads are configured from the app session fields or app env overrides
 
 ## 3. Open The App
 
@@ -134,24 +141,27 @@ Verify:
 - the title is `Model Lens`
 - `SQL_WAREHOUSE_ID` is populated
 - the `Control Plane Catalog` and `Control Plane Schema` fields point at the namespace you intend to use
-- in warehouse-only mode, `USE_LAKEBASE_READ_MODEL` is `false`
-- in Lakebase mode, `USE_LAKEBASE_READ_MODEL` is `true` and `LAKEBASE_DATABASE_NAME` is shown
+- by default, `USE_LAKEBASE_READ_MODEL` reflects the deployed app environment and will usually be `false`
+- if you want fast app reads, enter `Lakebase Instance Name` and `Lakebase Database Name` in the setup card before loading the dashboard
 - in warehouse-only mode, the app may show an informational banner recommending Lakebase if the workspace exposes Lakebase instances
 
 ## 4. Initialize The Control Plane
 
-In the app, click `Setup Control Plane`.
+In the app `Workspace` step, click `Setup Control Plane`.
+
+The wizard does not unlock the `Source` step until setup succeeds for the current namespace and optional Lakebase session values.
 
 Recommended:
 
 - point the app at a pre-created namespace
 - leave `Create catalog if missing` off unless you are using an admin identity and intentionally want Model Lens to create the catalog
 - keep the app namespace fields aligned with the bundle `control_plane_catalog` / `control_plane_schema` vars so the workflow and the app write to the same place
+- if you want app-side Lakebase reads immediately, fill in `Lakebase Instance Name` and `Lakebase Database Name` first
 
 Expected result:
 
 - the Unity Catalog control-plane tables are created
-- in Lakebase mode, the Lakebase projection schema is created
+- if Lakebase session fields are populated, the Lakebase projection schema is created too
 
 Verify in SQL:
 
@@ -177,10 +187,13 @@ If `main` is not writable in your workspace, replace the catalog name first.
 
 In the app:
 
-1. Source table:
+1. Continue to the `Source` step and set the source table:
    - `main.model_lens_demo.inference_logs`
-2. Click `Scan`
-3. Use:
+2. Optional Lakebase setup:
+   - `Lakebase Instance Name`: `<your-lakebase-instance>` if you want fast app reads
+   - `Lakebase Database Name`: `<your-lakebase-database>` if you want fast app reads
+3. Click `Scan`
+4. Continue to the `Contract` step and use:
    - `Display Name`: `Fraud Model Demo`
    - `Model Key`: `fraud_model_demo`
    - `Timestamp Column`: `event_ts`
@@ -194,11 +207,12 @@ In the app:
    - `External Labels Order Column`: `label_timestamp`
    - `Problem Type`: `classification`
    - `Baseline Days`: `7`
-4. Select features:
+5. Select features:
    - `amount`
    - `velocity_7d`
    - `device_score`
-5. Click `Save Monitor And Run Initial Refresh`
+6. Continue to `Review`
+7. Click `Save Monitor And Run Initial Refresh`
 
 Expected result:
 
@@ -226,7 +240,7 @@ WHERE model_key = 'fraud_model_demo'
 ORDER BY feature_name, metric_name;
 ```
 
-If you deployed Lakebase mode, verify the Lakebase UI projection:
+If Lakebase is configured for the current app session or refresh workflow, verify the Lakebase UI projection:
 
 ```sql
 SELECT * FROM model_lens_ui.monitor_inventory ORDER BY display_name;
@@ -237,7 +251,7 @@ SELECT * FROM model_lens_ui.open_incidents ORDER BY observed_at DESC;
 Expected result:
 
 - warehouse tables contain the durable metrics
-- in Lakebase mode, Lakebase tables contain the latest monitor inventory, summary, and open incidents
+- if Lakebase is configured for the current app session or refresh workflow, Lakebase tables contain the latest monitor inventory, summary, and open incidents
 
 ## 8. Verify The Workflow
 
@@ -249,7 +263,8 @@ Expected result:
 
 - the workflow completes successfully
 - warehouse metrics update
-- in Lakebase mode, the Lakebase projection updates too
+- in `dev` / `prod`, the workflow also updates the Lakebase projection
+- in `warehouse_only`, the app can still use Lakebase reads if you entered Lakebase instance/database values in the UI, but scheduled refreshes do not sync Lakebase automatically
 
 ## 9. What To Check Before Sending To A Client
 

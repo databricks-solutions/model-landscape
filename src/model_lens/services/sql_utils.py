@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 import re
 from typing import Any
@@ -30,7 +31,7 @@ def parse_string_array(value: Any) -> tuple[str, ...]:
     if value is None:
         return ()
     if isinstance(value, tuple):
-        return value
+        return tuple(str(item) for item in value)
     if isinstance(value, list):
         return tuple(str(item) for item in value)
     if isinstance(value, str):
@@ -47,7 +48,12 @@ def parse_string_array(value: Any) -> tuple[str, ...]:
         if not stripped:
             return ()
         return tuple(part.strip().strip("'\"") for part in stripped.split(",") if part.strip())
-    return ()
+    if isinstance(value, Mapping):
+        return ()
+    try:
+        return tuple(str(item) for item in value)
+    except TypeError:
+        return ()
 
 
 def catalog_schema(table_name: str) -> str:
@@ -55,4 +61,3 @@ def catalog_schema(table_name: str) -> str:
     if len(parts) < 3:
         raise ValueError("Expected fully qualified table name catalog.schema.table")
     return f"{parts[0]}.{parts[1]}"
-

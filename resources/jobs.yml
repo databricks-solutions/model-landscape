@@ -5,7 +5,7 @@ resources:
       tasks:
         - task_key: refresh_control_plane
           python_wheel_task:
-            package_name: model-lens
+            package_name: model_lens
             entry_point: model-lens-refresh
             parameters:
               - --warehouse-id
@@ -14,17 +14,6 @@ resources:
               - ${var.control_plane_catalog}
               - --schema
               - ${var.control_plane_schema}
-              - --use-lakebase-read-model
-              - --lakebase-instance-name
-              - ${var.lakebase_instance_name}
-              - --lakebase-database-name
-              - ${var.lakebase_database_name}
-              - --lakebase-pguser
-              - ${var.lakebase_pguser}
-              - --lakebase-schema
-              - ${var.lakebase_schema}
-          libraries:
-            - whl: ./dist/*.whl
           environment_key: refresh_runtime
           max_retries: 2
           min_retry_interval_millis: 60000
@@ -34,6 +23,7 @@ resources:
           spec:
             client: "2"
             dependencies:
+              - ../dist/*.whl
               - dash>=2.18,<3.0
               - dash-bootstrap-components>=1.6,<2.0
               - databricks-sdk>=0.81,<1.0

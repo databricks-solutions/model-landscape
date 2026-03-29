@@ -1,0 +1,68 @@
+from __future__ import annotations
+
+import dash_bootstrap_components as dbc
+from dash import dcc, html
+
+from model_lens.ui.styles import DROPDOWN_STYLE
+
+
+def layout():
+    return html.Div(
+        [
+            html.H4("Drift Analysis", className="text-light mb-1"),
+            html.Div(id="drift-model-banner", className="mb-3"),
+            dbc.Row(
+                [
+                    dbc.Col(
+                        [
+                            dbc.Label("Metric", className="text-muted"),
+                            dbc.Select(
+                                id="drift-metric-select",
+                                options=[
+                                    {"label": "PSI", "value": "psi"},
+                                    {"label": "Jensen-Shannon", "value": "js_divergence"},
+                                    {"label": "KL Divergence", "value": "kl_divergence"},
+                                ],
+                                value="psi",
+                                style=DROPDOWN_STYLE,
+                            ),
+                        ],
+                        md=3,
+                    ),
+                    dbc.Col(
+                        [
+                            dbc.Label("Granularity", className="text-muted"),
+                            dbc.Select(
+                                id="drift-granularity-select",
+                                options=[
+                                    {"label": "Daily", "value": "daily"},
+                                    {"label": "Weekly", "value": "weekly"},
+                                    {"label": "Monthly", "value": "monthly"},
+                                ],
+                                value="daily",
+                                style=DROPDOWN_STYLE,
+                            ),
+                        ],
+                        md=3,
+                    ),
+                    dbc.Col(
+                        [
+                            dbc.Label("Top N Features", className="text-muted"),
+                            dbc.Input(id="drift-top-n", type="number", value=10, min=5, max=50, style=DROPDOWN_STYLE),
+                        ],
+                        md=2,
+                    ),
+                ],
+                className="mb-4",
+            ),
+            html.Div(id="drift-heatmap-container", className="mb-3"),
+            html.Div(id="drift-categorical-note", className="mb-3"),
+            dbc.Row(
+                [
+                    dbc.Col(html.Div(id="drift-timeline-container"), md=7),
+                    dbc.Col(html.Div(id="drift-top-drifters-container"), md=5),
+                ]
+            ),
+        ]
+    )
+

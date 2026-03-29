@@ -18,13 +18,13 @@ Model Lens supports two runtime shapes:
 
 1. `warehouse_only`
    - Unity Catalog + SQL warehouse only
-   - no Lakebase resource attached to the app
+   - no bundle-managed Lakebase resource attached to the app
    - app reads summaries and incidents directly from the warehouse-backed repository
 
 2. `dev` / `prod` with Lakebase
    - Unity Catalog remains the system of record
-   - Lakebase is attached as a read model for fast monitor and incident views
-   - refresh workflow also syncs the Lakebase projection
+   - the refresh workflow syncs a Lakebase read model for fast monitor and incident views
+   - the app can use the same Lakebase read model when the operator provides Lakebase instance/database values in the session or app env
 
 ## Architecture Overview
 
@@ -51,6 +51,9 @@ The app is the operator control plane.
 
 Responsibilities:
 
+- provide a route-based operator shell with persistent model selection and page navigation
+- let operators move from overview cards straight into model-specific drift analysis
+- use a staged onboarding wizard so workspace setup, source scan, contract mapping, and review are separated into explicit steps
 - initialize the control-plane schema
 - let operators override the control-plane catalog/schema used by the app session
 - scan source tables
@@ -63,6 +66,10 @@ Responsibilities:
 Primary code:
 
 - `src/model_lens/app.py`
+- `src/model_lens/backend.py`
+- `src/model_lens/callbacks.py`
+- `src/model_lens/pages/`
+- `src/model_lens/ui/`
 
 ### 2. Databricks SQL Warehouse
 
@@ -138,12 +145,13 @@ Primary code:
 
 1. The operator scans a source table from the app.
 2. The app loads schema metadata and sample rows through the SQL warehouse.
-3. The operator maps fields into the monitoring contract.
+3. In the contract step, the operator maps fields into the monitoring contract.
 4. If the source table contains multiple model IDs, the operator pins the monitor to one `model_id_value`.
 5. If the labels table is not unique on the join key, the operator provides a label ordering column.
-6. The app writes one active row into `monitor_configs`.
-7. If Lakebase mode is active, the repository syncs the projected monitor inventory into Lakebase.
-8. The app can immediately trigger the first refresh.
+6. In the review step, the app summarizes the final namespace, feature set, model scope, and labels strategy before activation.
+7. The app writes one active row into `monitor_configs`.
+8. If Lakebase mode is active, the repository syncs the projected monitor inventory into Lakebase.
+9. The app can immediately trigger the first refresh.
 
 ### Refresh Flow
 
@@ -206,4 +214,5 @@ The product now follows this split:
 - If Lakebase is configured for the app but unavailable at runtime, or if the projection is empty, the UI falls back to warehouse reads instead of crashing or going blank.
 - The refresh workflow can also sync the Lakebase projection when it has the Lakebase instance/database inputs.
 - The scheduled job identity must be permitted to connect to the target Lakebase database if you want the projection kept fresh by the workflow rather than only by app-driven refreshes.
+- On Databricks CLI `v0.260.0`, the app resource can bind a SQL warehouse but not an app-level `database` or `job` resource. Model Lens therefore treats Lakebase app reads as session/app-env configuration instead of Terraform-managed app resource wiring.
 - `databricks bundle deploy` creates the app resource, but `databricks apps deploy ... --source-code-path ...` is still required to deploy the app source onto compute.

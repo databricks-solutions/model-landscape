@@ -5,7 +5,13 @@ from collections.abc import Iterator
 from dash.development.base_component import Component
 
 from model_lens import app as app_module
-from model_lens.app import _feature_candidates, _non_numeric_features, _workspace_lakebase_instances, create_app
+from model_lens.app import (
+    _feature_candidates,
+    _non_numeric_features,
+    _selected_model_from_search,
+    _workspace_lakebase_instances,
+    create_app,
+)
 
 
 def _walk(component: Component) -> Iterator[Component]:
@@ -21,11 +27,29 @@ def _walk(component: Component) -> Iterator[Component]:
 
 def test_app_layout_exposes_setup_scan_onboarding_and_results() -> None:
     app = create_app()
-    ids = {component.id for component in _walk(app.layout) if getattr(component, "id", None)}
+    shell_ids = {component.id for component in _walk(app.layout) if getattr(component, "id", None)}
+    page_ids = {component.id for component in _walk(app.validation_layout) if getattr(component, "id", None)}
+    ids = shell_ids | page_ids
+    assert {
+        "url",
+        "page-content",
+        "global-model-select",
+        "session-config-store",
+        "reload-token",
+    }.issubset(shell_ids)
     assert {
         "setup-control-plane-btn",
         "control-plane-catalog-input",
         "control-plane-schema-input",
+        "lakebase-instance-input",
+        "lakebase-database-input",
+        "lakebase-schema-input",
+        "onboarding-current-step",
+        "control-plane-ready-store",
+        "wizard-back-btn",
+        "wizard-next-btn",
+        "wizard-step-guidance",
+        "onboarding-review-summary",
         "refresh-all-btn",
         "refresh-selected-btn",
         "source-table-input",
@@ -60,3 +84,10 @@ def test_workspace_lakebase_probe_is_skipped_outside_databricks_app(monkeypatch)
     app_module._workspace_lakebase_instances.cache_clear()
 
     assert _workspace_lakebase_instances() == ()
+
+
+def test_selected_model_from_search_parses_query_string() -> None:
+    assert _selected_model_from_search("?model=fraud_model_demo") == "fraud_model_demo"
+    assert _selected_model_from_search("?model=fraud_model_demo&foo=bar") == "fraud_model_demo"
+    assert _selected_model_from_search("?foo=bar") is None
+    assert _selected_model_from_search("") is None

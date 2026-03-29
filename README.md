@@ -11,6 +11,7 @@ It is built for teams that want an in-house alternative to external observabilit
 - compute drift, quality, and performance-contributor summaries on a refresh workflow
 - persist durable monitoring state in Unity Catalog Delta tables
 - optionally project hot UI state into Lakebase for fast monitor and incident views
+- deep-link overview cards into model-specific drift investigation
 - keep the whole stack deployable inside a customer Databricks workspace
 
 ## Product Shape
@@ -79,13 +80,14 @@ Model Lens now supports two deployment modes:
    Use this first if you want the simplest deployment and do not have Lakebase ready yet.
 
 2. `dev` or `prod`
-   Use these when you want the Lakebase-backed fast UI path.
+   Use these when you want the refresh workflow to keep a Lakebase read model in sync.
 
-Mode selection is automatic inside the app:
+Given the current Databricks CLI / provider shape (`v0.260.0`), the bundle can automatically bind the SQL warehouse to the app and workflow, but it cannot automatically attach app-level `job` or `database` resources. Model Lens therefore behaves as follows:
 
-- if Lakebase connection details are available through the deployed app resources, Model Lens runs in Lakebase mode
-- if not, it runs in warehouse-only mode
-- in warehouse-only mode, the app checks whether Lakebase instances are visible in the workspace and shows a prompt recommending the Lakebase-enabled target when appropriate
+- the app always deploys cleanly in warehouse mode
+- if Lakebase connection details are available through app environment variables or the workspace setup fields, the app switches to Lakebase-backed reads
+- in warehouse-only mode, the app checks whether Lakebase instances are visible in the workspace and shows a prompt recommending Lakebase
+- the `dev` / `prod` bundle targets add Lakebase parameters to the scheduled refresh workflow so it can keep the Lakebase projection current
 
 ## Deploy Prerequisites
 
@@ -103,6 +105,11 @@ You need all of the following in the target Databricks workspace:
 
 If you use Lakebase mode, the scheduled refresh job also needs to be able to connect to Lakebase. In practice, that means the job identity must be allowed to mint database credentials and connect to the target Lakebase database.
 
+For the app itself, you can enable Lakebase-backed reads in either of these ways:
+
+- fill in `Lakebase Instance Name` and `Lakebase Database Name` in the workspace setup card after opening the app
+- or pre-populate `LAKEBASE_INSTANCE_NAME` / `LAKEBASE_DATABASE_NAME` in `app.yaml` before `databricks apps deploy`
+
 Recommended deployment model:
 
 - pre-create the target control-plane catalog/schema with your normal platform process
@@ -117,6 +124,7 @@ Warehouse-only:
 ```bash
 cd /Users/volo.vragov/Desktop/work/model-lens
 python3 -m pytest
+python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
 
 databricks bundle validate \
   -t warehouse_only \
@@ -139,6 +147,8 @@ databricks apps get model-lens
 Lakebase-enabled:
 
 ```bash
+python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
+
 databricks bundle validate \
   -t dev \
   --var "sql_warehouse_id=<sql-warehouse-id>" \
@@ -167,14 +177,16 @@ After deploy:
 
 1. Open the `model-lens` app.
 2. If compute is stopped, run `databricks apps start model-lens`.
-3. Confirm the `Control Plane Catalog` and `Control Plane Schema` fields match your deployment target.
-4. Click `Setup Control Plane`.
-5. Scan a source table.
-6. If the table contains more than one `model_id`, fill in `Monitored Model ID Value`.
-7. If external labels are not unique on the join key, fill in `External Labels Order Column`.
-8. Save a monitor.
-9. Run the initial refresh.
-10. Confirm the monitor summary and incidents load.
+3. In the `Workspace` step, confirm the `Control Plane Catalog` and `Control Plane Schema` fields match your deployment target.
+4. If Lakebase is available and you want faster app reads, fill in `Lakebase Instance Name` and `Lakebase Database Name`.
+5. Click `Setup Control Plane`. The `Workspace` step only unlocks after setup succeeds for the current namespace values.
+6. Continue to `Source`.
+7. In the `Source` step, scan a source table.
+8. In the `Contract` step, map the fields and feature set.
+9. If the table contains more than one `model_id`, fill in `Monitored Model ID Value`.
+10. If external labels are not unique on the join key, fill in `External Labels Order Column`.
+11. Continue to `Review`, then save the monitor and run the initial refresh.
+12. Confirm the monitor summary and incidents load.
 
 ## Full Docs
 
@@ -206,7 +218,7 @@ PYTHONPATH=src python3 -m model_lens.app
 Run control-plane setup:
 
 ```bash
-PYTHONPATH=src python3 scripts/model_lens_setup.py \
+python3 scripts/model_lens_setup.py \
   --warehouse-id <sql-warehouse-id> \
   --catalog <control-plane-catalog> \
   --schema <control-plane-schema>
@@ -215,7 +227,7 @@ PYTHONPATH=src python3 scripts/model_lens_setup.py \
 Run refresh:
 
 ```bash
-PYTHONPATH=src python3 scripts/model_lens_refresh.py \
+python3 scripts/model_lens_refresh.py \
   --warehouse-id <sql-warehouse-id> \
   --catalog <control-plane-catalog> \
   --schema <control-plane-schema> \
@@ -227,7 +239,11 @@ PYTHONPATH=src python3 scripts/model_lens_refresh.py \
 
 ## Repo Layout
 
-- `src/model_lens/app.py`: Databricks App UI
+- `src/model_lens/app.py`: route-based Databricks App shell
+- `src/model_lens/backend.py`: frontend query layer over the control-plane repository
+- `src/model_lens/callbacks.py`: global and page-specific Dash callbacks
+- `src/model_lens/pages/`: overview, onboarding, drift, feature, performance, quality, and reference pages
+- `src/model_lens/ui/`: shared styles, sidebar, components, and charts
 - `src/model_lens/services/control_plane.py`: warehouse-backed system-of-record repository with Lakebase sync hooks
 - `src/model_lens/services/lakebase.py`: Lakebase connection and read-model projection
 - `src/model_lens/services/refresh_engine.py`: drift, quality, and performance calculations
@@ -241,6 +257,8 @@ Implemented now:
 
 - warehouse-backed control plane
 - optional Lakebase-backed monitor summary and incident inbox reads
+- app-session Lakebase enablement via workspace setup fields
+- modular multi-page Dash frontend with a staged onboarding wizard, shared components, and route-based navigation
 - app-driven setup, onboarding, and refresh
 - serverless refresh workflow
 - external labels joins with explicit dedupe support

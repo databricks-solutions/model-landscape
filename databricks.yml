@@ -35,31 +35,15 @@ variables:
 targets:
   dev:
     mode: development
-    default: true
-    workspace:
-      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
-  warehouse_only:
-    mode: development
     workspace:
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
     resources:
-      apps:
-        control_plane:
-          resources:
-            - name: sql_warehouse
-              sql_warehouse:
-                id: ${var.sql_warehouse_id}
-                permission: CAN_USE
-            - name: refresh_job
-              job:
-                id: ${resources.jobs.refresh_control_plane.id}
-                permission: CAN_MANAGE_RUN
       jobs:
         refresh_control_plane:
           tasks:
             - task_key: refresh_control_plane
               python_wheel_task:
-                package_name: model-lens
+                package_name: model_lens
                 entry_point: model-lens-refresh
                 parameters:
                   - --warehouse-id
@@ -68,7 +52,45 @@ targets:
                   - ${var.control_plane_catalog}
                   - --schema
                   - ${var.control_plane_schema}
+                  - --use-lakebase-read-model
+                  - --lakebase-instance-name
+                  - ${var.lakebase_instance_name}
+                  - --lakebase-database-name
+                  - ${var.lakebase_database_name}
+                  - --lakebase-pguser
+                  - ${var.lakebase_pguser}
+                  - --lakebase-schema
+                  - ${var.lakebase_schema}
+  warehouse_only:
+    mode: development
+    default: true
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
   prod:
     mode: production
     workspace:
       root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
+    resources:
+      jobs:
+        refresh_control_plane:
+          tasks:
+            - task_key: refresh_control_plane
+              python_wheel_task:
+                package_name: model_lens
+                entry_point: model-lens-refresh
+                parameters:
+                  - --warehouse-id
+                  - ${var.sql_warehouse_id}
+                  - --catalog
+                  - ${var.control_plane_catalog}
+                  - --schema
+                  - ${var.control_plane_schema}
+                  - --use-lakebase-read-model
+                  - --lakebase-instance-name
+                  - ${var.lakebase_instance_name}
+                  - --lakebase-database-name
+                  - ${var.lakebase_database_name}
+                  - --lakebase-pguser
+                  - ${var.lakebase_pguser}
+                  - --lakebase-schema
+                  - ${var.lakebase_schema}

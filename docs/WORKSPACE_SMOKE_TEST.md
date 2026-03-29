@@ -138,18 +138,22 @@ Check immediately:
 - `SQL_WAREHOUSE_ID` is populated
 - `USE_LAKEBASE_READ_MODEL` is `false`
 - `Control Plane Catalog` and `Control Plane Schema` show the namespace you want to use
-- if Lakebase exists in the workspace and is visible to the app identity, an informational banner recommends the Lakebase-enabled target
+- if Lakebase exists in the workspace and is visible to the app identity, an informational banner recommends Lakebase
+- optional `Lakebase Instance Name` / `Lakebase Database Name` inputs are visible for session-level acceleration
 - there is no pre-rename product naming anywhere
 
 ## Step 5: Initialize The Control Plane
 
-In the app, click `Setup Control Plane`.
+In the app `Workspace` step, click `Setup Control Plane`.
+
+The wizard should keep `Continue to Source` disabled until setup succeeds for the current namespace/session values.
 
 Recommended:
 
 - pre-create the target namespace outside the app
 - leave `Create catalog if missing` off unless you are testing with an admin identity
 - keep the app namespace fields aligned with the bundle vars so in-app refreshes and workflow refreshes hit the same control plane
+- if you want to test fast app reads, enter `Lakebase Instance Name` and `Lakebase Database Name` before clicking setup
 
 Expected result:
 
@@ -170,7 +174,7 @@ Expected tables:
 - `performance_metrics`
 - `incidents`
 
-If you are testing the Lakebase target instead of `warehouse_only`, also verify:
+If you are testing Lakebase-backed reads, also verify:
 
 ```sql
 SELECT table_name
@@ -189,10 +193,13 @@ Expected:
 
 In the app:
 
-1. Set the source table to:
+1. Continue to the `Source` step and set the source table to:
    - `main.model_lens_demo.inference_logs`
-2. Click `Scan`.
-3. Review the schema and sample rows.
+2. Optional Lakebase values for app reads:
+   - `Lakebase Instance Name`: `<your-lakebase-instance>`
+   - `Lakebase Database Name`: `<your-lakebase-database>`
+3. Click `Scan`.
+4. Review the schema and sample rows, then continue to the `Contract` step.
 
 Use these field mappings:
 
@@ -224,7 +231,7 @@ Optional categorical/slice test after the happy path:
 - add `region`
 - add `merchant_segment`
 
-Save the monitor:
+Continue to the `Review` step, then save the monitor:
 
 - click `Save Monitor And Run Initial Refresh`
 
@@ -300,7 +307,7 @@ Expected:
 - zero or more rows
 - with this dataset, at least one drift incident is likely
 
-If you are testing the Lakebase target instead of `warehouse_only`, also verify:
+If Lakebase is configured for the current app session or refresh workflow, also verify:
 
 ```sql
 SELECT * FROM model_lens_ui.monitor_inventory ORDER BY display_name;

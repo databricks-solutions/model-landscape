@@ -1,0 +1,432 @@
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+from model_lens.ui.styles import COLORS
+
+
+LAYOUT_DEFAULTS = dict(
+    paper_bgcolor=COLORS["bg"],
+    plot_bgcolor=COLORS["bg"],
+    font=dict(color=COLORS["text"], family="Inter, system-ui, sans-serif"),
+    margin=dict(l=60, r=20, t=50, b=40),
+    xaxis=dict(gridcolor=COLORS["grid"], zerolinecolor=COLORS["grid"]),
+    yaxis=dict(gridcolor=COLORS["grid"], zerolinecolor=COLORS["grid"]),
+)
+
+
+def _apply_layout(fig, **kwargs):
+    fig.update_layout(**{**LAYOUT_DEFAULTS, **kwargs})
+    return fig
+
+
+def build_drift_heatmap(df: pd.DataFrame, metric: str = "psi", title: str = "Feature Drift Over Time"):
+    if df.empty:
+        fig = go.Figure()
+        fig.add_annotation(text="No drift data available", showarrow=False)
+        return _apply_layout(fig, title=title)
+
+    pivot = df.pivot_table(index="feature", columns="period", values=metric).sort_index()
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=pivot.values,
+            x=[str(column) for column in pivot.columns],
+            y=pivot.index,
+            colorscale=[
+                [0.0, COLORS["low"]],
+                [0.3, "#27ae60"],
+                [0.5, COLORS["moderate"]],
+                [0.7, "#e67e22"],
+                [1.0, COLORS["high"]],
+            ],
+            colorbar=dict(title=metric.upper(), tickfont=dict(color=COLORS["text"])),
+            hovertemplate="<b>%{y}</b><br>Period: %{x}<br>" + f"{metric.upper()}: %{{z:.4f}}<extra></extra>",
+        )
+    )
+    return _apply_layout(
+        fig,
+        title=title,
+        xaxis=dict(title="Time Period", gridcolor=COLORS["grid"], tickangle=-45),
+        yaxis=dict(title="", gridcolor=COLORS["grid"], autorange="reversed"),
+        height=max(300, len(pivot.index) * 35 + 100),
+    )
+
+
+def build_drift_timeline(df: pd.DataFrame, features: list[str], metric: str = "psi", thresholds: dict | None = None):
+    if df.empty:
+        fig = go.Figure()
+        fig.add_annotation(text="No drift data available", showarrow=False)
+        return _apply_layout(fig, title=f"{metric.upper()} Over Time")
+
+    fig = go.Figure()
+    colors = px.colors.qualitative.Set2
+    for index, feature in enumerate(features[:8]):
+        feature_frame = df[df["feature"] == feature].sort_values("period")
+        if feature_frame.empty:
+            continue
+        short_name = feature[:30] + "..." if len(feature) > 30 else feature
+        fig.add_trace(
+            go.Scatter(
+                x=feature_frame["period"].astype(str),
+                y=feature_frame[metric],
+                name=short_name,
+                mode="lines+markers",
+                line=dict(color=colors[index % len(colors)], width=2),
+                marker=dict(size=5),
+            )
+        )
+
+    if thresholds:
+        if "warning" in thresholds:
+            fig.add_hline(
+                y=thresholds["warning"],
+                line_dash="dash",
+                line_color=COLORS["moderate"],
+                annotation_text="Warning",
+            )
+        if "critical" in thresholds:
+            fig.add_hline(
+                y=thresholds["critical"],
+                line_dash="dash",
+                line_color=COLORS["high"],
+                annotation_text="Critical",
+            )
+
+    return _apply_layout(
+        fig,
+        title=f"{metric.upper()} Over Time",
+        xaxis_title="Time Period",
+        yaxis_title=metric.upper(),
+        legend=dict(bgcolor="rgba(0,0,0,0.5)", font=dict(size=10)),
+        height=400,
+    )
+
+
+def build_top_drifters_bar(df: pd.DataFrame, metric: str = "psi", top_n: int = 10):
+    if df.empty:
+        fig = go.Figure()
+        fig.add_annotation(text="No drift data available", showarrow=False)
+        return _apply_layout(fig, title="Top Drifting Features")
+
+    latest = df[df["period"] == df["period"].max()].nlargest(top_n, metric)
+    colors = [
+        COLORS["high"] if value > 0.2 else COLORS["moderate"] if value > 0.1 else COLORS["low"]
+        for value in latest[metric]
+    ]
+    fig = go.Figure(
+        go.Bar(
+            x=latest[metric],
+            y=latest["feature"],
+            orientation="h",
+            marker_color=colors,
+            hovertemplate="<b>%{y}</b><br>" + f"{metric.upper()}: %{{x:.4f}}<extra></extra>",
+        )
+    )
+    return _apply_layout(
+        fig,
+        title=f"Top {top_n} Drifting Features (Latest Period)",
+        xaxis_title=metric.upper(),
+        yaxis=dict(autorange="reversed", gridcolor=COLORS["grid"]),
+        height=max(300, top_n * 35 + 80),
+    )
+
+
+def build_feature_distribution(reference, current, feature_name: str, n_bins: int = 40):
+    ref_clean = np.asarray(reference)[~np.isnan(reference)]
+    cur_clean = np.asarray(current)[~np.isnan(current)]
+    if len(ref_clean) == 0 and len(cur_clean) == 0:
+        fig = go.Figure()
+        fig.add_annotation(text="No data available", showarrow=False)
+        return _apply_layout(fig, title=f"Distribution: {feature_name}")
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Histogram(
+            x=ref_clean,
+            nbinsx=n_bins,
+            name="Baseline",
+            opacity=0.6,
+            marker_color=COLORS["blue"],
+            histnorm="probability density",
+        )
+    )
+    fig.add_trace(
+        go.Histogram(
+            x=cur_clean,
+            nbinsx=n_bins,
+            name="Current",
+            opacity=0.6,
+            marker_color=COLORS["highlight"],
+            histnorm="probability density",
+        )
+    )
+    return _apply_layout(
+        fig,
+        title=f"Distribution: {feature_name}",
+        xaxis_title="Value",
+        yaxis_title="Density",
+        barmode="overlay",
+        legend=dict(bgcolor="rgba(0,0,0,0.5)"),
+        height=350,
+    )
+
+
+def build_volume_timeline(daily_volume: dict[str, int]):
+    dates = sorted(daily_volume.keys())
+    volumes = [daily_volume[date] for date in dates]
+    fig = go.Figure(go.Bar(x=[str(date) for date in dates], y=volumes, marker_color=COLORS["accent"]))
+    return _apply_layout(fig, title="Daily Inference Volume", xaxis_title="Date", yaxis_title="Transaction Count", height=300)
+
+
+def build_null_rate_chart(null_rates: dict[str, float]):
+    if not null_rates:
+        fig = go.Figure()
+        fig.add_annotation(text="No null rate data", showarrow=False)
+        return _apply_layout(fig, title="Null Rates by Feature")
+
+    sorted_items = sorted(null_rates.items(), key=lambda item: item[1], reverse=True)
+    features = [item[0] for item in sorted_items[:15]]
+    rates = [item[1] for item in sorted_items[:15]]
+    colors = [COLORS["high"] if rate > 5 else COLORS["moderate"] if rate > 1 else COLORS["low"] for rate in rates]
+
+    fig = go.Figure(
+        go.Bar(
+            x=rates,
+            y=features,
+            orientation="h",
+            marker_color=colors,
+            hovertemplate="<b>%{y}</b><br>Null Rate: %{x:.2f}%<extra></extra>",
+        )
+    )
+    if max(rates) >= 3:
+        fig.add_vline(x=5, line_dash="dash", line_color=COLORS["high"])
+    return _apply_layout(
+        fig,
+        title="Null Rates by Feature",
+        xaxis_title="Null Rate (%)",
+        yaxis=dict(autorange="reversed", gridcolor=COLORS["grid"]),
+        height=max(300, len(features) * 30 + 80),
+    )
+
+
+def build_multi_model_summary(model_drift_data: list[dict]):
+    if not model_drift_data:
+        fig = go.Figure()
+        fig.add_annotation(text="No multi-model data", showarrow=False)
+        return _apply_layout(fig, title="Multi-Model Drift Summary")
+
+    models = [item["model"] for item in model_drift_data]
+    max_psi = [item["max_psi"] for item in model_drift_data]
+    drifting_count = [item["drifting_features"] for item in model_drift_data]
+
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        subplot_titles=("Max PSI by Model", "Drifting Features Count"),
+        horizontal_spacing=0.15,
+    )
+    colors = [COLORS["high"] if value > 0.2 else COLORS["moderate"] if value > 0.1 else COLORS["low"] for value in max_psi]
+    fig.add_trace(go.Bar(x=models, y=max_psi, marker_color=colors, name="Max PSI"), row=1, col=1)
+    fig.add_trace(go.Bar(x=models, y=drifting_count, marker_color=COLORS["blue"], name="Features > Warning"), row=1, col=2)
+    return _apply_layout(fig, title="Multi-Model Drift Overview", showlegend=False, height=350)
+
+
+def build_dimension_breakdown(breakdown_df: pd.DataFrame, feature_name: str, dimension_name: str):
+    if breakdown_df.empty:
+        fig = go.Figure()
+        fig.add_annotation(text="No dimension data available", showarrow=False)
+        return _apply_layout(fig, title=f"{feature_name} by {dimension_name}")
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=breakdown_df["dimension_value"],
+            y=breakdown_df["feature_mean"],
+            name="Mean",
+            marker_color=COLORS["blue"],
+            error_y=dict(type="data", array=breakdown_df["feature_std"], visible=True),
+        )
+    )
+    fig.add_trace(
+        go.Bar(
+            x=breakdown_df["dimension_value"],
+            y=breakdown_df["null_pct"],
+            name="Null %",
+            marker_color=COLORS["highlight"],
+            opacity=0.7,
+            yaxis="y2",
+        )
+    )
+    return _apply_layout(
+        fig,
+        title=f"{feature_name} by {dimension_name}",
+        xaxis_title=dimension_name,
+        yaxis_title="Mean Value",
+        yaxis2=dict(title="Null %", overlaying="y", side="right", gridcolor=COLORS["grid"]),
+        legend=dict(bgcolor="rgba(0,0,0,0.5)"),
+        barmode="group",
+        height=350,
+    )
+
+
+def build_performance_timeline(metrics_over_time: list[dict], metric_name: str = "f1"):
+    if not metrics_over_time:
+        fig = go.Figure()
+        fig.add_annotation(text="No performance data available", showarrow=False)
+        return _apply_layout(fig, title=f"{metric_name.upper()} Over Time")
+
+    frame = pd.DataFrame(metrics_over_time)
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=frame["period"].astype(str),
+            y=frame[metric_name],
+            mode="lines+markers",
+            line=dict(color=COLORS["cyan"], width=3),
+            marker=dict(size=8),
+            name=metric_name.upper(),
+            fill="tozeroy",
+            fillcolor="rgba(26,188,156,0.1)",
+        )
+    )
+    return _apply_layout(fig, title=f"{metric_name.upper()} Over Time", xaxis_title="Period", yaxis_title=metric_name.upper(), height=350)
+
+
+def build_feature_bin_impact(degradation_df: pd.DataFrame, feature_contributors: pd.DataFrame):
+    if degradation_df.empty:
+        fig = go.Figure()
+        fig.add_annotation(text="No degradation data", showarrow=False)
+        return _apply_layout(fig, title="Feature Impact on Performance")
+
+    if not feature_contributors.empty:
+        feature_order = feature_contributors.sort_values("weighted_delta")["feature"].tolist()
+    else:
+        totals = degradation_df.groupby("feature")["degradation_contribution"].sum()
+        feature_order = totals.sort_values().index.tolist()
+
+    fig = go.Figure()
+    for feature in feature_order:
+        feature_frame = degradation_df[degradation_df["feature"] == feature].sort_values("bin_label")
+        for _, row in feature_frame.iterrows():
+            delta = row["delta"]
+            if delta < -0.02:
+                color = COLORS["high"]
+            elif delta < -0.005:
+                color = "#e67e22"
+            elif delta < 0:
+                color = COLORS["moderate"]
+            else:
+                color = COLORS["low"]
+            bar_width = abs(row["degradation_contribution"])
+            fig.add_trace(
+                go.Bar(
+                    x=[bar_width if delta <= 0 else -bar_width],
+                    y=[feature],
+                    orientation="h",
+                    marker_color=color,
+                    marker_line=dict(color=COLORS["bg"], width=0.5),
+                    showlegend=False,
+                    hovertemplate=(
+                        f"<b>{feature}</b><br>"
+                        f"Bin: {row['bin_label']}<br>"
+                        f"Baseline: {row['baseline_metric']:.4f}<br>"
+                        f"Current: {row['current_metric']:.4f}<br>"
+                        f"Delta: {delta:+.4f}<br>"
+                        f"Volume: {row['current_volume_pct']:.1f}%<br>"
+                        f"Impact: {row['degradation_contribution']:.4f}"
+                        "<extra></extra>"
+                    ),
+                )
+            )
+
+    for label, color in [("Degraded (> 2%)", COLORS["high"]), ("Degraded (< 2%)", COLORS["moderate"]), ("Improved", COLORS["low"])]:
+        fig.add_trace(go.Bar(x=[None], y=[None], orientation="h", marker_color=color, name=label, showlegend=True))
+
+    fig.add_vline(x=0, line_color=COLORS["muted"], line_width=1)
+    return _apply_layout(
+        fig,
+        title="Feature Impact on Performance — Per-Bin Breakdown",
+        xaxis_title="Degradation Impact (wider = more impact, left = worse)",
+        yaxis=dict(autorange="reversed", gridcolor=COLORS["grid"], categoryorder="array", categoryarray=feature_order),
+        barmode="relative",
+        height=max(350, len(feature_order) * 50 + 100),
+        legend=dict(bgcolor="rgba(0,0,0,0.5)", font=dict(size=10), orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+
+
+def _bin_sort_key(label):
+    import re
+
+    match = re.search(r"[\[\(]([-\d.]+)", str(label))
+    if match:
+        try:
+            return float(match.group(1))
+        except ValueError:
+            return float("inf")
+    return float("inf")
+
+
+def build_bin_detail(bin_df: pd.DataFrame, feature_name: str, metric_name: str = "f1"):
+    if bin_df.empty:
+        fig = go.Figure()
+        fig.add_annotation(text="No bin data", showarrow=False)
+        return _apply_layout(fig, title=f"Bin Detail: {feature_name}")
+
+    working = bin_df.copy()
+    working["_sort"] = working["bin_label"].apply(_bin_sort_key)
+    working = working.sort_values("_sort").drop(columns=["_sort"])
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(
+        go.Bar(x=working["bin_label"], y=working["baseline_metric"], name="Baseline", marker_color=COLORS["blue"], opacity=0.7),
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Bar(x=working["bin_label"], y=working["current_metric"], name="Current", marker_color=COLORS["highlight"], opacity=0.7),
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=working["bin_label"],
+            y=working["current_volume_pct"],
+            name="Volume %",
+            mode="lines+markers",
+            line=dict(color=COLORS["cyan"], width=2, dash="dot"),
+            marker=dict(size=6),
+        ),
+        secondary_y=True,
+    )
+    fig.update_yaxes(title_text=metric_name.upper(), secondary_y=False)
+    fig.update_yaxes(title_text="Volume %", secondary_y=True)
+    return _apply_layout(
+        fig,
+        title=f"Bin Detail: {feature_name}",
+        xaxis_title="Bin",
+        barmode="group",
+        legend=dict(bgcolor="rgba(0,0,0,0.5)"),
+        height=400,
+    )
+
+
+def build_prediction_distribution(values, prob_column: str = "prediction"):
+    series = pd.Series(values)
+    if series.empty:
+        fig = go.Figure()
+        fig.add_annotation(text="No prediction data", showarrow=False)
+        return _apply_layout(fig, title="Prediction Score Distribution")
+
+    fig = go.Figure(
+        go.Histogram(
+            x=series.dropna(),
+            nbinsx=50,
+            marker_color=COLORS["cyan"],
+            opacity=0.8,
+            histnorm="probability density",
+        )
+    )
+    return _apply_layout(fig, title="Prediction Score Distribution", xaxis_title=prob_column, yaxis_title="Density", height=300)
+

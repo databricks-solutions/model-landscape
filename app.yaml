@@ -17,6 +17,6 @@ env:
   - name: LAKEBASE_SCHEMA
     value: model_lens_ui
   - name: REFRESH_JOB_ID
-    valueFrom: refresh_job
+    value: ""
   - name: GENIE_SPACE_ID
     value: ""
