@@ -13,13 +13,16 @@ from dash import Input, Output, State, ctx, dcc, html
 from model_lens.config import settings
 from model_lens.domain.models import MonitorConfig
 from model_lens.services.contracts import build_contract
-from model_lens.services.control_plane import get_default_repository
+from model_lens.services.control_plane import build_repository
 from model_lens.services.onboarding import build_default_baseline
 from model_lens.services.refresh_runner import run_refresh_cycle
 
 
-def _repo():
-    return get_default_repository()
+def _repo(control_plane_catalog: str = "", control_plane_schema: str = ""):
+    return build_repository(
+        catalog=(control_plane_catalog or settings.control_plane_catalog).strip(),
+        schema=(control_plane_schema or settings.control_plane_schema).strip(),
+    )
 
 
 _NUMERIC_TYPE_TOKENS = ("tinyint", "smallint", "int", "bigint", "float", "double", "decimal", "numeric", "real")
@@ -199,8 +202,28 @@ def _build_layout() -> html.Div:
             dbc.Col(dbc.Card(dbc.CardBody([
                 html.H5("Workspace Setup", className="mb-3"),
                 html.P(
-                    "Create the control-plane catalog/schema/tables before onboarding the first model.",
+                    "Point Model Lens at an existing Unity Catalog namespace, then create the control-plane tables before onboarding the first model.",
                     className="text-muted",
+                ),
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Label("Control Plane Catalog"),
+                        dbc.Input(id="control-plane-catalog-input", value=settings.control_plane_catalog),
+                    ], md=6, style=form_style),
+                    dbc.Col([
+                        dbc.Label("Control Plane Schema"),
+                        dbc.Input(id="control-plane-schema-input", value=settings.control_plane_schema),
+                    ], md=6, style=form_style),
+                ]),
+                dbc.Checklist(
+                    id="create-catalog-toggle",
+                    options=[{
+                        "label": "Create catalog if missing (requires elevated privileges)",
+                        "value": "create_catalog",
+                    }],
+                    value=[],
+                    switch=True,
+                    className="mb-3",
                 ),
                 dbc.Button("Setup Control Plane", id="setup-control-plane-btn", color="primary", className="me-2"),
                 dbc.Button("Refresh All Monitors", id="refresh-all-btn", color="secondary"),
@@ -210,7 +233,11 @@ def _build_layout() -> html.Div:
                 dbc.Button("Refresh Selected Monitor", id="refresh-selected-btn", color="secondary", className="mt-2"),
             ])), md=4),
             dbc.Col(dbc.Card(dbc.CardBody([
-                html.H5("Deployment Inputs", className="mb-3"),
+                html.H5("Runtime Defaults", className="mb-3"),
+                html.P(
+                    "These are the deployed defaults. The control-plane fields in the setup card can override the namespace used by this app session.",
+                    className="text-muted",
+                ),
                 _render_frame(pd.DataFrame([
                     {"name": "DEPLOYMENT_MODE", "value": "lakebase" if settings.use_lakebase_read_model else "warehouse_only"},
                     {"name": "CONTROL_PLANE_CATALOG", "value": settings.control_plane_catalog},
@@ -253,6 +280,10 @@ def _build_layout() -> html.Div:
                     dbc.Col([dbc.Label("Prediction Column"), dcc.Dropdown(id="prediction-col-dropdown")], md=4, style=form_style),
                 ]),
                 dbc.Row([
+                    dbc.Col([dbc.Label("Monitored Model ID Value"), dbc.Input(id="model-id-value-input", placeholder="fraud_model_v1")], md=6, style=form_style),
+                    dbc.Col([dbc.Label("Monitored Model Version Value"), dbc.Input(id="model-version-value-input", placeholder="2026-03-01")], md=6, style=form_style),
+                ]),
+                dbc.Row([
                     dbc.Col([dbc.Label("Model Version Column"), dcc.Dropdown(id="model-version-col-dropdown")], md=4, style=form_style),
                     dbc.Col([dbc.Label("Prediction Score Column"), dcc.Dropdown(id="prediction-score-col-dropdown")], md=4, style=form_style),
                     dbc.Col([dbc.Label("Entity ID Column"), dcc.Dropdown(id="entity-id-col-dropdown")], md=4, style=form_style),
@@ -264,11 +295,12 @@ def _build_layout() -> html.Div:
                 ]),
                 dbc.Row([
                     dbc.Col([dbc.Label("External Label Column"), dbc.Input(id="external-label-col-input", placeholder="label")], md=4, style=form_style),
+                    dbc.Col([dbc.Label("External Labels Order Column"), dbc.Input(id="labels-order-col-input", placeholder="label_timestamp")], md=4, style=form_style),
                     dbc.Col([dbc.Label("Problem Type"), dcc.Dropdown(id="problem-type-dropdown", options=[
                         {"label": "Classification", "value": "classification"},
                         {"label": "Regression", "value": "regression"},
-                    ], value="classification")], md=4, style=form_style),
-                    dbc.Col([dbc.Label("Baseline Days"), dbc.Input(id="baseline-days-input", type="number", min=1, value=7)], md=4, style=form_style),
+                    ], value="classification")], md=2, style=form_style),
+                    dbc.Col([dbc.Label("Baseline Days"), dbc.Input(id="baseline-days-input", type="number", min=1, value=7)], md=2, style=form_style),
                 ]),
                 dbc.Label("Feature Columns"),
                 dcc.Dropdown(id="feature-cols-dropdown", multi=True, className="mb-3"),
@@ -462,15 +494,19 @@ def create_app() -> dash.Dash:
         Output("action-status", "children", allow_duplicate=True),
         Output("reload-token", "data", allow_duplicate=True),
         Input("setup-control-plane-btn", "n_clicks"),
+        State("control-plane-catalog-input", "value"),
+        State("control-plane-schema-input", "value"),
+        State("create-catalog-toggle", "value"),
         prevent_initial_call=True,
     )
-    def setup_control_plane(_):
+    def setup_control_plane(_, control_plane_catalog, control_plane_schema, create_catalog_value):
+        repository = _repo(control_plane_catalog, control_plane_schema)
         try:
-            _repo().ensure_control_plane()
+            repository.ensure_control_plane(create_catalog="create_catalog" in (create_catalog_value or []))
         except Exception as error:
             return _status_alert(f"Setup failed: {error}", "danger"), dash.no_update
         return _status_alert(
-            f"Control plane ready at {settings.control_plane_catalog}.{settings.control_plane_schema}.",
+            f"Control plane ready at {repository.table_names.catalog}.{repository.table_names.schema}.",
             "success",
         ), datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -480,15 +516,18 @@ def create_app() -> dash.Dash:
         Input("refresh-all-btn", "n_clicks"),
         Input("refresh-selected-btn", "n_clicks"),
         State("refresh-monitor-select", "value"),
+        State("control-plane-catalog-input", "value"),
+        State("control-plane-schema-input", "value"),
         prevent_initial_call=True,
     )
-    def refresh_monitors(_, __, selected_model):
+    def refresh_monitors(_, __, selected_model, control_plane_catalog, control_plane_schema):
         trigger = ctx.triggered_id
         model_key = selected_model if trigger == "refresh-selected-btn" else ""
         if trigger == "refresh-selected-btn" and not model_key:
             return _status_alert("Select a monitor before running a targeted refresh.", "warning"), dash.no_update
+        repository = _repo(control_plane_catalog, control_plane_schema)
         try:
-            counts = run_refresh_cycle(_repo(), model_key=model_key or "")
+            counts = run_refresh_cycle(repository, model_key=model_key or "")
         except Exception as error:
             return _status_alert(f"Refresh failed: {error}", "danger"), dash.no_update
         scope = model_key or "all active monitors"
@@ -511,6 +550,8 @@ def create_app() -> dash.Dash:
         State("timestamp-col-dropdown", "value"),
         State("model-id-col-dropdown", "value"),
         State("prediction-col-dropdown", "value"),
+        State("model-id-value-input", "value"),
+        State("model-version-value-input", "value"),
         State("model-version-col-dropdown", "value"),
         State("prediction-score-col-dropdown", "value"),
         State("entity-id-col-dropdown", "value"),
@@ -518,11 +559,14 @@ def create_app() -> dash.Dash:
         State("labels-table-input", "value"),
         State("labels-join-col-input", "value"),
         State("external-label-col-input", "value"),
+        State("labels-order-col-input", "value"),
         State("feature-cols-dropdown", "value"),
         State("categorical-cols-dropdown", "value"),
         State("slice-cols-dropdown", "value"),
         State("problem-type-dropdown", "value"),
         State("baseline-days-input", "value"),
+        State("control-plane-catalog-input", "value"),
+        State("control-plane-schema-input", "value"),
         prevent_initial_call=True,
     )
     def save_monitor(
@@ -533,6 +577,8 @@ def create_app() -> dash.Dash:
         timestamp_col,
         model_id_col,
         prediction_col,
+        model_id_value,
+        model_version_value,
         model_version_col,
         prediction_score_col,
         entity_id_col,
@@ -540,11 +586,14 @@ def create_app() -> dash.Dash:
         labels_table,
         labels_join_col,
         external_label_col,
+        labels_order_col,
         feature_columns,
         categorical_columns,
         slice_columns,
         problem_type,
         baseline_days,
+        control_plane_catalog,
+        control_plane_schema,
     ):
         if not scan_data:
             return _status_alert("Scan a source table before saving a monitor.", "warning"), dash.no_update
@@ -553,12 +602,17 @@ def create_app() -> dash.Dash:
         labels_table = (labels_table or "").strip()
         external_label_col = (external_label_col or "").strip()
         labels_join_col = (labels_join_col or "").strip()
+        labels_order_col = (labels_order_col or "").strip()
+        model_id_value = (model_id_value or "").strip()
+        model_version_value = (model_version_value or "").strip()
         label_col = external_label_col or source_label_col or None
         if labels_table and (not entity_id_col or not labels_join_col or not label_col):
             return _status_alert(
                 "External labels require Entity ID Column, External Labels Join Column, and External Label Column.",
                 "warning",
             ), dash.no_update
+        if model_version_value and not model_version_col:
+            return _status_alert("Monitored Model Version Value requires a mapped Model Version Column.", "warning"), dash.no_update
         try:
             contract = build_contract(
                 columns=scan_data["columns"],
@@ -580,11 +634,15 @@ def create_app() -> dash.Dash:
                 contract=contract,
                 baseline=build_default_baseline(int(baseline_days or 7)),
                 problem_type=problem_type or "classification",
+                model_id_value=model_id_value or None,
+                model_version_value=model_version_value or None,
                 labels_table=labels_table or None,
                 labels_join_col=labels_join_col or None,
+                labels_order_col=labels_order_col or None,
                 created_by="app",
             )
-            repository = _repo()
+            repository = _repo(control_plane_catalog, control_plane_schema)
+            repository.validate_monitor_source(config)
             repository.upsert_monitor_config(config)
             counts = run_refresh_cycle(repository, model_key=config.model_key)
         except Exception as error:
@@ -614,16 +672,20 @@ def create_app() -> dash.Dash:
         Output("incident-summary", "children"),
         Output("refresh-monitor-select", "options"),
         Input("reload-token", "data"),
+        State("control-plane-catalog-input", "value"),
+        State("control-plane-schema-input", "value"),
     )
-    def render_dashboard(_):
+    def render_dashboard(_, control_plane_catalog, control_plane_schema):
         try:
-            repository = _repo()
+            repository = _repo(control_plane_catalog, control_plane_schema)
             configs = repository.list_monitor_configs(status="active")
             config_frame = pd.DataFrame([
                 {
                     "model_key": config.model_key,
                     "display_name": config.display_name,
                     "source_table": config.source_table,
+                    "model_id_value": config.model_id_value or "",
+                    "model_version_value": config.model_version_value or "",
                     "features": len(config.contract.feature_columns),
                     "labels_table": config.labels_table or "",
                 }
@@ -643,6 +705,8 @@ def create_app() -> dash.Dash:
             "display_name",
             "model_key",
             "source_table",
+            "model_id_value",
+            "model_version_value",
             "features",
             "feature_count",
             "max_psi",

@@ -24,11 +24,16 @@ def test_app_layout_exposes_setup_scan_onboarding_and_results() -> None:
     ids = {component.id for component in _walk(app.layout) if getattr(component, "id", None)}
     assert {
         "setup-control-plane-btn",
+        "control-plane-catalog-input",
+        "control-plane-schema-input",
         "refresh-all-btn",
         "refresh-selected-btn",
         "source-table-input",
         "scan-source-btn",
         "save-monitor-btn",
+        "model-id-value-input",
+        "model-version-value-input",
+        "labels-order-col-input",
         "monitor-summary",
         "incident-summary",
     }.issubset(ids)

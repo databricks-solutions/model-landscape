@@ -79,6 +79,7 @@ FROM base;
 CREATE OR REPLACE TABLE labels AS
 SELECT
   entity_id,
+  event_ts AS label_timestamp,
   CASE
     WHEN prediction >= 0.74 THEN 1
     WHEN prediction >= 0.54

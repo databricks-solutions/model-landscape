@@ -24,7 +24,7 @@ class InferenceContract:
 
 @dataclass(frozen=True)
 class BaselinePolicy:
-    kind: str = "first_n_days"
+    kind: str = "rolling_n_days"
     n_days: int = 7
     max_comparison_days: int = 90
 
@@ -37,8 +37,11 @@ class MonitorConfig:
     contract: InferenceContract
     baseline: BaselinePolicy = field(default_factory=BaselinePolicy)
     problem_type: str = "classification"
+    model_id_value: str | None = None
+    model_version_value: str | None = None
     labels_table: str | None = None
     labels_join_col: str | None = None
+    labels_order_col: str | None = None
     created_by: str = "app"
 
 
@@ -64,4 +67,3 @@ class RefreshResult:
     quality_rows: list[dict[str, Any]]
     performance_rows: list[dict[str, Any]]
     incident_rows: list[dict[str, Any]]
-

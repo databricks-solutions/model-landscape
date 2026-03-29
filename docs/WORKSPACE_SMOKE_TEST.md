@@ -37,6 +37,7 @@ You need:
 - serverless jobs enabled in the target workspace
 - privileges to create tables in a test catalog/schema
 - privileges to deploy Databricks Asset Bundles and open Databricks Apps
+- a chosen Unity Catalog catalog/schema for the Model Lens control plane
 
 If you are testing the Lakebase path, you also need:
 
@@ -54,7 +55,11 @@ python3 -m pytest
 python3 scripts/model_lens_setup.py --help
 python3 scripts/model_lens_refresh.py --help
 python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
-databricks bundle validate -t warehouse_only --var "sql_warehouse_id=<sql-warehouse-id>"
+databricks bundle validate \
+  -t warehouse_only \
+  --var "sql_warehouse_id=<sql-warehouse-id>" \
+  --var "control_plane_catalog=<control-plane-catalog>" \
+  --var "control_plane_schema=<control-plane-schema>"
 ```
 
 Expected result:
@@ -107,7 +112,9 @@ Deploy into your test target:
 ```bash
 databricks bundle deploy \
   -t warehouse_only \
-  --var "sql_warehouse_id=<sql-warehouse-id>"
+  --var "sql_warehouse_id=<sql-warehouse-id>" \
+  --var "control_plane_catalog=<control-plane-catalog>" \
+  --var "control_plane_schema=<control-plane-schema>"
 
 databricks apps deploy model-lens \
   --source-code-path /Workspace/Users/<your-email>/.bundle/model-lens/warehouse_only/files
@@ -130,6 +137,7 @@ Check immediately:
 - the app title reads `Model Lens`
 - `SQL_WAREHOUSE_ID` is populated
 - `USE_LAKEBASE_READ_MODEL` is `false`
+- `Control Plane Catalog` and `Control Plane Schema` show the namespace you want to use
 - if Lakebase exists in the workspace and is visible to the app identity, an informational banner recommends the Lakebase-enabled target
 - there is no pre-rename product naming anywhere
 
@@ -137,15 +145,21 @@ Check immediately:
 
 In the app, click `Setup Control Plane`.
 
+Recommended:
+
+- pre-create the target namespace outside the app
+- leave `Create catalog if missing` off unless you are testing with an admin identity
+- keep the app namespace fields aligned with the bundle vars so in-app refreshes and workflow refreshes hit the same control plane
+
 Expected result:
 
 - success banner
-- control-plane tables are created under `model_observability.control_plane`
+- control-plane tables are created under your chosen `<control-plane-catalog>.<control-plane-schema>`
 
 Verify in SQL:
 
 ```sql
-SHOW TABLES IN model_observability.control_plane;
+SHOW TABLES IN <control-plane-catalog>.<control-plane-schema>;
 ```
 
 Expected tables:
@@ -186,6 +200,7 @@ Use these field mappings:
 - `Model Key`: `fraud_model_demo`
 - `Timestamp Column`: `event_ts`
 - `Model ID Column`: `model_id`
+- `Monitored Model ID Value`: `fraud_model_v1`
 - `Prediction Column`: `prediction`
 - `Model Version Column`: `(none)`
 - `Prediction Score Column`: `(none)`
@@ -194,6 +209,7 @@ Use these field mappings:
 - `External Labels Table`: `main.model_lens_demo.labels`
 - `External Labels Join Column`: `entity_id`
 - `External Label Column`: `label`
+- `External Labels Order Column`: `label_timestamp`
 - `Problem Type`: `classification`
 - `Baseline Days`: `7`
 
@@ -224,7 +240,7 @@ Run these queries:
 
 ```sql
 SELECT model_key, display_name, source_table, feature_columns, categorical_columns, slice_columns, status
-FROM model_observability.control_plane.monitor_configs
+FROM <control-plane-catalog>.<control-plane-schema>.monitor_configs
 WHERE model_key = 'fraud_model_demo';
 ```
 
@@ -235,7 +251,7 @@ Expected:
 
 ```sql
 SELECT model_key, total_rows, min_date, max_date
-FROM model_observability.control_plane.quality_metrics
+FROM <control-plane-catalog>.<control-plane-schema>.quality_metrics
 WHERE model_key = 'fraud_model_demo';
 ```
 
@@ -248,7 +264,7 @@ Expected:
 
 ```sql
 SELECT model_key, feature_name, metric_name, COUNT(*) AS row_count
-FROM model_observability.control_plane.drift_metrics
+FROM <control-plane-catalog>.<control-plane-schema>.drift_metrics
 WHERE model_key = 'fraud_model_demo'
 GROUP BY 1,2,3
 ORDER BY feature_name, metric_name;
@@ -263,7 +279,7 @@ Expected:
 
 ```sql
 SELECT model_key, COUNT(*) AS perf_rows
-FROM model_observability.control_plane.performance_metrics
+FROM <control-plane-catalog>.<control-plane-schema>.performance_metrics
 WHERE model_key = 'fraud_model_demo'
 GROUP BY 1;
 ```
@@ -274,7 +290,7 @@ Expected:
 
 ```sql
 SELECT model_key, feature_name, metric_name, severity, status
-FROM model_observability.control_plane.incidents
+FROM <control-plane-catalog>.<control-plane-schema>.incidents
 WHERE model_key = 'fraud_model_demo'
 ORDER BY observed_at DESC;
 ```
@@ -333,7 +349,7 @@ Then rerun:
 
 ```sql
 SELECT model_key, MAX(computed_at) AS last_quality_refresh
-FROM model_observability.control_plane.quality_metrics
+FROM <control-plane-catalog>.<control-plane-schema>.quality_metrics
 WHERE model_key = 'fraud_model_demo'
 GROUP BY 1;
 ```
@@ -376,6 +392,24 @@ Expected:
 
 - save succeeds
 - warning explains those fields are stored in the contract but skipped by the current drift engine
+
+### Shared-table validation
+
+- clear `Monitored Model ID Value`
+- try to save the scratch monitor again
+
+Expected:
+
+- save fails with a validation error explaining that the source contains multiple model IDs
+
+### External-label dedupe validation
+
+- clear `External Labels Order Column`
+- try to save again while still using the external labels table
+
+Expected:
+
+- save fails with a validation error explaining that repeated label keys require an order column
 
 ### Short-history dataset
 

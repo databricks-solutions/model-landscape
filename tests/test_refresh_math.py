@@ -8,7 +8,7 @@ from model_lens.services.onboarding import build_default_baseline
 from model_lens.workflows.refresh_job import refresh_monitor, split_baseline_current
 
 
-def test_split_baseline_current_avoids_overlap() -> None:
+def test_split_baseline_current_uses_two_recent_adjacent_windows() -> None:
     start = datetime(2026, 1, 1)
     frame = pd.DataFrame({
         "event_ts": [start + timedelta(days=index) for index in range(10)],
@@ -16,10 +16,12 @@ def test_split_baseline_current_avoids_overlap() -> None:
         "prediction": [0.1 * index for index in range(10)],
         "f1": [float(index) for index in range(10)],
     })
-    baseline, current = split_baseline_current(frame, "event_ts", 7)
-    assert len(baseline) == 7
+    baseline, current = split_baseline_current(frame, "event_ts", 3)
+    assert len(baseline) == 3
     assert len(current) == 3
     assert baseline["event_ts"].max() < current["event_ts"].min()
+    assert baseline["event_ts"].min().date().isoformat() == "2026-01-05"
+    assert current["event_ts"].min().date().isoformat() == "2026-01-08"
 
 
 def test_refresh_monitor_produces_deduplicated_incidents() -> None:

@@ -275,15 +275,21 @@ class LakebaseReadModel:
             )
             for _, row in incidents.iterrows()
         ]
-        self._connection.execute(f"DELETE FROM {self.inventory_table}")
-        self._connection.execute(f"DELETE FROM {self.summary_table}")
-        self._connection.execute(f"DELETE FROM {self.incidents_table}")
         self._connection.execute_many(
             f"""
             INSERT INTO {self.inventory_table} (
                 model_key, display_name, source_table, feature_count, labels_table,
                 feature_columns, categorical_columns, slice_columns, updated_at
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (model_key) DO UPDATE SET
+                display_name = EXCLUDED.display_name,
+                source_table = EXCLUDED.source_table,
+                feature_count = EXCLUDED.feature_count,
+                labels_table = EXCLUDED.labels_table,
+                feature_columns = EXCLUDED.feature_columns,
+                categorical_columns = EXCLUDED.categorical_columns,
+                slice_columns = EXCLUDED.slice_columns,
+                updated_at = EXCLUDED.updated_at
             """,
             inventory_rows,
         )
@@ -293,6 +299,16 @@ class LakebaseReadModel:
                 model_key, display_name, max_psi, feature_count, latest_window_end,
                 total_rows, latest_data_date, last_refresh_at, open_incident_count, updated_at
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (model_key) DO UPDATE SET
+                display_name = EXCLUDED.display_name,
+                max_psi = EXCLUDED.max_psi,
+                feature_count = EXCLUDED.feature_count,
+                latest_window_end = EXCLUDED.latest_window_end,
+                total_rows = EXCLUDED.total_rows,
+                latest_data_date = EXCLUDED.latest_data_date,
+                last_refresh_at = EXCLUDED.last_refresh_at,
+                open_incident_count = EXCLUDED.open_incident_count,
+                updated_at = EXCLUDED.updated_at
             """,
             summary_rows,
         )
@@ -302,9 +318,47 @@ class LakebaseReadModel:
                 model_key, feature_name, metric_name, severity, metric_value,
                 window_end, observed_at, updated_at
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (model_key, feature_name, metric_name) DO UPDATE SET
+                severity = EXCLUDED.severity,
+                metric_value = EXCLUDED.metric_value,
+                window_end = EXCLUDED.window_end,
+                observed_at = EXCLUDED.observed_at,
+                updated_at = EXCLUDED.updated_at
             """,
             incident_rows,
         )
+        model_keys = [config.model_key for config in configs]
+        if model_keys:
+            placeholders = ", ".join(["%s"] * len(model_keys))
+            params = tuple(model_keys)
+            self._connection.execute(
+                f"DELETE FROM {self.inventory_table} WHERE model_key NOT IN ({placeholders})",
+                params,
+            )
+            self._connection.execute(
+                f"DELETE FROM {self.summary_table} WHERE model_key NOT IN ({placeholders})",
+                params,
+            )
+        else:
+            self._connection.execute(f"DELETE FROM {self.inventory_table}")
+            self._connection.execute(f"DELETE FROM {self.summary_table}")
+
+        if incident_rows:
+            incident_key_placeholders = ", ".join(["(%s, %s, %s)"] * len(incident_rows))
+            incident_key_params = tuple(
+                value
+                for row in incident_rows
+                for value in (row[0], row[1], row[2])
+            )
+            self._connection.execute(
+                f"""
+                DELETE FROM {self.incidents_table}
+                WHERE (model_key, feature_name, metric_name) NOT IN ({incident_key_placeholders})
+                """,
+                incident_key_params,
+            )
+        else:
+            self._connection.execute(f"DELETE FROM {self.incidents_table}")
 
     def get_monitor_summary(self) -> pd.DataFrame:
         if not self.configured:

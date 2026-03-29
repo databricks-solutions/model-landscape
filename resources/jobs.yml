@@ -10,6 +10,10 @@ resources:
             parameters:
               - --warehouse-id
               - ${var.sql_warehouse_id}
+              - --catalog
+              - ${var.control_plane_catalog}
+              - --schema
+              - ${var.control_plane_schema}
               - --use-lakebase-read-model
               - --lakebase-instance-name
               - ${var.lakebase_instance_name}

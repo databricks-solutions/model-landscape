@@ -3,6 +3,14 @@ from __future__ import annotations
 from model_lens.services.table_names import TableNames
 
 
+def monitor_config_migration_columns() -> dict[str, str]:
+    return {
+        "model_id_value": "STRING",
+        "model_version_value": "STRING",
+        "labels_order_col": "STRING",
+    }
+
+
 def ddl(table_names: TableNames) -> dict[str, str]:
     return {
         "monitor_configs": f"""
@@ -12,8 +20,10 @@ def ddl(table_names: TableNames) -> dict[str, str]:
                 source_table STRING,
                 timestamp_col STRING,
                 model_id_col STRING,
+                model_id_value STRING,
                 prediction_col STRING,
                 model_version_col STRING,
+                model_version_value STRING,
                 prediction_score_col STRING,
                 label_col STRING,
                 entity_id_col STRING,
@@ -26,6 +36,7 @@ def ddl(table_names: TableNames) -> dict[str, str]:
                 problem_type STRING,
                 labels_table STRING,
                 labels_join_col STRING,
+                labels_order_col STRING,
                 created_by STRING,
                 status STRING,
                 created_at TIMESTAMP,

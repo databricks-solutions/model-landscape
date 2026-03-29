@@ -16,7 +16,6 @@ class RefreshCounts:
 
 
 def run_refresh_cycle(repository: ControlPlaneRepository, model_key: str = "") -> RefreshCounts:
-    repository.ensure_control_plane()
     configs = repository.list_monitor_configs(status="active")
     if model_key:
         configs = [config for config in configs if config.model_key == model_key]

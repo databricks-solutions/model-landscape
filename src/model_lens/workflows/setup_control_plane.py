@@ -10,6 +10,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--catalog", required=False)
     parser.add_argument("--schema", required=False)
     parser.add_argument("--warehouse-id", required=False)
+    parser.add_argument("--create-catalog", action="store_true")
     return parser.parse_args()
 
 
@@ -20,7 +21,7 @@ def main() -> int:
         catalog=args.catalog,
         schema=args.schema,
     )
-    repository.ensure_control_plane()
+    repository.ensure_control_plane(create_catalog=args.create_catalog)
     print(
         "setup-control-plane complete: "
         f"{repository.table_names.catalog}.{repository.table_names.schema}"

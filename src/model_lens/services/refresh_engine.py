@@ -24,10 +24,13 @@ def split_baseline_current(df: pd.DataFrame, timestamp_col: str, n_days: int) ->
     ordered = ordered.sort_values(timestamp_col)
     if ordered.empty:
         return ordered, ordered
-    baseline_start = ordered[timestamp_col].min().normalize()
-    baseline_end = baseline_start + timedelta(days=max(n_days - 1, 0))
-    baseline = ordered[ordered[timestamp_col].dt.normalize() <= baseline_end]
-    current = ordered[ordered[timestamp_col].dt.normalize() > baseline_end]
+    latest_date = ordered[timestamp_col].max().normalize()
+    current_start = latest_date - timedelta(days=max(n_days - 1, 0))
+    baseline_end = current_start - timedelta(days=1)
+    baseline_start = baseline_end - timedelta(days=max(n_days - 1, 0))
+    normalized = ordered[timestamp_col].dt.normalize()
+    baseline = ordered[(normalized >= baseline_start) & (normalized <= baseline_end)]
+    current = ordered[(normalized >= current_start) & (normalized <= latest_date)]
     return baseline, current
 
 

@@ -52,6 +52,7 @@ The app is the operator control plane.
 Responsibilities:
 
 - initialize the control-plane schema
+- let operators override the control-plane catalog/schema used by the app session
 - scan source tables
 - map source columns into the monitoring contract
 - save monitor configs
@@ -76,10 +77,10 @@ The warehouse is the compute access layer and the authoritative read/write path 
 
 ### 3. Unity Catalog Control Plane
 
-The durable monitoring state lives in Delta tables under:
+The durable monitoring state lives in Delta tables under a customer-selected Unity Catalog namespace:
 
-- catalog: `model_observability`
-- schema: `control_plane`
+- catalog: deployment input, default `model_observability`
+- schema: deployment input, default `control_plane`
 
 Current tables:
 
@@ -111,8 +112,9 @@ Responsibilities:
 
 - enumerate active monitors
 - read source inference data
-- optionally join labels from an external table
-- split baseline vs current windows
+- optionally join labels from an external table with deterministic dedupe
+- scope shared source tables down to one monitored model/version when configured
+- build recent rolling baseline/current windows
 - compute drift, quality, and degradation summaries
 - replace the current persisted snapshot for the refreshed model
 - sync the current UI projection into Lakebase
@@ -137,19 +139,22 @@ Primary code:
 1. The operator scans a source table from the app.
 2. The app loads schema metadata and sample rows through the SQL warehouse.
 3. The operator maps fields into the monitoring contract.
-4. The app writes one active row into `monitor_configs`.
-5. If Lakebase mode is active, the repository syncs the projected monitor inventory into Lakebase.
-6. The app can immediately trigger the first refresh.
+4. If the source table contains multiple model IDs, the operator pins the monitor to one `model_id_value`.
+5. If the labels table is not unique on the join key, the operator provides a label ordering column.
+6. The app writes one active row into `monitor_configs`.
+7. If Lakebase mode is active, the repository syncs the projected monitor inventory into Lakebase.
+8. The app can immediately trigger the first refresh.
 
 ### Refresh Flow
 
 1. The workflow loads active monitor configs.
 2. For each config, it reads source data from the inference table.
-3. If configured, it joins an external labels table.
-4. It builds baseline and current windows from the configured baseline policy.
-5. It computes numeric drift metrics, quality metrics, performance contributors, and incident rows.
-6. It replaces the persisted current snapshot for that model.
-7. If Lakebase mode is active, it refreshes the Lakebase monitor summary and open-incident projection.
+3. If configured, it applies `model_id_value` / `model_version_value` filters before analysis.
+4. If configured, it joins an external labels table and uses the configured order column to dedupe repeated label keys.
+5. It builds rolling adjacent windows from the latest `n` days and the preceding `n` days.
+6. It computes numeric drift metrics, quality metrics, performance contributors, and incident rows.
+7. It replaces the persisted current snapshot for that model.
+8. If Lakebase mode is active, it refreshes the Lakebase monitor summary and open-incident projection.
 
 ### Readback Flow
 
@@ -196,7 +201,9 @@ The product now follows this split:
 
 ## Operational Notes
 
-- If Lakebase is configured for the app but unavailable at runtime, the UI falls back to warehouse reads instead of crashing.
+- The app does not perform DDL on normal reads. Control-plane creation is an explicit setup step.
+- If the control-plane catalog should be created by Model Lens itself, setup must be run by an identity with catalog-create privileges.
+- If Lakebase is configured for the app but unavailable at runtime, or if the projection is empty, the UI falls back to warehouse reads instead of crashing or going blank.
 - The refresh workflow can also sync the Lakebase projection when it has the Lakebase instance/database inputs.
 - The scheduled job identity must be permitted to connect to the target Lakebase database if you want the projection kept fresh by the workflow rather than only by app-driven refreshes.
 - `databricks bundle deploy` creates the app resource, but `databricks apps deploy ... --source-code-path ...` is still required to deploy the app source onto compute.

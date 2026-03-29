@@ -18,7 +18,7 @@ It is built for teams that want an in-house alternative to external observabilit
 Model Lens has three layers:
 
 1. `Warehouse system of record`
-   - Unity Catalog Delta tables under `model_observability.control_plane`
+   - Unity Catalog Delta tables under a customer-selected `<catalog>.<schema>`
    - full monitor configs, metrics, and incidents
 2. `Optional Lakebase read model`
    - fast monitor-summary and incident projection for the app
@@ -55,6 +55,11 @@ Optional mapped fields:
 - `label`
 - `entity_id`
 
+Optional monitor-scoping fields:
+
+- `model_id_value`
+- `model_version_value`
+
 All other mapped fields become feature columns, categorical columns, or slice columns.
 
 Current engine behavior:
@@ -62,6 +67,9 @@ Current engine behavior:
 - numeric features participate in drift calculations
 - non-numeric selected features are kept in the contract and projected into the UI
 - labels can come from the source table or an external labels table
+- refresh compares the latest `n` days with the preceding `n` days
+- if an external labels table is not unique on the join key, you must provide an `External Labels Order Column`
+- if a source table contains multiple `model_id` values, you must provide `Monitored Model ID Value`
 
 ## Deployment Modes
 
@@ -87,12 +95,20 @@ You need all of the following in the target Databricks workspace:
 - one SQL warehouse for Model Lens reads and writes
 - serverless jobs enabled
 - permissions to deploy Databricks Asset Bundles and Databricks Apps
-- permissions to create/write:
+- permissions to write into an existing or pre-approved Unity Catalog namespace for the control plane
+- optional permissions to create:
   - source test tables
-  - `model_observability.control_plane`
+  - the control-plane catalog if you want the app setup flow to create it
   - the target Lakebase database if using Lakebase mode
 
 If you use Lakebase mode, the scheduled refresh job also needs to be able to connect to Lakebase. In practice, that means the job identity must be allowed to mint database credentials and connect to the target Lakebase database.
+
+Recommended deployment model:
+
+- pre-create the target control-plane catalog/schema with your normal platform process
+- deploy Model Lens with those namespace values
+- use `Create catalog if missing` only for admin-led setup in a sandbox or internal workspace
+- keep the app namespace fields aligned with the bundle vars so manual app refreshes and the scheduled workflow operate on the same control plane
 
 ## Quick Deploy
 
@@ -104,11 +120,15 @@ python3 -m pytest
 
 databricks bundle validate \
   -t warehouse_only \
-  --var "sql_warehouse_id=<sql-warehouse-id>"
+  --var "sql_warehouse_id=<sql-warehouse-id>" \
+  --var "control_plane_catalog=<control-plane-catalog>" \
+  --var "control_plane_schema=<control-plane-schema>"
 
 databricks bundle deploy \
   -t warehouse_only \
-  --var "sql_warehouse_id=<sql-warehouse-id>"
+  --var "sql_warehouse_id=<sql-warehouse-id>" \
+  --var "control_plane_catalog=<control-plane-catalog>" \
+  --var "control_plane_schema=<control-plane-schema>"
 
 databricks apps deploy model-lens \
   --source-code-path /Workspace/Users/<your-email>/.bundle/model-lens/warehouse_only/files
@@ -122,6 +142,8 @@ Lakebase-enabled:
 databricks bundle validate \
   -t dev \
   --var "sql_warehouse_id=<sql-warehouse-id>" \
+  --var "control_plane_catalog=<control-plane-catalog>" \
+  --var "control_plane_schema=<control-plane-schema>" \
   --var "lakebase_instance_name=<lakebase-instance-name>" \
   --var "lakebase_database_name=<lakebase-database-name>" \
   --var "lakebase_pguser=<lakebase-db-user>"
@@ -129,6 +151,8 @@ databricks bundle validate \
 databricks bundle deploy \
   -t dev \
   --var "sql_warehouse_id=<sql-warehouse-id>" \
+  --var "control_plane_catalog=<control-plane-catalog>" \
+  --var "control_plane_schema=<control-plane-schema>" \
   --var "lakebase_instance_name=<lakebase-instance-name>" \
   --var "lakebase_database_name=<lakebase-database-name>" \
   --var "lakebase_pguser=<lakebase-db-user>"
@@ -143,11 +167,14 @@ After deploy:
 
 1. Open the `model-lens` app.
 2. If compute is stopped, run `databricks apps start model-lens`.
-3. Click `Setup Control Plane`.
-4. Scan a source table.
-5. Save a monitor.
-6. Run the initial refresh.
-7. Confirm the monitor summary and incidents load.
+3. Confirm the `Control Plane Catalog` and `Control Plane Schema` fields match your deployment target.
+4. Click `Setup Control Plane`.
+5. Scan a source table.
+6. If the table contains more than one `model_id`, fill in `Monitored Model ID Value`.
+7. If external labels are not unique on the join key, fill in `External Labels Order Column`.
+8. Save a monitor.
+9. Run the initial refresh.
+10. Confirm the monitor summary and incidents load.
 
 ## Full Docs
 
@@ -179,7 +206,10 @@ PYTHONPATH=src python3 -m model_lens.app
 Run control-plane setup:
 
 ```bash
-PYTHONPATH=src python3 scripts/model_lens_setup.py --warehouse-id <sql-warehouse-id>
+PYTHONPATH=src python3 scripts/model_lens_setup.py \
+  --warehouse-id <sql-warehouse-id> \
+  --catalog <control-plane-catalog> \
+  --schema <control-plane-schema>
 ```
 
 Run refresh:
@@ -187,6 +217,8 @@ Run refresh:
 ```bash
 PYTHONPATH=src python3 scripts/model_lens_refresh.py \
   --warehouse-id <sql-warehouse-id> \
+  --catalog <control-plane-catalog> \
+  --schema <control-plane-schema> \
   --use-lakebase-read-model \
   --lakebase-instance-name <lakebase-instance-name> \
   --lakebase-database-name <lakebase-database-name> \
@@ -211,7 +243,9 @@ Implemented now:
 - optional Lakebase-backed monitor summary and incident inbox reads
 - app-driven setup, onboarding, and refresh
 - serverless refresh workflow
-- external labels joins
+- external labels joins with explicit dedupe support
+- explicit model scoping for shared inference tables
+- rolling recent-window drift comparison
 - scratch data and workspace smoke test path
 
 Still intentionally limited:

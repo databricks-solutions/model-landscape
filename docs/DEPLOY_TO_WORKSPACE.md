@@ -20,8 +20,9 @@ You need a workspace with:
 - one SQL warehouse
 - serverless jobs enabled
 - privileges to deploy apps and workflows
-- privileges to create and write:
-  - `model_observability.control_plane`
+- privileges to write into a chosen Unity Catalog namespace for the control plane
+- optional privileges to create:
+  - the control-plane catalog if you want Model Lens to create it from the UI
   - a test catalog/schema for scratch data
   - the Lakebase database if using Lakebase mode
 
@@ -34,10 +35,14 @@ You do not need to set manual Postgres environment variables for the app. In Lak
 For `warehouse_only`, Model Lens expects:
 
 - `sql_warehouse_id`
+- `control_plane_catalog`
+- `control_plane_schema`
 
 For `dev` or `prod`, Model Lens expects:
 
 - `sql_warehouse_id`
+- `control_plane_catalog`
+- `control_plane_schema`
 - `lakebase_instance_name`
 - `lakebase_database_name`
 - `lakebase_pguser`
@@ -54,7 +59,9 @@ python3 -m pytest
 
 databricks bundle validate \
   -t warehouse_only \
-  --var "sql_warehouse_id=<sql-warehouse-id>"
+  --var "sql_warehouse_id=<sql-warehouse-id>" \
+  --var "control_plane_catalog=<control-plane-catalog>" \
+  --var "control_plane_schema=<control-plane-schema>"
 ```
 
 Lakebase-enabled:
@@ -63,6 +70,8 @@ Lakebase-enabled:
 databricks bundle validate \
   -t dev \
   --var "sql_warehouse_id=<sql-warehouse-id>" \
+  --var "control_plane_catalog=<control-plane-catalog>" \
+  --var "control_plane_schema=<control-plane-schema>" \
   --var "lakebase_instance_name=<lakebase-instance-name>" \
   --var "lakebase_database_name=<lakebase-database-name>" \
   --var "lakebase_pguser=<lakebase-db-user>"
@@ -81,7 +90,9 @@ Warehouse-only:
 ```bash
 databricks bundle deploy \
   -t warehouse_only \
-  --var "sql_warehouse_id=<sql-warehouse-id>"
+  --var "sql_warehouse_id=<sql-warehouse-id>" \
+  --var "control_plane_catalog=<control-plane-catalog>" \
+  --var "control_plane_schema=<control-plane-schema>"
 
 databricks apps deploy model-lens \
   --source-code-path /Workspace/Users/<your-email>/.bundle/model-lens/warehouse_only/files
@@ -95,6 +106,8 @@ Lakebase-enabled:
 databricks bundle deploy \
   -t dev \
   --var "sql_warehouse_id=<sql-warehouse-id>" \
+  --var "control_plane_catalog=<control-plane-catalog>" \
+  --var "control_plane_schema=<control-plane-schema>" \
   --var "lakebase_instance_name=<lakebase-instance-name>" \
   --var "lakebase_database_name=<lakebase-database-name>" \
   --var "lakebase_pguser=<lakebase-db-user>"
@@ -120,6 +133,7 @@ Verify:
 
 - the title is `Model Lens`
 - `SQL_WAREHOUSE_ID` is populated
+- the `Control Plane Catalog` and `Control Plane Schema` fields point at the namespace you intend to use
 - in warehouse-only mode, `USE_LAKEBASE_READ_MODEL` is `false`
 - in Lakebase mode, `USE_LAKEBASE_READ_MODEL` is `true` and `LAKEBASE_DATABASE_NAME` is shown
 - in warehouse-only mode, the app may show an informational banner recommending Lakebase if the workspace exposes Lakebase instances
@@ -127,6 +141,12 @@ Verify:
 ## 4. Initialize The Control Plane
 
 In the app, click `Setup Control Plane`.
+
+Recommended:
+
+- point the app at a pre-created namespace
+- leave `Create catalog if missing` off unless you are using an admin identity and intentionally want Model Lens to create the catalog
+- keep the app namespace fields aligned with the bundle `control_plane_catalog` / `control_plane_schema` vars so the workflow and the app write to the same place
 
 Expected result:
 
@@ -136,7 +156,7 @@ Expected result:
 Verify in SQL:
 
 ```sql
-SHOW TABLES IN model_observability.control_plane;
+SHOW TABLES IN <control-plane-catalog>.<control-plane-schema>;
 ```
 
 Expected:
@@ -165,11 +185,13 @@ In the app:
    - `Model Key`: `fraud_model_demo`
    - `Timestamp Column`: `event_ts`
    - `Model ID Column`: `model_id`
+   - `Monitored Model ID Value`: `fraud_model_v1`
    - `Prediction Column`: `prediction`
    - `Entity ID Column`: `entity_id`
    - `External Labels Table`: `main.model_lens_demo.labels`
    - `External Labels Join Column`: `entity_id`
    - `External Label Column`: `label`
+   - `External Labels Order Column`: `label_timestamp`
    - `Problem Type`: `classification`
    - `Baseline Days`: `7`
 4. Select features:
@@ -191,15 +213,15 @@ Verify the warehouse system of record:
 
 ```sql
 SELECT model_key, display_name, source_table, status
-FROM model_observability.control_plane.monitor_configs
+FROM <control-plane-catalog>.<control-plane-schema>.monitor_configs
 WHERE model_key = 'fraud_model_demo';
 
 SELECT model_key, total_rows, min_date, max_date
-FROM model_observability.control_plane.quality_metrics
+FROM <control-plane-catalog>.<control-plane-schema>.quality_metrics
 WHERE model_key = 'fraud_model_demo';
 
 SELECT model_key, feature_name, metric_name, metric_value
-FROM model_observability.control_plane.drift_metrics
+FROM <control-plane-catalog>.<control-plane-schema>.drift_metrics
 WHERE model_key = 'fraud_model_demo'
 ORDER BY feature_name, metric_name;
 ```
@@ -245,8 +267,14 @@ Do not send this to a client until all of the following are true:
 
 - Missing SQL warehouse permission:
   - the app opens but scan/setup/refresh calls fail
+- Missing control-plane namespace privileges:
+  - `Setup Control Plane` fails or refreshes cannot read/write monitor state in the selected namespace
+- Shared inference table without `Monitored Model ID Value`:
+  - save fails with a validation message because the source contains multiple model IDs
+- External labels table with duplicate join keys but no `External Labels Order Column`:
+  - save fails with a validation message instead of silently duplicating inference rows
 - Missing Lakebase access for the app:
-  - monitor summary falls back to the warehouse or fails to accelerate
+  - monitor summary falls back to the warehouse instead of accelerating
 - Missing Lakebase access for the job identity:
   - warehouse metrics refresh, but the Lakebase projection does not update
 - App compute stopped:

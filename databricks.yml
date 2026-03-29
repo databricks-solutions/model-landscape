@@ -15,6 +15,10 @@ variables:
     default: model-lens
   sql_warehouse_id:
     description: Existing SQL warehouse for the app and refresh workflow
+  control_plane_catalog:
+    default: model_observability
+  control_plane_schema:
+    default: control_plane
   lakebase_instance_name:
     description: Existing Lakebase instance for fast Model Lens UI reads
     default: ""
@@ -60,6 +64,10 @@ targets:
                 parameters:
                   - --warehouse-id
                   - ${var.sql_warehouse_id}
+                  - --catalog
+                  - ${var.control_plane_catalog}
+                  - --schema
+                  - ${var.control_plane_schema}
   prod:
     mode: production
     workspace:

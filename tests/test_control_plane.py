@@ -18,26 +18,32 @@ class FakeWarehouse:
         self.executed_params: list[tuple[str, tuple]] = []
         self.batch_calls: list[tuple[str, list[tuple]]] = []
         self.queries: list[str] = []
+        self.query_param_calls: list[tuple[str, tuple]] = []
+        self.distinct_model_ids = 2
+        self.duplicate_label_keys = 0
         self.monitor_row = {
             "model_key": "payments_risk_v1",
             "display_name": "Payments Risk",
             "source_table": "catalog.schema.inference_logs",
             "timestamp_col": "event_ts",
             "model_id_col": "model_id",
+            "model_id_value": "m1",
             "prediction_col": "prediction",
             "model_version_col": "",
+            "model_version_value": "",
             "prediction_score_col": "",
             "label_col": "label",
             "entity_id_col": "entity_id",
             "feature_columns": '["amount","segment"]',
             "slice_columns": '["segment"]',
             "categorical_columns": '["segment"]',
-            "baseline_kind": "first_n_days",
+            "baseline_kind": "rolling_n_days",
             "baseline_n_days": 7,
             "baseline_max_comparison_days": 90,
             "problem_type": "classification",
             "labels_table": "",
             "labels_join_col": "",
+            "labels_order_col": "",
             "created_by": "app",
         }
 
@@ -53,21 +59,24 @@ class FakeWarehouse:
                 "source_table": params[2],
                 "timestamp_col": params[3],
                 "model_id_col": params[4],
-                "prediction_col": params[5],
-                "model_version_col": params[6],
-                "prediction_score_col": params[7],
-                "label_col": params[8],
-                "entity_id_col": params[9],
+                "model_id_value": params[5],
+                "prediction_col": params[6],
+                "model_version_col": params[7],
+                "model_version_value": params[8],
+                "prediction_score_col": params[9],
+                "label_col": params[10],
+                "entity_id_col": params[11],
                 "feature_columns": '["amount","segment"]',
                 "slice_columns": '["segment"]',
                 "categorical_columns": '["segment"]',
-                "baseline_kind": params[10],
-                "baseline_n_days": params[11],
-                "baseline_max_comparison_days": params[12],
-                "problem_type": params[13],
-                "labels_table": params[14],
-                "labels_join_col": params[15],
-                "created_by": params[16],
+                "baseline_kind": params[12],
+                "baseline_n_days": params[13],
+                "baseline_max_comparison_days": params[14],
+                "problem_type": params[15],
+                "labels_table": params[16],
+                "labels_join_col": params[17],
+                "labels_order_col": params[18],
+                "created_by": params[19],
             }
 
     def execute_batch(self, insert_template: str, rows: list[tuple], batch_size: int = 200) -> None:
@@ -77,8 +86,10 @@ class FakeWarehouse:
     def query(self, sql: str, cache: bool = False) -> pd.DataFrame:
         del cache
         self.queries.append(sql)
-        if "MIN(CAST" in sql:
-            return pd.DataFrame([{"min_date": "2026-01-01", "max_date": "2026-01-20"}])
+        if "COUNT(DISTINCT" in sql:
+            return pd.DataFrame([{"distinct_model_ids": self.distinct_model_ids}])
+        if "duplicate_key_count" in sql:
+            return pd.DataFrame([{"duplicate_key_count": self.duplicate_label_keys}])
         if "WITH latest_window AS" in sql:
             return pd.DataFrame([{
                 "model_key": self.monitor_row["model_key"],
@@ -103,7 +114,7 @@ class FakeWarehouse:
             }])
         return pd.DataFrame([
             {
-                "event_ts": "2026-01-10T00:00:00",
+                "event_ts": "2026-01-20T00:00:00",
                 "model_id": "m1",
                 "prediction": 0.9,
                 "entity_id": "entity-1",
@@ -113,10 +124,19 @@ class FakeWarehouse:
         ])
 
     def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
-        del params
+        self.query_param_calls.append((sql, params))
         if "SELECT * FROM" in sql and "monitor_configs" in sql:
             return pd.DataFrame([self.monitor_row])
-        return pd.DataFrame()
+        return pd.DataFrame([
+            {
+                "event_ts": "2026-01-20T00:00:00",
+                "model_id": params[0] if params else "m1",
+                "prediction": 0.9,
+                "entity_id": "entity-1",
+                "label": 1,
+                "amount": 10.0,
+            }
+        ])
 
     def describe_table(self, table_name: str) -> pd.DataFrame:
         del table_name
@@ -129,7 +149,8 @@ class FakeWarehouse:
         ])
 
     def get_columns(self, table_name: str) -> list[str]:
-        del table_name
+        if table_name == "catalog.schema.labels":
+            return ["entity_id", "label", "label_timestamp"]
         return ["event_ts", "model_id", "prediction", "entity_id", "amount"]
 
 
@@ -138,6 +159,8 @@ def _monitor_config(
     with_external_labels: bool = False,
     days: int = 7,
     max_comparison_days: int = 90,
+    model_id_value: str | None = "m1",
+    labels_order_col: str | None = None,
 ) -> MonitorConfig:
     contract = build_contract(
         columns=["event_ts", "model_id", "prediction", "entity_id", "label", "amount", "segment"],
@@ -157,8 +180,10 @@ def _monitor_config(
         contract=contract,
         baseline=build_default_baseline(days, max_comparison_days=max_comparison_days),
         problem_type="classification",
+        model_id_value=model_id_value,
         labels_table="catalog.schema.labels" if with_external_labels else None,
         labels_join_col="entity_id" if with_external_labels else None,
+        labels_order_col=labels_order_col if with_external_labels else None,
         created_by="app",
     )
 
@@ -176,17 +201,19 @@ def test_upsert_monitor_config_keeps_full_feature_and_categorical_metadata() -> 
     assert insert_params[1] == "Payments Risk"
 
 
-def test_load_monitor_frame_uses_external_labels_join_and_comparison_window() -> None:
+def test_load_monitor_frame_uses_external_labels_join_and_model_filter() -> None:
     warehouse = FakeWarehouse()
     repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
 
-    frame = repository.load_monitor_frame(_monitor_config(with_external_labels=True, max_comparison_days=10))
+    frame = repository.load_monitor_frame(_monitor_config(with_external_labels=True, labels_order_col="label_timestamp"))
 
     assert not frame.empty
-    data_query = warehouse.queries[-1]
-    assert "LEFT JOIN catalog.schema.labels l" in data_query
-    assert "BETWEEN '2026-01-01' AND '2026-01-17'" in data_query
+    data_query, params = warehouse.query_param_calls[-1]
+    assert "LEFT JOIN" in data_query
+    assert "ROW_NUMBER() OVER" in data_query
+    assert "s.`model_id` = %s" in data_query
     assert "l.`label` AS `label`" in data_query
+    assert params == ("m1",)
 
 
 def test_scan_source_table_returns_schema_and_preview() -> None:
@@ -201,6 +228,32 @@ def test_scan_source_table_returns_schema_and_preview() -> None:
         "col_name": "event_ts",
         "data_type": "timestamp",
     }
+
+
+def test_validate_monitor_source_requires_model_id_value_for_shared_tables() -> None:
+    warehouse = FakeWarehouse()
+    warehouse.distinct_model_ids = 3
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    try:
+        repository.validate_monitor_source(_monitor_config(model_id_value=None))
+    except ValueError as error:
+        assert "Monitored Model ID Value" in str(error)
+    else:
+        raise AssertionError("expected validation failure")
+
+
+def test_validate_monitor_source_requires_label_order_column_when_join_keys_repeat() -> None:
+    warehouse = FakeWarehouse()
+    warehouse.duplicate_label_keys = 2
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    try:
+        repository.validate_monitor_source(_monitor_config(with_external_labels=True, labels_order_col=None))
+    except ValueError as error:
+        assert "External Labels Order Column" in str(error)
+    else:
+        raise AssertionError("expected validation failure")
 
 
 class StubRepository:
@@ -256,6 +309,7 @@ class FakeReadModel:
         self.ensured += 1
 
     def replace_dashboard_projection(self, *, configs, summary, incidents) -> None:
+        self.ensure_schema()
         self.synced.append({
             "configs": configs,
             "summary": summary,
@@ -285,6 +339,14 @@ class FakeReadModel:
             "window_end": "2026-01-21",
             "observed_at": "2026-01-21T12:00:00+00:00",
         }])
+
+
+class EmptyReadModel(FakeReadModel):
+    def get_monitor_summary(self) -> pd.DataFrame:
+        return pd.DataFrame()
+
+    def get_open_incidents(self) -> pd.DataFrame:
+        return pd.DataFrame()
 
 
 def test_upsert_monitor_config_syncs_lakebase_projection() -> None:
@@ -317,4 +379,20 @@ def test_summary_and_incidents_prefer_lakebase_projection_when_available() -> No
     incidents = repository.get_open_incidents()
 
     assert summary.iloc[0]["max_psi"] == 0.51
+    assert incidents.iloc[0]["severity"] == "critical"
+
+
+def test_summary_and_incidents_fall_back_to_warehouse_when_lakebase_projection_is_empty() -> None:
+    warehouse = FakeWarehouse()
+    read_model = EmptyReadModel()
+    repository = ControlPlaneRepository(
+        warehouse=warehouse,
+        table_names=TableNames("model_observability", "control_plane"),
+        read_model=read_model,
+    )
+
+    summary = repository.get_monitor_summary()
+    incidents = repository.get_open_incidents()
+
+    assert summary.iloc[0]["max_psi"] == 0.34
     assert incidents.iloc[0]["severity"] == "critical"

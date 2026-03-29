@@ -10,8 +10,10 @@ def build_monitor_config_payload(config: MonitorConfig) -> dict:
         "source_table": config.source_table,
         "timestamp_col": config.contract.timestamp_col,
         "model_id_col": config.contract.model_id_col,
+        "model_id_value": config.model_id_value or "",
         "prediction_col": config.contract.prediction_col,
         "model_version_col": config.contract.model_version_col or "",
+        "model_version_value": config.model_version_value or "",
         "prediction_score_col": config.contract.prediction_score_col or "",
         "label_col": config.contract.label_col or "",
         "entity_id_col": config.contract.entity_id_col or "",
@@ -24,6 +26,7 @@ def build_monitor_config_payload(config: MonitorConfig) -> dict:
         "problem_type": config.problem_type,
         "labels_table": config.labels_table or "",
         "labels_join_col": config.labels_join_col or "",
+        "labels_order_col": config.labels_order_col or "",
         "created_by": config.created_by,
         "status": "active",
     }
@@ -33,7 +36,7 @@ def build_default_baseline(n_days: int = 7, max_comparison_days: int = 90) -> Ba
     if n_days < 1:
         raise ValueError("n_days must be positive")
     return BaselinePolicy(
-        kind="first_n_days",
+        kind="rolling_n_days",
         n_days=n_days,
         max_comparison_days=max_comparison_days,
     )
