@@ -26,7 +26,7 @@ def _walk(component: Component) -> Iterator[Component]:
         yield from _walk(children)
 
 
-def test_app_layout_exposes_setup_scan_onboarding_and_results() -> None:
+def test_app_layout_exposes_slimmed_onboarding_flow() -> None:
     app = create_app()
     shell_ids = {component.id for component in _walk(app.layout) if getattr(component, "id", None)}
     page_ids = {component.id for component in _walk(app.validation_layout) if getattr(component, "id", None)}
@@ -51,19 +51,16 @@ def test_app_layout_exposes_setup_scan_onboarding_and_results() -> None:
         "wizard-next-btn",
         "wizard-step-guidance",
         "onboarding-review-summary",
-        "refresh-all-btn",
-        "refresh-selected-btn",
         "source-table-input",
         "labels-table-input",
         "mlflow-experiment-input",
         "mlflow-registered-model-input",
         "scan-source-btn",
         "save-monitor-btn",
+        "create-catalog-toggle",
         "model-id-value-input",
         "model-version-value-input",
         "labels-order-col-input",
-        "monitor-summary",
-        "incident-summary",
     }.issubset(ids)
 
 

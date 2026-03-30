@@ -7,7 +7,7 @@ from model_lens.config import settings
 from model_lens.ui.components import make_wizard_step
 
 
-STEP_LABELS = ["Workspace", "Source", "Contract", "Review"]
+STEP_LABELS = ["Setup", "Discover", "Confirm", "Activate"]
 
 
 def _workspace_step(form_style: dict) -> dbc.Row:
@@ -19,9 +19,8 @@ def _workspace_step(form_style: dict) -> dbc.Row:
                         [
                             html.H5("Workspace Setup", className="mb-3"),
                             html.P(
-                                "Point Model Lens at the control-plane namespace for this workspace. "
-                                "If Lakebase is available, you can also configure the instance and database here "
-                                "so the app can use the faster UI read model.",
+                                "Set the control-plane namespace once for this workspace. "
+                                "Most teams only need the catalog, schema, and setup button.",
                                 className="text-muted",
                             ),
                             dbc.Row(
@@ -44,75 +43,74 @@ def _workspace_step(form_style: dict) -> dbc.Row:
                                     ),
                                 ]
                             ),
-                            dbc.Row(
+                            dbc.Button("Setup Control Plane", id="setup-control-plane-btn", color="primary", className="mt-2"),
+                            dbc.Accordion(
                                 [
-                                    dbc.Col(
+                                    dbc.AccordionItem(
                                         [
-                                            dbc.Label("Lakebase Instance Name (Optional)"),
-                                            dbc.Input(
-                                                id="lakebase-instance-input",
-                                                value=settings.lakebase_instance_name,
-                                                placeholder="customer-lakebase-instance",
+                                            html.P(
+                                                "Only expand these fields if you want Lakebase-backed reads or need setup to create the catalog.",
+                                                className="text-muted",
+                                            ),
+                                            dbc.Row(
+                                                [
+                                                    dbc.Col(
+                                                        [
+                                                            dbc.Label("Lakebase Instance Name"),
+                                                            dbc.Input(
+                                                                id="lakebase-instance-input",
+                                                                value=settings.lakebase_instance_name,
+                                                                placeholder="customer-lakebase-instance",
+                                                            ),
+                                                        ],
+                                                        md=4,
+                                                        style=form_style,
+                                                    ),
+                                                    dbc.Col(
+                                                        [
+                                                            dbc.Label("Lakebase Database Name"),
+                                                            dbc.Input(
+                                                                id="lakebase-database-input",
+                                                                value=settings.lakebase_database_name,
+                                                                placeholder="model_lens_ui",
+                                                            ),
+                                                        ],
+                                                        md=4,
+                                                        style=form_style,
+                                                    ),
+                                                    dbc.Col(
+                                                        [
+                                                            dbc.Label("Lakebase Schema"),
+                                                            dbc.Input(id="lakebase-schema-input", value=settings.lakebase_schema),
+                                                        ],
+                                                        md=4,
+                                                        style=form_style,
+                                                    ),
+                                                ]
+                                            ),
+                                            dbc.Checklist(
+                                                id="create-catalog-toggle",
+                                                options=[
+                                                    {
+                                                        "label": "Create catalog if missing (requires elevated privileges)",
+                                                        "value": "create_catalog",
+                                                    }
+                                                ],
+                                                value=[],
+                                                switch=True,
+                                                className="mb-0",
                                             ),
                                         ],
-                                        md=4,
-                                        style=form_style,
-                                    ),
-                                    dbc.Col(
-                                        [
-                                            dbc.Label("Lakebase Database Name (Optional)"),
-                                            dbc.Input(
-                                                id="lakebase-database-input",
-                                                value=settings.lakebase_database_name,
-                                                placeholder="model_lens_ui",
-                                            ),
-                                        ],
-                                        md=4,
-                                        style=form_style,
-                                    ),
-                                    dbc.Col(
-                                        [
-                                            dbc.Label("Lakebase Schema"),
-                                            dbc.Input(id="lakebase-schema-input", value=settings.lakebase_schema),
-                                        ],
-                                        md=4,
-                                        style=form_style,
-                                    ),
-                                ]
-                            ),
-                            dbc.Checklist(
-                                id="create-catalog-toggle",
-                                options=[
-                                    {
-                                        "label": "Create catalog if missing (requires elevated privileges)",
-                                        "value": "create_catalog",
-                                    }
+                                        title="Advanced workspace options",
+                                    )
                                 ],
-                                value=[],
-                                switch=True,
-                                className="mb-3",
+                                start_collapsed=True,
+                                className="mt-4",
                             ),
-                            dbc.Button("Setup Control Plane", id="setup-control-plane-btn", color="primary", className="me-2"),
-                            dbc.Button("Refresh All Monitors", id="refresh-all-btn", color="secondary"),
-                            html.Hr(),
-                            dbc.Label("Refresh One Monitor"),
-                            dcc.Dropdown(id="refresh-monitor-select", options=[], placeholder="Select monitor..."),
-                            dbc.Button("Refresh Selected Monitor", id="refresh-selected-btn", color="secondary", className="mt-2"),
                         ]
                     )
                 ),
-                lg=7,
-            ),
-            dbc.Col(
-                dbc.Card(
-                    dbc.CardBody(
-                        [
-                            html.H5("Runtime Defaults", className="mb-3"),
-                            html.Div(id="onboarding-runtime-defaults"),
-                        ]
-                    )
-                ),
-                lg=5,
+                lg=12,
             ),
         ],
         className="g-3",
@@ -129,7 +127,7 @@ def _source_step() -> dbc.Row:
                             html.H5("Discover Monitor Draft", className="mb-3"),
                             html.P(
                                 "Paste the inference table you want to monitor. You can optionally add a labels table "
-                                "and MLflow experiment or registered model, then let Model Lens infer the contract and scope.",
+                                "and MLflow experiment or registered model, then let Model Lens infer the draft for you.",
                                 className="text-muted",
                             ),
                             dbc.InputGroup(
@@ -184,15 +182,15 @@ def _contract_step(form_style: dict) -> dbc.Row:
                 dbc.Card(
                     dbc.CardBody(
                         [
-                            html.H5("Create Or Update Monitor", className="mb-3"),
+                            html.H5("Confirm Monitor Draft", className="mb-3"),
                             html.P(
-                                "Map source columns into the stable monitoring contract. "
-                                "This is also where you scope shared inference tables to one model or version.",
+                                "Review the inferred monitor name, problem type, and baseline. "
+                                "Only open Advanced if the draft needs manual correction.",
                                 className="text-muted",
                             ),
                             dbc.Alert(
-                                "Model Lens auto-detects the core contract from the scanned table. "
-                                "Most customers should only need the fields below. Use Advanced only if the inferred mapping is wrong.",
+                                "Discovery now fills the stable monitoring contract automatically. "
+                                "Most customers should be able to confirm the draft and continue.",
                                 color="secondary",
                                 className="py-2",
                             ),
@@ -289,9 +287,9 @@ def _review_step() -> dbc.Row:
                 dbc.Card(
                     dbc.CardBody(
                         [
-                            html.H5("Review Monitor Configuration", className="mb-3"),
+                            html.H5("Activate Monitoring", className="mb-3"),
                             html.P(
-                                "Review the namespace, source table, contract, and label strategy before activating the monitor.",
+                                "Review the final draft and activate monitoring for this model.",
                                 className="text-muted",
                             ),
                             html.Div(id="onboarding-review-summary"),
@@ -310,27 +308,19 @@ def _review_step() -> dbc.Row:
                 dbc.Card(
                     dbc.CardBody(
                         [
-                            html.H5("Activation Notes", className="mb-3"),
+                            html.H5("What Happens Next", className="mb-3"),
                             html.Ul(
                                 [
                                     html.Li("The monitor config is written into the control-plane namespace."),
                                     html.Li("The initial refresh computes drift, quality, and performance summaries."),
                                     html.Li("If Lakebase is configured, the UI projection is synchronized after refresh."),
-                                    html.Li("If recent data does not yet produce a comparable baseline/current window, the monitor is still saved."),
+                                    html.Li("After activation, use Overview and the analysis pages to inspect the monitor."),
                                 ],
                                 className="text-muted mb-0",
                             ),
                         ]
                     )
                 ),
-                lg=5,
-            ),
-            dbc.Col(
-                dbc.Card(dbc.CardBody([html.H5("Monitors", className="mb-3"), html.Div(id="monitor-summary")])),
-                lg=7,
-            ),
-            dbc.Col(
-                dbc.Card(dbc.CardBody([html.H5("Open Incidents", className="mb-3"), html.Div(id="incident-summary")])),
                 lg=5,
             ),
         ],
@@ -345,9 +335,9 @@ def layout():
             dcc.Store(id="scan-data"),
             dcc.Store(id="onboarding-current-step", storage_type="session", data=1),
             dcc.Store(id="control-plane-ready-store", storage_type="session", data={}),
-            html.H4("Model Onboarding", className="text-light mb-1"),
+            html.H4("Add Monitor", className="text-light mb-1"),
             html.P(
-                "Create the control plane, scan a source table, map the contract, and run the first refresh.",
+                "Set up the workspace once, discover a monitor draft, confirm it, and activate monitoring.",
                 className="text-muted mb-4",
             ),
             html.Div(

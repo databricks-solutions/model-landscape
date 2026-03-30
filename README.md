@@ -194,16 +194,16 @@ After deploy:
 
 1. Open the `model-lens` app.
 2. If compute is stopped, run `databricks apps start model-lens`.
-3. In the `Workspace` step, confirm the `Control Plane Catalog` and `Control Plane Schema` fields match your deployment target.
-4. If Lakebase is available and you want faster app reads, fill in `Lakebase Instance Name` and `Lakebase Database Name`.
-5. Click `Setup Control Plane`. The `Workspace` step only unlocks after setup succeeds for the current namespace values.
-6. Continue to `Source`.
-7. In the `Source` step, enter the inference table. Optionally add a labels table and MLflow experiment or registered model, then click `Discover`.
-8. In the `Contract` step, review the inferred display name, model key, problem type, and feature set. Use `Advanced` only if the draft needs overrides.
+3. In the `Setup` step, confirm the `Control Plane Catalog` and `Control Plane Schema` fields match your deployment target.
+4. Open `Advanced workspace options` only if you want Lakebase-backed reads or need catalog creation during setup.
+5. Click `Setup Control Plane`. The `Setup` step only unlocks after setup succeeds for the current namespace values.
+6. Continue to `Discover`.
+7. In the `Discover` step, enter the inference table. Optionally add a labels table and MLflow experiment or registered model, then click `Discover`.
+8. In the `Confirm` step, review the inferred display name, model key, problem type, and feature set. Use `Advanced` only if the draft needs overrides.
 9. If the table contains more than one `model_id`, confirm or fill in `Monitored Model ID Value`.
 10. If external labels are not unique on the join key, confirm or fill in `External Labels Order Column`.
-11. Continue to `Review`, then save the monitor and run the initial refresh.
-12. Confirm the monitor summary and incidents load.
+11. Continue to `Activate`, then save the monitor and run the initial refresh.
+12. Open the overview and analysis pages to confirm the new monitor appears and the initial refresh populated readback.
 
 ## Full Docs
 

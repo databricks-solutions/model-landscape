@@ -159,9 +159,9 @@ Check immediately:
 
 ## Step 5: Initialize The Control Plane
 
-In the app `Workspace` step, click `Setup Control Plane`.
+In the app `Setup` step, click `Setup Control Plane`.
 
-The wizard should keep `Continue to Source` disabled until setup succeeds for the current namespace/session values.
+The wizard should keep `Continue to Discover` disabled until setup succeeds for the current namespace/session values.
 
 Recommended:
 
@@ -208,14 +208,14 @@ Expected:
 
 In the app:
 
-1. Continue to the `Source` step and set the source table to:
+1. Continue to the `Discover` step and set the source table to:
    - `main.model_lens_demo.inference_logs`
 2. Optional draft inputs:
    - `Optional Labels Table`: `main.model_lens_demo.labels`
    - `Optional MLflow Experiment`: leave blank for this smoke test unless you have one ready
    - `Optional Registered Model`: leave blank for this smoke test unless you have one ready
 3. Click `Discover`.
-4. Review the schema and sample rows, then continue to the `Contract` step.
+4. Review the schema and sample rows, then continue to the `Confirm` step.
 5. Confirm the inferred contract:
    - `Display Name`: `Fraud Model Demo`
    - `Model Key`: `fraud_model_demo`
@@ -240,7 +240,7 @@ In the app:
 8. Optional slice check after the happy path:
    - confirm `region`
    - confirm `merchant_segment` if you added it to the dataset
-9. Continue to the `Review` step, then save the monitor:
+9. Continue to the `Activate` step, then save the monitor:
 
 - click `Save Monitor And Run Initial Refresh`
 
@@ -248,7 +248,7 @@ Expected result:
 
 - success banner
 - refresh counts are non-zero
-- the monitor appears in the summary table
+- the monitor appears on the overview page
 
 ## Step 7: Verify Persisted State In SQL
 
@@ -334,30 +334,18 @@ Expected:
 
 Back in the app, verify:
 
-- `Fraud Model Demo` appears in `Monitors`
-- `total_rows` is shown
-- `latest_data_date` is shown
-- `last_refresh_at` is shown
-- `open_incident_count` is shown
-- `Open Incidents` renders without a callback failure
+- the overview page shows a `Fraud Model Demo` card
+- the selected monitor can be opened on the drift, quality, and performance pages
+- `total_rows`, `latest_data_date`, and `last_refresh_at` are populated in app readback
 
-## Step 9: Verify Manual Refresh Paths
+## Step 9: Verify Workflow Refresh
 
-In the app:
-
-1. select `Fraud Model Demo` in `Refresh One Monitor`
-2. click `Refresh Selected Monitor`
-3. click `Refresh All Monitors`
+Open the Databricks workflow `model-lens-refresh` and run it manually once.
 
 Expected:
 
-- both actions succeed
-- no red error banner
-- counts are non-zero
-
-## Step 10: Verify Workflow Outside The App
-
-Open the Databricks workflow `model-lens-refresh` and run it manually once.
+- the workflow succeeds
+- counts are non-zero in warehouse tables after the run
 
 This workflow is packaged as a wheel task. If the job fails before your code runs, re-run bundle deploy first so the latest wheel artifact is uploaded.
 
@@ -374,7 +362,7 @@ Expected:
 
 - timestamp updates after the workflow run
 
-## Step 11: Exercise Failure Paths
+## Step 10: Exercise Failure Paths
 
 Test these before client handoff:
 

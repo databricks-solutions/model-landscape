@@ -186,9 +186,9 @@ Verify:
 
 ## 6. Initialize The Control Plane
 
-In the app `Workspace` step, click `Setup Control Plane`.
+In the app `Setup` step, click `Setup Control Plane`.
 
-The wizard does not unlock the `Source` step until setup succeeds for the current namespace and optional Lakebase session values.
+The wizard does not unlock the `Discover` step until setup succeeds for the current namespace and optional Lakebase session values.
 
 Recommended:
 
@@ -226,14 +226,14 @@ If `main` is not writable in your workspace, replace the catalog name first.
 
 In the app:
 
-1. Continue to the `Source` step and set the source table:
+1. Continue to the `Discover` step and set the source table:
    - `main.model_lens_demo.inference_logs`
 2. Optional draft inputs:
    - `Optional Labels Table`: `main.model_lens_demo.labels`
    - `Optional MLflow Experiment`: `<your experiment path>` if you want lineage-assisted discovery
    - `Optional Registered Model`: `<catalog>.<schema>.<model>` if you want registry-assisted discovery
 3. Click `Discover`
-4. Continue to the `Contract` step. The core fields should already be inferred. Use:
+4. Continue to the `Confirm` step. The core fields should already be inferred. Use:
    - `Display Name`: `Fraud Model Demo`
    - `Model Key`: `fraud_model_demo`
    - `Problem Type`: `classification`
@@ -251,7 +251,7 @@ In the app:
    - `amount`
    - `velocity_7d`
    - `device_score`
-7. Continue to `Review`
+7. Continue to `Activate`
 8. Click `Save Monitor And Run Initial Refresh`
 
 Expected result:
@@ -259,7 +259,7 @@ Expected result:
 - the config is saved
 - the refresh runs
 - the monitor appears in the app
-- the summary and incident queries come back quickly
+- the new monitor appears on the overview page and the analysis pages can load it
 
 ## 9. Verify Persisted State
 

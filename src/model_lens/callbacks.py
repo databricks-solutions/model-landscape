@@ -325,26 +325,6 @@ def _review_summary(
     return _render_frame(frame, empty_message="")
 
 
-def _runtime_defaults_frame(session_data: dict | None) -> pd.DataFrame:
-    session = _session_config(session_data)
-    mode = "lakebase" if session["lakebase_database_name"] or session["lakebase_instance_name"] else "warehouse_only"
-    discovered_instances = ", ".join(_workspace_lakebase_instances()) or "(none visible)"
-    return pd.DataFrame(
-        [
-            {"name": "DEPLOYMENT_MODE", "value": mode},
-            {"name": "CONTROL_PLANE_CATALOG", "value": session["control_plane_catalog"]},
-            {"name": "CONTROL_PLANE_SCHEMA", "value": session["control_plane_schema"]},
-            {"name": "SQL_WAREHOUSE_ID", "value": settings.sql_warehouse_id or "(missing)"},
-            {"name": "USE_LAKEBASE_READ_MODEL", "value": str(mode == "lakebase").lower()},
-            {"name": "LAKEBASE_INSTANCE_NAME", "value": session["lakebase_instance_name"] or "(optional)"},
-            {"name": "LAKEBASE_DATABASE_NAME", "value": session["lakebase_database_name"] or "(optional)"},
-            {"name": "LAKEBASE_SCHEMA", "value": session["lakebase_schema"]},
-            {"name": "DISCOVERED_LAKEBASE_INSTANCES", "value": discovered_instances},
-            {"name": "REFRESH_JOB_ID", "value": settings.refresh_job_id or "(optional / manual)"},
-        ]
-    )
-
-
 def _deployment_mode_prompt(session_data: dict | None):
     session = _session_config(session_data)
     if session["lakebase_database_name"] or session["lakebase_instance_name"]:
@@ -501,22 +481,19 @@ def register_callbacks(app) -> None:
         }.get(step, False)
         guidance = {
             1: (
-                "Choose the control-plane namespace for this session, set optional Lakebase details, and run setup. "
-                "Step 1 completes only after Model Lens successfully initializes the control plane for the current session values.",
+                "Confirm the control-plane namespace and run setup. Open the advanced section only if you need Lakebase session settings or catalog creation.",
                 "info" if workspace_ready else "secondary",
             ),
             2: (
-                "Scan the inference table before continuing. The next step uses the schema and sample rows from this scan.",
+                "Enter the inference table and click Discover. Optional labels and MLflow inputs help Model Lens infer a better draft.",
                 "success" if source_ready else "secondary",
             ),
             3: (
-                "Complete the monitor contract and choose the feature set. "
-                "Shared tables should be scoped with Model ID Value or Model Version Value when needed.",
+                "Confirm the inferred draft. Most monitors should only need name, problem type, and baseline before continuing.",
                 "success" if contract_ready else "secondary",
             ),
             4: (
-                "Review the final configuration and activate the monitor. "
-                "This step writes the config and runs the first refresh.",
+                "Activate the monitor. Model Lens saves the config and runs the initial refresh for you.",
                 "primary",
             ),
         }
@@ -624,13 +601,6 @@ def register_callbacks(app) -> None:
         backend = _make_backend(session_data)
         banner = _model_banner(model_id, backend)
         return banner, banner, banner, banner
-
-    @app.callback(
-        Output("onboarding-runtime-defaults", "children"),
-        Input("session-config-store", "data"),
-    )
-    def render_runtime_defaults(session_data):
-        return _render_frame(_runtime_defaults_frame(session_data), empty_message="")
 
     @app.callback(
         Output("scan-data", "data"),
@@ -991,39 +961,6 @@ def register_callbacks(app) -> None:
         Output("action-status", "children", allow_duplicate=True),
         Output("reload-token", "data", allow_duplicate=True),
         Output("session-config-store", "data", allow_duplicate=True),
-        Input("refresh-all-btn", "n_clicks"),
-        Input("refresh-selected-btn", "n_clicks"),
-        State("refresh-monitor-select", "value"),
-        State("session-config-store", "data"),
-        State("control-plane-ready-store", "data"),
-        prevent_initial_call=True,
-    )
-    def refresh_monitors(_, __, selected_model, session_data, ready_state):
-        trigger = ctx.triggered_id
-        model_key = selected_model if trigger == "refresh-selected-btn" else ""
-        if not _ready_for_session(ready_state, session_data):
-            return _status_alert("Run Setup Control Plane successfully before refreshing monitors.", "warning"), no_update, no_update
-        if trigger == "refresh-selected-btn" and not model_key:
-            return _status_alert("Select a monitor before running a targeted refresh.", "warning"), no_update, no_update
-        backend = _make_backend(session_data)
-        try:
-            counts = run_refresh_cycle(backend.repository, model_key=model_key or "")
-        except Exception as error:
-            return _status_alert(f"Refresh failed: {error}", "danger"), no_update, no_update
-        scope = model_key or "all active monitors"
-        color = "success" if counts.models else "warning"
-        message = (
-            f"Refresh complete for {scope}: models={counts.models}, drift_rows={counts.drift_rows}, "
-            f"quality_rows={counts.quality_rows}, performance_rows={counts.performance_rows}, incidents={counts.incident_rows}."
-        )
-        if not counts.models:
-            message += " No monitor produced a comparable baseline/current window."
-        return _status_alert(message, color), datetime.now(timezone.utc).isoformat(timespec="seconds"), _session_config(session_data)
-
-    @app.callback(
-        Output("action-status", "children", allow_duplicate=True),
-        Output("reload-token", "data", allow_duplicate=True),
-        Output("session-config-store", "data", allow_duplicate=True),
         Input("save-monitor-btn", "n_clicks"),
         State("scan-data", "data"),
         State("display-name-input", "value"),
@@ -1167,57 +1104,6 @@ def register_callbacks(app) -> None:
                 "warning",
             ))
         return _status_block(messages), datetime.now(timezone.utc).isoformat(timespec="seconds"), session
-
-    @app.callback(
-        Output("monitor-summary", "children"),
-        Output("incident-summary", "children"),
-        Output("refresh-monitor-select", "options"),
-        Input("reload-token", "data"),
-        Input("session-config-store", "data"),
-    )
-    def render_onboarding_dashboard(_, session_data):
-        backend = _make_backend(session_data)
-        try:
-            configs = backend.repository.list_monitor_configs(status="active")
-            summary = backend.repository.get_monitor_summary()
-            incidents = backend.repository.get_open_incidents()
-        except Exception as error:
-            alert = _status_alert(f"Unable to load control-plane state: {error}", "warning")
-            return alert, html.Div(), []
-        config_frame = pd.DataFrame(
-            [
-                {
-                    "model_key": config.model_key,
-                    "display_name": config.display_name,
-                    "source_table": config.source_table,
-                    "model_id_value": config.model_id_value or "",
-                    "model_version_value": config.model_version_value or "",
-                    "features": len(config.contract.feature_columns),
-                    "labels_table": config.labels_table or "",
-                }
-                for config in configs
-            ]
-        )
-        monitors = config_frame.merge(summary, on=["model_key", "display_name"], how="left") if not config_frame.empty and not summary.empty else config_frame
-        preferred_columns = [
-            "display_name",
-            "model_key",
-            "source_table",
-            "model_id_value",
-            "model_version_value",
-            "features",
-            "feature_count",
-            "max_psi",
-            "latest_window_end",
-            "latest_data_date",
-            "total_rows",
-            "last_refresh_at",
-            "open_incident_count",
-            "labels_table",
-        ]
-        monitors = monitors[[column for column in preferred_columns if column in monitors.columns]]
-        options = [{"label": config.display_name, "value": config.model_key} for config in configs]
-        return _render_frame(monitors, "No active monitors yet."), _render_frame(incidents, "No open incidents."), options
 
     @app.callback(
         Output("overview-page-body", "children"),

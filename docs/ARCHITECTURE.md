@@ -59,7 +59,7 @@ Responsibilities:
 - discover monitor drafts from source-table schema, preview rows, optional labels tables, and optional MLflow metadata
 - let operators override inferred columns only when the draft is ambiguous
 - save monitor configs
-- trigger refreshes
+- trigger the initial refresh during monitor activation
 - render monitor summaries and incidents from Lakebase when configured
 - recommend the Lakebase-enabled target when running warehouse-only in a workspace that appears to have Lakebase available
 
