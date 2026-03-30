@@ -13,7 +13,7 @@ from model_lens.app import (
     _workspace_lakebase_instances,
     create_app,
 )
-from model_lens.callbacks import _format_runtime_setting_value, _setup_retry_message
+from model_lens.callbacks import _format_runtime_setting_value, _ready_for_session, _setup_retry_message
 from model_lens.pages import reference
 
 
@@ -153,6 +153,42 @@ def test_control_plane_ready_requires_successful_setup_state() -> None:
             lakebase_schema="model_lens_ui",
         )
         is True
+    )
+    assert (
+        _control_plane_ready(
+            {
+                "control_plane_catalog": "model_observability",
+                "control_plane_schema": "control_plane",
+            },
+            control_plane_catalog="different_catalog",
+            control_plane_schema="different_schema",
+            lakebase_instance_name=None,
+            lakebase_database_name=None,
+            lakebase_schema=None,
+        )
+        is True
+    )
+
+
+def test_ready_for_session_requires_matching_setup_namespace() -> None:
+    ready_state = {
+        "control_plane_catalog": "model_observability",
+        "control_plane_schema": "control_plane",
+    }
+
+    assert _ready_for_session(
+        ready_state,
+        {
+            "control_plane_catalog": "model_observability",
+            "control_plane_schema": "control_plane",
+        },
+    )
+    assert not _ready_for_session(
+        ready_state,
+        {
+            "control_plane_catalog": "different_catalog",
+            "control_plane_schema": "control_plane",
+        },
     )
 
 

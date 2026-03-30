@@ -197,16 +197,9 @@ def _control_plane_ready(
 ) -> bool:
     if not ready_state:
         return False
-    expected_catalog = (control_plane_catalog or "").strip()
-    expected_schema = (control_plane_schema or "").strip()
     recorded_catalog = str(ready_state.get("control_plane_catalog") or "").strip()
     recorded_schema = str(ready_state.get("control_plane_schema") or "").strip()
-    return bool(
-        recorded_catalog
-        and recorded_schema
-        and recorded_catalog == expected_catalog
-        and recorded_schema == expected_schema
-    )
+    return bool(recorded_catalog and recorded_schema)
 
 
 def _selected_model_from_search(search: str | None) -> str | None:
@@ -232,14 +225,16 @@ def _make_backend(session_data: dict | None) -> DashboardBackend:
 
 
 def _ready_for_session(ready_state: dict | None, session_data: dict | None) -> bool:
+    if not ready_state:
+        return False
     session = _session_config(session_data)
-    return _control_plane_ready(
-        ready_state,
-        control_plane_catalog=session["control_plane_catalog"],
-        control_plane_schema=session["control_plane_schema"],
-        lakebase_instance_name=session["lakebase_instance_name"],
-        lakebase_database_name=session["lakebase_database_name"],
-        lakebase_schema=session["lakebase_schema"],
+    recorded_catalog = str(ready_state.get("control_plane_catalog") or "").strip()
+    recorded_schema = str(ready_state.get("control_plane_schema") or "").strip()
+    return bool(
+        recorded_catalog
+        and recorded_schema
+        and recorded_catalog == session["control_plane_catalog"]
+        and recorded_schema == session["control_plane_schema"]
     )
 
 
@@ -579,7 +574,7 @@ def register_callbacks(app) -> None:
         }.get(step, False)
         guidance = {
             1: (
-                "Confirm the control-plane namespace and run setup. If setup fails, fix the issue and click Setup Control Plane again to retry. Open the advanced section only if you need Lakebase session settings or catalog creation.",
+                "Confirm the control-plane namespace and run setup. If setup fails, fix the issue and click Setup Control Plane again to retry. If you change the catalog or schema later, run setup again before saving the monitor.",
                 "info" if workspace_ready else "secondary",
             ),
             2: (
