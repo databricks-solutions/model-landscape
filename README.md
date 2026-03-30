@@ -117,6 +117,18 @@ Recommended deployment model:
 - use `Create catalog if missing` only for admin-led setup in a sandbox or internal workspace
 - keep the app namespace fields aligned with the bundle vars so manual app refreshes and the scheduled workflow operate on the same control plane
 
+Before handing this to a customer, also make sure the Databricks App service principal can:
+
+- `CAN_USE` the SQL warehouse bound to Model Lens
+- read the source data catalog/schema/tables
+- read/write the control-plane catalog/schema/tables
+
+If you delete and recreate the app while reusing the same workspace, clean up stale bundle state first:
+
+```bash
+databricks workspace delete /Workspace/Users/<your-email>/.bundle/model-lens --recursive
+```
+
 ## Quick Deploy
 
 Warehouse-only:
@@ -137,6 +149,8 @@ databricks bundle deploy \
   --var "sql_warehouse_id=<sql-warehouse-id>" \
   --var "control_plane_catalog=<control-plane-catalog>" \
   --var "control_plane_schema=<control-plane-schema>"
+
+databricks apps start model-lens
 
 databricks apps deploy model-lens \
   --source-code-path /Workspace/Users/<your-email>/.bundle/model-lens/warehouse_only/files
@@ -166,6 +180,8 @@ databricks bundle deploy \
   --var "lakebase_instance_name=<lakebase-instance-name>" \
   --var "lakebase_database_name=<lakebase-database-name>" \
   --var "lakebase_pguser=<lakebase-db-user>"
+
+databricks apps start model-lens
 
 databricks apps deploy model-lens \
   --source-code-path /Workspace/Users/<your-email>/.bundle/model-lens/dev/files

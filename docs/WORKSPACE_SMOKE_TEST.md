@@ -45,6 +45,18 @@ If you are testing the Lakebase path, you also need:
 - a Lakebase database
 - a Lakebase DB user for the refresh workflow
 
+The Databricks App service principal also needs:
+
+- `CAN_USE` on the SQL warehouse
+- read access to the source tables
+- read/write access to the control-plane namespace
+
+If you manually deleted the app in this workspace before redeploying, clear stale bundle state first:
+
+```bash
+databricks workspace delete /Workspace/Users/<your-email>/.bundle/model-lens --recursive
+```
+
 ## Step 1: Local Validation
 
 Run this from the repo root:
@@ -116,6 +128,8 @@ databricks bundle deploy \
   --var "control_plane_catalog=<control-plane-catalog>" \
   --var "control_plane_schema=<control-plane-schema>"
 
+databricks apps start model-lens
+
 databricks apps deploy model-lens \
   --source-code-path /Workspace/Users/<your-email>/.bundle/model-lens/warehouse_only/files
 
@@ -126,6 +140,7 @@ Expected result:
 
 - bundle deploy succeeds
 - the Databricks app `model-lens` exists
+- `databricks apps start model-lens` reaches `ACTIVE`
 - the workflow `model-lens-refresh` exists
 
 ## Step 4: Open The App

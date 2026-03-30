@@ -6,6 +6,7 @@ from dash.development.base_component import Component
 
 from model_lens import app as app_module
 from model_lens.app import (
+    _control_plane_ready,
     _feature_candidates,
     _non_numeric_features,
     _selected_model_from_search,
@@ -91,3 +92,34 @@ def test_selected_model_from_search_parses_query_string() -> None:
     assert _selected_model_from_search("?model=fraud_model_demo&foo=bar") == "fraud_model_demo"
     assert _selected_model_from_search("?foo=bar") is None
     assert _selected_model_from_search("") is None
+
+
+def test_control_plane_ready_requires_successful_setup_state() -> None:
+    assert (
+        _control_plane_ready(
+            {},
+            control_plane_catalog="model_observability",
+            control_plane_schema="control_plane",
+            lakebase_instance_name="",
+            lakebase_database_name="",
+            lakebase_schema="model_lens_ui",
+        )
+        is False
+    )
+    assert (
+        _control_plane_ready(
+            {
+                "control_plane_catalog": "model_observability",
+                "control_plane_schema": "control_plane",
+                "lakebase_instance_name": "",
+                "lakebase_database_name": "",
+                "lakebase_schema": "model_lens_ui",
+            },
+            control_plane_catalog="model_observability",
+            control_plane_schema="control_plane",
+            lakebase_instance_name="",
+            lakebase_database_name="",
+            lakebase_schema="model_lens_ui",
+        )
+        is True
+    )

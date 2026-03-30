@@ -51,7 +51,17 @@ For `dev` or `prod`, Model Lens expects:
 - `lakebase_database_name`
 - `lakebase_pguser`
 
-## 1. Validate Locally
+## 1. Cleanup If You Are Re-Deploying
+
+If you manually deleted the app or are reusing a workspace with old bundle state, clean up the stale workspace bundle directory first:
+
+```bash
+databricks workspace delete /Workspace/Users/<your-email>/.bundle/model-lens --recursive
+```
+
+Do this before the next `databricks bundle deploy`.
+
+## 2. Validate Locally
 
 From the repo root:
 
@@ -90,7 +100,7 @@ Expected result:
 - bundle validation succeeds
 - the wheel build succeeds and the bundle can resolve `../dist/*.whl` for the serverless workflow environment
 
-## 2. Deploy The Bundle
+## 3. Deploy The Bundle
 
 Warehouse-only:
 
@@ -100,6 +110,8 @@ databricks bundle deploy \
   --var "sql_warehouse_id=<sql-warehouse-id>" \
   --var "control_plane_catalog=<control-plane-catalog>" \
   --var "control_plane_schema=<control-plane-schema>"
+
+databricks apps start model-lens
 
 databricks apps deploy model-lens \
   --source-code-path /Workspace/Users/<your-email>/.bundle/model-lens/warehouse_only/files
@@ -119,6 +131,8 @@ databricks bundle deploy \
   --var "lakebase_database_name=<lakebase-database-name>" \
   --var "lakebase_pguser=<lakebase-db-user>"
 
+databricks apps start model-lens
+
 databricks apps deploy model-lens \
   --source-code-path /Workspace/Users/<your-email>/.bundle/model-lens/dev/files
 
@@ -129,10 +143,35 @@ Expected result:
 
 - the app `model-lens` is created
 - the workflow `model-lens-refresh` is created
+- `databricks apps start model-lens` brings the app compute into `ACTIVE`
 - after `databricks apps deploy`, the app source is deployed to compute
 - on CLI `v0.260.0`, the app resource only binds the SQL warehouse; Lakebase app reads are configured from the app session fields or app env overrides
 
-## 3. Open The App
+## 4. Grant The App Access
+
+Model Lens creates an app service principal automatically, but it does not receive warehouse or Unity Catalog access by default.
+
+Find the app identity:
+
+```bash
+databricks apps get model-lens -o json
+```
+
+Then grant the app identity all of the following:
+
+- `CAN_USE` on the SQL warehouse used by Model Lens
+- read access to the source data catalog/schema/tables
+- read/write access to the control-plane catalog/schema/tables
+- if Model Lens should create the control-plane tables itself, `CREATE TABLE` in the control-plane schema
+
+At a minimum, the app identity and the scheduled refresh job identity must be able to do this:
+
+- source data: `USE CATALOG`, `USE SCHEMA`, `SELECT`
+- control plane: `USE CATALOG`, `USE SCHEMA`, `SELECT`, `MODIFY`
+
+If you want Model Lens to initialize the control plane from the UI, the identity running setup also needs create privileges in that namespace.
+
+## 5. Open The App
 
 Open the deployed Databricks App named `model-lens`.
 
@@ -145,7 +184,7 @@ Verify:
 - if you want fast app reads, enter `Lakebase Instance Name` and `Lakebase Database Name` in the setup card before loading the dashboard
 - in warehouse-only mode, the app may show an informational banner recommending Lakebase if the workspace exposes Lakebase instances
 
-## 4. Initialize The Control Plane
+## 6. Initialize The Control Plane
 
 In the app `Workspace` step, click `Setup Control Plane`.
 
@@ -177,13 +216,13 @@ Expected:
 - `performance_metrics`
 - `incidents`
 
-## 5. Load Test Data
+## 7. Load Test Data
 
 Run [`examples/scratch_dataset.sql`](/Users/volo.vragov/Desktop/work/model-lens/examples/scratch_dataset.sql) in Databricks SQL.
 
 If `main` is not writable in your workspace, replace the catalog name first.
 
-## 6. Create The First Monitor
+## 8. Create The First Monitor
 
 In the app:
 
@@ -221,7 +260,7 @@ Expected result:
 - the monitor appears in the app
 - the summary and incident queries come back quickly
 
-## 7. Verify Persisted State
+## 9. Verify Persisted State
 
 Verify the warehouse system of record:
 
@@ -253,7 +292,7 @@ Expected result:
 - warehouse tables contain the durable metrics
 - if Lakebase is configured for the current app session or refresh workflow, Lakebase tables contain the latest monitor inventory, summary, and open incidents
 
-## 8. Verify The Workflow
+## 10. Verify The Workflow
 
 Open the workflow `model-lens-refresh` and run it once manually.
 
@@ -266,7 +305,7 @@ Expected result:
 - in `dev` / `prod`, the workflow also updates the Lakebase projection
 - in `warehouse_only`, the app can still use Lakebase reads if you entered Lakebase instance/database values in the UI, but scheduled refreshes do not sync Lakebase automatically
 
-## 9. What To Check Before Sending To A Client
+## 11. What To Check Before Sending To A Client
 
 Do not send this to a client until all of the following are true:
 

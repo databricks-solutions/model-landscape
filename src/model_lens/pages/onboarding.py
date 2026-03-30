@@ -164,6 +164,12 @@ def _contract_step(form_style: dict) -> dbc.Row:
                                 "This is also where you scope shared inference tables to one model or version.",
                                 className="text-muted",
                             ),
+                            dbc.Alert(
+                                "Model Lens auto-detects the core contract from the scanned table. "
+                                "Most customers should only need the fields below. Use Advanced only if the inferred mapping is wrong.",
+                                color="secondary",
+                                className="py-2",
+                            ),
                             dbc.Row(
                                 [
                                     dbc.Col([dbc.Label("Display Name"), dbc.Input(id="display-name-input")], md=6, style=form_style),
@@ -172,59 +178,75 @@ def _contract_step(form_style: dict) -> dbc.Row:
                             ),
                             dbc.Row(
                                 [
-                                    dbc.Col([dbc.Label("Timestamp Column"), dcc.Dropdown(id="timestamp-col-dropdown")], md=4, style=form_style),
-                                    dbc.Col([dbc.Label("Model ID Column"), dcc.Dropdown(id="model-id-col-dropdown")], md=4, style=form_style),
-                                    dbc.Col([dbc.Label("Prediction Column"), dcc.Dropdown(id="prediction-col-dropdown")], md=4, style=form_style),
+                                    dbc.Col([dbc.Label("Optional Labels Table"), dbc.Input(id="labels-table-input", placeholder="catalog.schema.labels_table")], md=6, style=form_style),
+                                    dbc.Col([dbc.Label("Feature Columns"), dcc.Dropdown(id="feature-cols-dropdown", multi=True)], md=6, style=form_style),
                                 ]
                             ),
-                            dbc.Row(
+                            dbc.Accordion(
                                 [
-                                    dbc.Col([dbc.Label("Monitored Model ID Value"), dbc.Input(id="model-id-value-input", placeholder="fraud_model_v1")], md=6, style=form_style),
-                                    dbc.Col([dbc.Label("Monitored Model Version Value"), dbc.Input(id="model-version-value-input", placeholder="2026-03-01")], md=6, style=form_style),
-                                ]
-                            ),
-                            dbc.Row(
-                                [
-                                    dbc.Col([dbc.Label("Model Version Column"), dcc.Dropdown(id="model-version-col-dropdown")], md=4, style=form_style),
-                                    dbc.Col([dbc.Label("Prediction Score Column"), dcc.Dropdown(id="prediction-score-col-dropdown")], md=4, style=form_style),
-                                    dbc.Col([dbc.Label("Entity ID Column"), dcc.Dropdown(id="entity-id-col-dropdown")], md=4, style=form_style),
-                                ]
-                            ),
-                            dbc.Row(
-                                [
-                                    dbc.Col([dbc.Label("Label Column In Source"), dcc.Dropdown(id="source-label-col-dropdown")], md=4, style=form_style),
-                                    dbc.Col([dbc.Label("External Labels Table"), dbc.Input(id="labels-table-input", placeholder="catalog.schema.labels_table")], md=4, style=form_style),
-                                    dbc.Col([dbc.Label("External Labels Join Column"), dbc.Input(id="labels-join-col-input", placeholder="entity_id")], md=4, style=form_style),
-                                ]
-                            ),
-                            dbc.Row(
-                                [
-                                    dbc.Col([dbc.Label("External Label Column"), dbc.Input(id="external-label-col-input", placeholder="label")], md=4, style=form_style),
-                                    dbc.Col([dbc.Label("External Labels Order Column"), dbc.Input(id="labels-order-col-input", placeholder="label_timestamp")], md=4, style=form_style),
-                                    dbc.Col(
+                                    dbc.AccordionItem(
                                         [
-                                            dbc.Label("Problem Type"),
-                                            dcc.Dropdown(
-                                                id="problem-type-dropdown",
-                                                options=[
-                                                    {"label": "Classification", "value": "classification"},
-                                                    {"label": "Regression", "value": "regression"},
-                                                ],
-                                                value="classification",
+                                            dbc.Row(
+                                                [
+                                                    dbc.Col([dbc.Label("Timestamp Column"), dcc.Dropdown(id="timestamp-col-dropdown")], md=4, style=form_style),
+                                                    dbc.Col([dbc.Label("Model ID Column"), dcc.Dropdown(id="model-id-col-dropdown")], md=4, style=form_style),
+                                                    dbc.Col([dbc.Label("Prediction Column"), dcc.Dropdown(id="prediction-col-dropdown")], md=4, style=form_style),
+                                                ]
+                                            ),
+                                            dbc.Row(
+                                                [
+                                                    dbc.Col([dbc.Label("Monitored Model ID Value"), dbc.Input(id="model-id-value-input", placeholder="fraud_model_v1")], md=6, style=form_style),
+                                                    dbc.Col([dbc.Label("Monitored Model Version Value"), dbc.Input(id="model-version-value-input", placeholder="2026-03-01")], md=6, style=form_style),
+                                                ]
+                                            ),
+                                            dbc.Row(
+                                                [
+                                                    dbc.Col([dbc.Label("Model Version Column"), dcc.Dropdown(id="model-version-col-dropdown")], md=4, style=form_style),
+                                                    dbc.Col([dbc.Label("Prediction Score Column"), dcc.Dropdown(id="prediction-score-col-dropdown")], md=4, style=form_style),
+                                                    dbc.Col([dbc.Label("Entity ID Column"), dcc.Dropdown(id="entity-id-col-dropdown")], md=4, style=form_style),
+                                                ]
+                                            ),
+                                            dbc.Row(
+                                                [
+                                                    dbc.Col([dbc.Label("Label Column In Source"), dcc.Dropdown(id="source-label-col-dropdown")], md=4, style=form_style),
+                                                    dbc.Col([dbc.Label("External Labels Join Column"), dbc.Input(id="labels-join-col-input", value="entity_id", placeholder="entity_id")], md=4, style=form_style),
+                                                    dbc.Col([dbc.Label("External Label Column"), dbc.Input(id="external-label-col-input", value="label", placeholder="label")], md=4, style=form_style),
+                                                ]
+                                            ),
+                                            dbc.Row(
+                                                [
+                                                    dbc.Col([dbc.Label("External Labels Order Column"), dbc.Input(id="labels-order-col-input", value="label_timestamp", placeholder="label_timestamp")], md=4, style=form_style),
+                                                    dbc.Col(
+                                                        [
+                                                            dbc.Label("Problem Type"),
+                                                            dcc.Dropdown(
+                                                                id="problem-type-dropdown",
+                                                                options=[
+                                                                    {"label": "Classification", "value": "classification"},
+                                                                    {"label": "Regression", "value": "regression"},
+                                                                ],
+                                                                value="classification",
+                                                            ),
+                                                        ],
+                                                        md=4,
+                                                        style=form_style,
+                                                    ),
+                                                    dbc.Col([dbc.Label("Baseline Days"), dbc.Input(id="baseline-days-input", type="number", min=1, value=7)], md=4, style=form_style),
+                                                ]
+                                            ),
+                                            dbc.Row(
+                                                [
+                                                    dbc.Col([dbc.Label("Categorical Columns"), dcc.Dropdown(id="categorical-cols-dropdown", multi=True)], md=6, style=form_style),
+                                                    dbc.Col([dbc.Label("Slice Columns"), dcc.Dropdown(id="slice-cols-dropdown", multi=True)], md=6, style=form_style),
+                                                ]
                                             ),
                                         ],
-                                        md=2,
-                                        style=form_style,
-                                    ),
-                                    dbc.Col([dbc.Label("Baseline Days"), dbc.Input(id="baseline-days-input", type="number", min=1, value=7)], md=2, style=form_style),
-                                ]
+                                        title="Advanced mappings and overrides",
+                                    )
+                                ],
+                                className="mt-3",
+                                start_collapsed=True,
                             ),
-                            dbc.Label("Feature Columns"),
-                            dcc.Dropdown(id="feature-cols-dropdown", multi=True, className="mb-3"),
-                            dbc.Label("Categorical Columns"),
-                            dcc.Dropdown(id="categorical-cols-dropdown", multi=True, className="mb-3"),
-                            dbc.Label("Slice Columns"),
-                            dcc.Dropdown(id="slice-cols-dropdown", multi=True, className="mb-3"),
                         ]
                     )
                 ),

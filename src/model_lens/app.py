@@ -5,6 +5,7 @@ import dash_bootstrap_components as dbc
 from dash import Input, Output, dcc, html
 
 from model_lens.callbacks import (
+    _control_plane_ready,
     _feature_candidates,
     _non_numeric_features,
     _selected_model_from_search,

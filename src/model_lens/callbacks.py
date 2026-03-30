@@ -171,17 +171,23 @@ def _control_plane_ready(
     lakebase_database_name: str | None,
     lakebase_schema: str | None,
 ) -> bool:
-    expected = _session_config(
-        {
-            "control_plane_catalog": control_plane_catalog,
-            "control_plane_schema": control_plane_schema,
-            "lakebase_instance_name": lakebase_instance_name,
-            "lakebase_database_name": lakebase_database_name,
-            "lakebase_schema": lakebase_schema,
-        }
-    )
-    recorded = _session_config(ready_state)
-    return bool(recorded["control_plane_catalog"] and recorded == expected)
+    if not ready_state:
+        return False
+    expected = {
+        "control_plane_catalog": (control_plane_catalog or "").strip(),
+        "control_plane_schema": (control_plane_schema or "").strip(),
+        "lakebase_instance_name": (lakebase_instance_name or "").strip(),
+        "lakebase_database_name": (lakebase_database_name or "").strip(),
+        "lakebase_schema": (lakebase_schema or "").strip(),
+    }
+    recorded = {
+        "control_plane_catalog": str(ready_state.get("control_plane_catalog") or "").strip(),
+        "control_plane_schema": str(ready_state.get("control_plane_schema") or "").strip(),
+        "lakebase_instance_name": str(ready_state.get("lakebase_instance_name") or "").strip(),
+        "lakebase_database_name": str(ready_state.get("lakebase_database_name") or "").strip(),
+        "lakebase_schema": str(ready_state.get("lakebase_schema") or "").strip(),
+    }
+    return bool(recorded["control_plane_catalog"] and recorded["control_plane_schema"] and recorded == expected)
 
 
 def _selected_model_from_search(search: str | None) -> str | None:
@@ -203,6 +209,18 @@ def _make_backend(session_data: dict | None) -> DashboardBackend:
         lakebase_instance_name=session["lakebase_instance_name"] or None,
         lakebase_database_name=session["lakebase_database_name"] or None,
         lakebase_schema=session["lakebase_schema"] or None,
+    )
+
+
+def _ready_for_session(ready_state: dict | None, session_data: dict | None) -> bool:
+    session = _session_config(session_data)
+    return _control_plane_ready(
+        ready_state,
+        control_plane_catalog=session["control_plane_catalog"],
+        control_plane_schema=session["control_plane_schema"],
+        lakebase_instance_name=session["lakebase_instance_name"],
+        lakebase_database_name=session["lakebase_database_name"],
+        lakebase_schema=session["lakebase_schema"],
     )
 
 
@@ -295,6 +313,7 @@ def _review_summary(
 def _runtime_defaults_frame(session_data: dict | None) -> pd.DataFrame:
     session = _session_config(session_data)
     mode = "lakebase" if session["lakebase_database_name"] or session["lakebase_instance_name"] else "warehouse_only"
+    discovered_instances = ", ".join(_workspace_lakebase_instances()) or "(none visible)"
     return pd.DataFrame(
         [
             {"name": "DEPLOYMENT_MODE", "value": mode},
@@ -305,6 +324,7 @@ def _runtime_defaults_frame(session_data: dict | None) -> pd.DataFrame:
             {"name": "LAKEBASE_INSTANCE_NAME", "value": session["lakebase_instance_name"] or "(optional)"},
             {"name": "LAKEBASE_DATABASE_NAME", "value": session["lakebase_database_name"] or "(optional)"},
             {"name": "LAKEBASE_SCHEMA", "value": session["lakebase_schema"]},
+            {"name": "DISCOVERED_LAKEBASE_INSTANCES", "value": discovered_instances},
             {"name": "REFRESH_JOB_ID", "value": settings.refresh_job_id or "(optional / manual)"},
         ]
     )
@@ -313,20 +333,18 @@ def _runtime_defaults_frame(session_data: dict | None) -> pd.DataFrame:
 def _deployment_mode_prompt(session_data: dict | None):
     session = _session_config(session_data)
     if session["lakebase_database_name"] or session["lakebase_instance_name"]:
-        detail = session["lakebase_database_name"] or session["lakebase_instance_name"]
-        return _status_alert(
-            f"Lakebase mode is active for this session. Model Lens will prefer the Lakebase read model ({detail}).",
-            "success",
+        return dbc.Badge(
+            "Mode: Lakebase",
+            color="success",
+            pill=True,
+            className="px-3 py-2",
         )
-    instances = _workspace_lakebase_instances()
-    if instances:
-        preview = ", ".join(instances[:3])
-        return _status_alert(
-            f"Warehouse-only mode is active. Lakebase appears to be available in this workspace ({preview}). "
-            "Configure it from Onboarding to accelerate app reads.",
-            "info",
-        )
-    return _status_alert("Warehouse-only mode is active.", "secondary")
+    return dbc.Badge(
+        "Mode: Warehouse",
+        color="secondary",
+        pill=True,
+        className="px-3 py-2",
+    )
 
 
 def _model_banner(model_id: str | None, backend: DashboardBackend):
@@ -811,11 +829,14 @@ def register_callbacks(app) -> None:
         Input("refresh-selected-btn", "n_clicks"),
         State("refresh-monitor-select", "value"),
         State("session-config-store", "data"),
+        State("control-plane-ready-store", "data"),
         prevent_initial_call=True,
     )
-    def refresh_monitors(_, __, selected_model, session_data):
+    def refresh_monitors(_, __, selected_model, session_data, ready_state):
         trigger = ctx.triggered_id
         model_key = selected_model if trigger == "refresh-selected-btn" else ""
+        if not _ready_for_session(ready_state, session_data):
+            return _status_alert("Run Setup Control Plane successfully before refreshing monitors.", "warning"), no_update, no_update
         if trigger == "refresh-selected-btn" and not model_key:
             return _status_alert("Select a monitor before running a targeted refresh.", "warning"), no_update, no_update
         backend = _make_backend(session_data)
@@ -864,6 +885,7 @@ def register_callbacks(app) -> None:
         State("lakebase-instance-input", "value"),
         State("lakebase-database-input", "value"),
         State("lakebase-schema-input", "value"),
+        State("control-plane-ready-store", "data"),
         prevent_initial_call=True,
     )
     def save_monitor(
@@ -894,6 +916,7 @@ def register_callbacks(app) -> None:
         lakebase_instance_name,
         lakebase_database_name,
         lakebase_schema,
+        ready_state,
     ):
         if not scan_data:
             return _status_alert("Scan a source table before saving a monitor.", "warning"), no_update, no_update
@@ -912,6 +935,8 @@ def register_callbacks(app) -> None:
             "lakebase_database_name": (lakebase_database_name or "").strip(),
             "lakebase_schema": (lakebase_schema or "").strip(),
         }
+        if not _ready_for_session(ready_state, session):
+            return _status_alert("Run Setup Control Plane successfully before saving a monitor.", "warning"), no_update, no_update
         label_col = external_label_col or source_label_col or None
         if labels_table and (not entity_id_col or not labels_join_col or not label_col):
             return _status_alert(
