@@ -96,8 +96,12 @@ Current tables:
 - `monitor_configs`
 - `drift_metrics`
 - `quality_metrics`
+- `quality_history`
 - `performance_metrics`
 - `incidents`
+- `incident_history`
+- `refresh_runs`
+- `comparison_windows`
 
 This is the system of record.
 
@@ -123,9 +127,14 @@ Responsibilities:
 - read source inference data
 - optionally join labels from an external table with deterministic dedupe
 - scope shared source tables down to one monitored model/version when configured
-- build either recent rolling comparison windows or fixed-baseline-versus-latest comparison windows
-- compute drift, quality, and degradation summaries
-- replace the current persisted snapshot for the refreshed model
+- backfill all valid daily rolling or fixed-baseline comparison windows on the first run
+- append only new daily windows on later runs by default
+- compute drift, quality, and degradation summaries across those windows
+- record one refresh-run row per model execution with requested mode, effective mode, counts, status, and data range
+- persist one comparison-window row per logical baseline/current pairing
+- persist one quality-history row per comparison window for row-count, null-rate, and prediction-stat trends
+- persist incident lifecycle rows (`opened`, `ongoing`, `escalated`, `downgraded`, `recovered`) per comparison window while keeping `incidents` as the current open-incident projection
+- replace or append persisted metric windows depending on refresh mode
 - sync the current UI projection into Lakebase
 
 Packaging/runtime shape:
@@ -162,10 +171,17 @@ Primary code:
 2. For each config, it reads source data from the inference table.
 3. If configured, it applies `model_id_value` / `model_version_value` filters before analysis.
 4. If configured, it joins an external labels table and uses the configured order column to dedupe repeated label keys.
-5. It builds rolling adjacent windows from the latest `n` days and the preceding `n` days.
-6. It computes numeric drift metrics, quality metrics, performance contributors, and incident rows.
-7. It replaces the persisted current snapshot for that model.
-8. If Lakebase mode is active, it refreshes the Lakebase monitor summary and open-incident projection.
+5. It generates all valid daily comparison windows for the configured baseline policy within the comparison horizon.
+6. In `auto` mode, it backfills full history when no matching history exists and appends only new windows when history is already aligned.
+7. It computes numeric drift metrics, windowed quality history, incident lifecycle rows, and performance contributors for each comparison window, while still keeping `quality_metrics` as the latest-summary compatibility row and `incidents` as the current open-incident projection.
+8. It writes `refresh_runs` and `comparison_windows` provenance rows alongside the metric facts.
+9. It replaces or appends persisted rows for that model without duplicating logical windows.
+10. If Lakebase mode is active, it refreshes the Lakebase monitor summary and open-incident projection.
+
+Current limitation:
+
+- the app UI still emphasizes current/open incidents; there is not yet a dedicated historical incident timeline page even though warehouse incident history is now persisted
+- the remaining incident readback/productization work is tracked in [Historical Backfill Plan](/Users/volo.vragov/Desktop/work/model-lens/docs/HISTORICAL_BACKFILL_PLAN.md)
 
 ### Readback Flow
 

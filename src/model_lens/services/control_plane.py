@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+from datetime import timezone
 from functools import lru_cache
 from typing import Any
+from uuid import uuid4
 
 import pandas as pd
 
@@ -452,22 +454,221 @@ class ControlPlaneRepository:
             frame[source_label_column] = pd.NA
         return frame
 
-    def replace_refresh_result(self, model_key: str, result: RefreshResult) -> None:
-        window_end = ""
-        if result.drift_rows:
-            window_end = _as_text(result.drift_rows[0].get("window_end"))
-        elif result.performance_rows:
-            window_end = _as_text(result.performance_rows[0].get("window_end"))
+    def get_existing_window_keys(self, model_key: str) -> set[tuple[str, str, str, str]]:
+        try:
+            frame = self._warehouse.query_params(
+                f"""
+                SELECT DISTINCT
+                    CAST(baseline_start AS STRING) AS baseline_start,
+                    CAST(baseline_end AS STRING) AS baseline_end,
+                    CAST(window_start AS STRING) AS window_start,
+                    CAST(window_end AS STRING) AS window_end
+                FROM {self._table_names.comparison_windows}
+                WHERE model_key = %s
+                """,
+                (model_key,),
+            )
+        except Exception:
+            frame = pd.DataFrame()
+        if frame.empty:
+            frame = self._warehouse.query_params(
+                f"""
+                SELECT DISTINCT
+                    CAST(baseline_start AS STRING) AS baseline_start,
+                    CAST(baseline_end AS STRING) AS baseline_end,
+                    CAST(window_start AS STRING) AS window_start,
+                    CAST(window_end AS STRING) AS window_end
+                FROM {self._table_names.drift_metrics}
+                WHERE model_key = %s
+                """,
+                (model_key,),
+            )
+        if frame.empty:
+            return set()
+        keys: set[tuple[str, str, str, str]] = set()
+        for _, row in frame.iterrows():
+            keys.add((
+                _as_text(row.get("baseline_start")),
+                _as_text(row.get("baseline_end")),
+                _as_text(row.get("window_start")),
+                _as_text(row.get("window_end")),
+            ))
+        return keys
 
-        if window_end:
-            self._warehouse.execute_params(
-                f"DELETE FROM {self._table_names.drift_metrics} WHERE model_key = %s AND window_end = CAST(%s AS DATE)",
-                (model_key, window_end),
+    def replace_refresh_result(self, model_key: str, result: RefreshResult) -> None:
+        self.append_refresh_result(model_key, result)
+
+    def start_refresh_run(
+        self,
+        *,
+        model_key: str,
+        requested_mode: str,
+        run_kind: str,
+        data_min_date: str | None = None,
+        data_max_date: str | None = None,
+    ) -> str:
+        run_id = str(uuid4())
+        started_at = pd.Timestamp.now(tz=timezone.utc).isoformat()
+        self._warehouse.execute_params(
+            f"""
+            INSERT INTO {self._table_names.refresh_runs} (
+                run_id, model_key, requested_mode, run_kind, status,
+                started_at, completed_at, window_count,
+                data_min_date, data_max_date,
+                drift_row_count, quality_row_count, performance_row_count, incident_row_count,
+                error_message
+            ) VALUES (
+                %s, %s, %s, %s, %s,
+                CAST(%s AS TIMESTAMP), CAST(NULL AS TIMESTAMP), %s,
+                CAST(%s AS DATE), CAST(%s AS DATE),
+                %s, %s, %s, %s,
+                %s
             )
+            """,
+            (
+                run_id,
+                model_key,
+                requested_mode,
+                run_kind,
+                "running",
+                started_at,
+                0,
+                data_min_date or None,
+                data_max_date or None,
+                0,
+                0,
+                0,
+                0,
+                "",
+            ),
+        )
+        return run_id
+
+    def complete_refresh_run(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        window_count: int = 0,
+        drift_row_count: int = 0,
+        quality_row_count: int = 0,
+        performance_row_count: int = 0,
+        incident_row_count: int = 0,
+        error_message: str = "",
+    ) -> None:
+        completed_at = pd.Timestamp.now(tz=timezone.utc).isoformat()
+        self._warehouse.execute_params(
+            f"""
+            UPDATE {self._table_names.refresh_runs}
+            SET
+                status = %s,
+                completed_at = CAST(%s AS TIMESTAMP),
+                window_count = %s,
+                drift_row_count = %s,
+                quality_row_count = %s,
+                performance_row_count = %s,
+                incident_row_count = %s,
+                error_message = %s
+            WHERE run_id = %s
+            """,
+            (
+                status,
+                completed_at,
+                window_count,
+                drift_row_count,
+                quality_row_count,
+                performance_row_count,
+                incident_row_count,
+                error_message,
+                run_id,
+            ),
+        )
+
+    def replace_all_refresh_results(self, model_key: str, result: RefreshResult, source_run_id: str | None = None) -> None:
+        for table_name in (
+            self._table_names.drift_metrics,
+            self._table_names.performance_metrics,
+            self._table_names.quality_metrics,
+            self._table_names.quality_history,
+            self._table_names.incidents,
+            self._table_names.incident_history,
+            self._table_names.comparison_windows,
+        ):
             self._warehouse.execute_params(
-                f"DELETE FROM {self._table_names.performance_metrics} WHERE model_key = %s AND window_end = CAST(%s AS DATE)",
-                (model_key, window_end),
+                f"DELETE FROM {table_name} WHERE model_key = %s",
+                (model_key,),
             )
+        self._insert_window_rows(result.window_rows, source_run_id=source_run_id)
+        self._insert_drift_rows(result.drift_rows)
+        self._insert_quality_rows(result.quality_rows)
+        self._insert_quality_history_rows(result.quality_history_rows)
+        self._insert_performance_rows(result.performance_rows)
+        self._insert_incident_rows(result.incident_rows)
+        self._insert_incident_history_rows(result.incident_history_rows)
+        self._sync_read_model()
+
+    def append_refresh_result(self, model_key: str, result: RefreshResult, source_run_id: str | None = None) -> None:
+        drift_windows = {
+            (
+                _as_text(row.get("baseline_start")),
+                _as_text(row.get("baseline_end")),
+                _as_text(row.get("window_start")),
+                _as_text(row.get("window_end")),
+            )
+            for row in result.drift_rows
+        }
+        performance_windows = {
+            (
+                _as_text(row.get("window_start")),
+                _as_text(row.get("window_end")),
+            )
+            for row in result.performance_rows
+        }
+        quality_windows = {_as_text(row.get("window_id")) for row in result.quality_history_rows}
+        incident_history_windows = {_as_text(row.get("window_id")) for row in result.incident_history_rows}
+
+        for baseline_start, baseline_end, window_start, window_end in drift_windows:
+            self._warehouse.execute_params(
+                f"""
+                DELETE FROM {self._table_names.drift_metrics}
+                WHERE model_key = %s
+                  AND baseline_start = CAST(%s AS DATE)
+                  AND baseline_end = CAST(%s AS DATE)
+                  AND window_start = CAST(%s AS DATE)
+                  AND window_end = CAST(%s AS DATE)
+                """,
+                (model_key, baseline_start, baseline_end, window_start, window_end),
+            )
+
+        for window_start, window_end in performance_windows:
+            self._warehouse.execute_params(
+                f"""
+                DELETE FROM {self._table_names.performance_metrics}
+                WHERE model_key = %s
+                  AND window_start = CAST(%s AS DATE)
+                  AND window_end = CAST(%s AS DATE)
+                """,
+                (model_key, window_start, window_end),
+            )
+
+        for window_id in {_as_text(row.get("window_id")) for row in result.window_rows}:
+            self._warehouse.execute_params(
+                f"DELETE FROM {self._table_names.comparison_windows} WHERE model_key = %s AND window_id = %s",
+                (model_key, window_id),
+            )
+
+        for window_id in quality_windows:
+            self._warehouse.execute_params(
+                f"DELETE FROM {self._table_names.quality_history} WHERE model_key = %s AND window_id = %s",
+                (model_key, window_id),
+            )
+
+        for window_id in incident_history_windows:
+            self._warehouse.execute_params(
+                f"DELETE FROM {self._table_names.incident_history} WHERE model_key = %s AND window_id = %s",
+                (model_key, window_id),
+            )
+
         self._warehouse.execute_params(
             f"DELETE FROM {self._table_names.quality_metrics} WHERE model_key = %s",
             (model_key,),
@@ -477,10 +678,13 @@ class ControlPlaneRepository:
             (model_key,),
         )
 
+        self._insert_window_rows(result.window_rows, source_run_id=source_run_id)
         self._insert_drift_rows(result.drift_rows)
         self._insert_quality_rows(result.quality_rows)
+        self._insert_quality_history_rows(result.quality_history_rows)
         self._insert_performance_rows(result.performance_rows)
         self._insert_incident_rows(result.incident_rows)
+        self._insert_incident_history_rows(result.incident_history_rows)
         self._sync_read_model()
 
     def _insert_drift_rows(self, rows: list[dict]) -> None:
@@ -543,6 +747,62 @@ class ControlPlaneRepository:
             payload,
         )
 
+    def _insert_window_rows(self, rows: list[dict], *, source_run_id: str | None = None) -> None:
+        payload = [
+            (
+                row["window_id"],
+                row["model_key"],
+                row["window_grain"],
+                row["window_start"],
+                row["window_end"],
+                row["baseline_start"],
+                row["baseline_end"],
+                row["baseline_kind"],
+                row["created_at"],
+                source_run_id or "",
+            )
+            for row in rows
+        ]
+        self._warehouse.execute_batch(
+            f"""
+            INSERT INTO {self._table_names.comparison_windows} (
+                window_id, model_key, window_grain,
+                window_start, window_end,
+                baseline_start, baseline_end, baseline_kind,
+                created_at, source_run_id
+            ) VALUES
+            """.strip(),
+            payload,
+        )
+
+    def _insert_quality_history_rows(self, rows: list[dict]) -> None:
+        payload = [
+            (
+                row["model_key"],
+                row["window_id"],
+                row["window_start"],
+                row["window_end"],
+                row["baseline_start"],
+                row["baseline_end"],
+                row["row_count"],
+                row["prediction_mean"],
+                row["prediction_std"],
+                row["null_rates"],
+                row["computed_at"],
+            )
+            for row in rows
+        ]
+        self._warehouse.execute_batch(
+            f"""
+            INSERT INTO {self._table_names.quality_history} (
+                model_key, window_id, window_start, window_end,
+                baseline_start, baseline_end, row_count,
+                prediction_mean, prediction_std, null_rates, computed_at
+            ) VALUES
+            """.strip(),
+            payload,
+        )
+
     def _insert_performance_rows(self, rows: list[dict]) -> None:
         payload = [
             (
@@ -596,6 +856,66 @@ class ControlPlaneRepository:
             """.strip(),
             payload,
         )
+
+    def _insert_incident_history_rows(self, rows: list[dict]) -> None:
+        payload = [
+            (
+                row["model_key"],
+                row["feature_name"],
+                row["metric_name"],
+                row["event_type"],
+                row["severity"],
+                row["status"],
+                row["metric_value"],
+                row["window_id"],
+                row["window_start"],
+                row["window_end"],
+                row["baseline_start"],
+                row["baseline_end"],
+                row["observed_at"],
+            )
+            for row in rows
+        ]
+        self._warehouse.execute_batch(
+            f"""
+            INSERT INTO {self._table_names.incident_history} (
+                model_key, feature_name, metric_name,
+                event_type, severity, status, metric_value,
+                window_id, window_start, window_end, baseline_start, baseline_end, observed_at
+            ) VALUES
+            """.strip(),
+            payload,
+        )
+
+    def get_current_incident_state(self, model_key: str) -> dict[tuple[str, str, str], dict[str, Any]]:
+        frame = self._warehouse.query_params(
+            f"""
+            SELECT model_key, feature_name, metric_name, severity, status, metric_value, window_end, observed_at
+            FROM {self._table_names.incidents}
+            WHERE model_key = %s AND status = 'open'
+            """,
+            (model_key,),
+        )
+        if frame.empty:
+            return {}
+        state: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for _, row in frame.iterrows():
+            key = (
+                _as_text(row.get("model_key")),
+                _as_text(row.get("feature_name")),
+                _as_text(row.get("metric_name")),
+            )
+            state[key] = {
+                "model_key": key[0],
+                "feature_name": key[1],
+                "metric_name": key[2],
+                "severity": _as_text(row.get("severity")),
+                "status": _as_text(row.get("status")) or "open",
+                "metric_value": float(row.get("metric_value") or 0.0),
+                "window_end": _as_text(row.get("window_end")),
+                "observed_at": _as_text(row.get("observed_at")),
+            }
+        return state
 
     def _get_monitor_summary_from_warehouse(self) -> pd.DataFrame:
         return self._warehouse.query(

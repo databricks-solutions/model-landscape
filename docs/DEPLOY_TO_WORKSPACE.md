@@ -213,8 +213,12 @@ Expected:
 - `monitor_configs`
 - `drift_metrics`
 - `quality_metrics`
+- `quality_history`
 - `performance_metrics`
 - `incidents`
+- `incident_history`
+- `refresh_runs`
+- `comparison_windows`
 
 ## 7. Load Test Data
 
@@ -267,6 +271,7 @@ Expected result:
 - the refresh runs
 - the monitor appears in the app
 - the new monitor appears on the overview page and the analysis pages can load it
+- the first refresh backfills historical daily comparison windows immediately instead of writing only a single latest snapshot
 
 ## 9. Verify Persisted State
 
@@ -280,6 +285,21 @@ WHERE model_key = 'fraud_model_demo';
 SELECT model_key, total_rows, min_date, max_date
 FROM <control-plane-catalog>.<control-plane-schema>.quality_metrics
 WHERE model_key = 'fraud_model_demo';
+
+SELECT model_key, COUNT(*) AS quality_windows
+FROM <control-plane-catalog>.<control-plane-schema>.quality_history
+WHERE model_key = 'fraud_model_demo'
+GROUP BY model_key;
+
+SELECT model_key, COUNT(DISTINCT window_end) AS drift_windows
+FROM <control-plane-catalog>.<control-plane-schema>.drift_metrics
+WHERE model_key = 'fraud_model_demo'
+GROUP BY model_key;
+
+SELECT model_key, COUNT(*) AS incident_events
+FROM <control-plane-catalog>.<control-plane-schema>.incident_history
+WHERE model_key = 'fraud_model_demo'
+GROUP BY model_key;
 
 SELECT model_key, feature_name, metric_name, metric_value
 FROM <control-plane-catalog>.<control-plane-schema>.drift_metrics
@@ -298,6 +318,11 @@ SELECT * FROM model_lens_ui.open_incidents ORDER BY observed_at DESC;
 Expected result:
 
 - warehouse tables contain the durable metrics
+- `quality_windows` is populated immediately after the first refresh for datasets with enough history
+- `drift_windows` is populated immediately after the first refresh for datasets with enough history
+- `incident_events` is populated when drift crosses thresholds or later recovers across comparison windows
+- `refresh_runs` records the refresh mode, status, and window counts for audit/debugging
+- `comparison_windows` records one row per logical baseline/current pairing
 - if Lakebase is configured for the current app session or refresh workflow, Lakebase tables contain the latest monitor inventory, summary, and open incidents
 
 ## 10. Verify The Workflow

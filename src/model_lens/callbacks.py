@@ -62,6 +62,17 @@ def _status_block(items: list[tuple[str, str]]) -> html.Div:
     return html.Div([_status_alert(message, color) for message, color in items])
 
 
+def _comparison_history_message(window_count: int, granularity: str = "daily") -> str | None:
+    if window_count >= 2:
+        return None
+    if granularity == "daily":
+        return "Only one comparison window is available. Run more refreshes to see trends over time."
+    return (
+        f"Only one {granularity} comparison window is available. "
+        "Run more refreshes to make granularity trends meaningful."
+    )
+
+
 def _render_frame(frame: pd.DataFrame, empty_message: str, max_rows: int = 20) -> html.Div:
     if frame is None or frame.empty:
         return html.Div(empty_message, className="text-muted")
@@ -1376,16 +1387,32 @@ def register_callbacks(app) -> None:
             return empty, html.Div(), html.Div(), html.Div()
         latest = drift[drift["period"] == drift["period"].max()].nlargest(int(top_n or 10), metric or "psi")
         thresholds = dict(zip(("warning", "critical"), get_thresholds(metric or "psi")))
-        note = html.Div()
+        notes: list[object] = []
+        period_count = int(drift["period"].nunique()) if "period" in drift.columns else 0
+        history_message = _comparison_history_message(period_count, granularity or "daily")
+        if history_message:
+            notes.append(_status_alert(history_message, "info"))
         if config and config.contract.categorical_columns:
-            note = _status_alert(
-                "Categorical features are stored in the monitor contract, but the current drift engine renders only numeric feature drift on this page.",
-                "secondary",
+            notes.append(
+                _status_alert(
+                    "Categorical features are stored in the monitor contract, but the current drift engine renders only numeric feature drift on this page.",
+                    "secondary",
+                )
             )
+        timeline_features = latest["feature"].tolist() if "feature" in latest.columns else []
+        if not timeline_features and "feature" in drift.columns:
+            timeline_features = drift["feature"].dropna().astype(str).drop_duplicates().tolist()[:8]
         return (
             make_chart_card(charts.build_drift_heatmap(drift, metric=metric or "psi")),
-            note,
-            make_chart_card(charts.build_drift_timeline(drift, latest["feature"].tolist(), metric=metric or "psi", thresholds=thresholds)),
+            html.Div(notes) if notes else html.Div(),
+            make_chart_card(
+                charts.build_drift_timeline(
+                    drift,
+                    timeline_features,
+                    metric=metric or "psi",
+                    thresholds=thresholds,
+                )
+            ),
             make_chart_card(charts.build_top_drifters_bar(drift, metric=metric or "psi", top_n=int(top_n or 10))),
         )
 
@@ -1458,17 +1485,47 @@ def register_callbacks(app) -> None:
         if not quality:
             empty = make_empty_state("No quality snapshot available yet. Run a refresh first.", icon="fas fa-database")
             return empty, html.Div(), html.Div(), html.Div()
+        quality_history = backend.get_quality_history(model_id)
+        null_rate_history = backend.get_null_rate_history(model_id)
+        history_note = _comparison_history_message(len(quality_history), "daily")
         kpis = [
             dbc.Col(make_metric_card("Rows", f"{quality['total_rows']:,}", "Observed rows"), md=3),
             dbc.Col(make_metric_card("From", quality["min_date"] or "—", "Earliest data"), md=3),
             dbc.Col(make_metric_card("To", quality["max_date"] or "—", "Latest data"), md=3),
             dbc.Col(make_metric_card("Prediction Mean", f"{quality['prediction_mean']:.4f}", "Latest snapshot"), md=3),
         ]
+        volume_children = html.Div(
+            [
+                _status_alert(history_note, "info") if history_note else None,
+                dbc.Row(
+                    [
+                        dbc.Col(make_chart_card(charts.build_volume_timeline(quality["daily_volume"])), md=6),
+                        dbc.Col(make_chart_card(charts.build_quality_window_timeline(quality_history)), md=6),
+                    ],
+                    className="g-3",
+                ),
+            ]
+        )
+        null_children = html.Div(
+            [
+                make_chart_card(charts.build_null_rate_chart(quality["null_rates"])),
+                make_chart_card(charts.build_null_rate_timeline(null_rate_history), class_name="mb-0"),
+            ]
+        )
+        prediction_children = html.Div(
+            [
+                make_chart_card(charts.build_prediction_quality_timeline(quality_history)),
+                make_chart_card(
+                    charts.build_prediction_distribution(backend.get_prediction_distribution(model_id)),
+                    class_name="mb-0",
+                ),
+            ]
+        )
         return (
             kpis,
-            make_chart_card(charts.build_volume_timeline(quality["daily_volume"])),
-            make_chart_card(charts.build_null_rate_chart(quality["null_rates"])),
-            make_chart_card(charts.build_prediction_distribution(backend.get_prediction_distribution(model_id))),
+            volume_children,
+            null_children,
+            prediction_children,
         )
 
     @app.callback(
@@ -1536,6 +1593,31 @@ def register_callbacks(app) -> None:
                 "Performance metrics are populated, but no significant degradation is detected in the latest window.",
                 "info",
             )
+        latest_bin_table = pd.DataFrame()
+        if not feature_frame.empty:
+            latest_bin_table = feature_frame[
+                [
+                    column
+                    for column in (
+                        "feature",
+                        "bin_label",
+                        "baseline_metric",
+                        "current_metric",
+                        "delta",
+                        "current_volume_pct",
+                        "degradation_contribution",
+                    )
+                    if column in feature_frame.columns
+                ]
+            ].rename(
+                columns={
+                    "bin_label": "bin",
+                    "baseline_metric": "baseline",
+                    "current_metric": "current",
+                    "current_volume_pct": "volume_pct",
+                    "degradation_contribution": "impact",
+                }
+            )
         kpi_cards = [
             dbc.Col(make_metric_card("Tracked Features", str(len(feature_options)), "With labeled performance bins"), md=4),
             dbc.Col(
@@ -1550,18 +1632,31 @@ def register_callbacks(app) -> None:
         ]
         note_source = latest_bins if not latest_bins.empty else all_bins
         note = note_source[[column for column in ("window_start", "window_end") if column in note_source.columns]].drop_duplicates().astype(str)
-        note_text = html.Small(
-            f"Latest comparison window: {note.iloc[0]['window_start']} to {note.iloc[0]['window_end']}" if not note.empty else "",
-            className="text-muted",
-        )
+        note_parts: list[object] = []
+        if not note.empty:
+            note_parts.append(
+                html.Small(
+                    f"Latest comparison window: {note.iloc[0]['window_start']} to {note.iloc[0]['window_end']}",
+                    className="text-muted d-block",
+                )
+            )
+        history_message = _comparison_history_message(len(performance["timeline"]), "daily")
+        if history_message:
+            note_parts.append(html.Small(history_message, className="text-muted d-block"))
         return (
             alert,
             kpi_cards,
             make_chart_card(charts.build_performance_timeline(performance["timeline"], metric_name=metric_name or "f1")),
-            make_chart_card(charts.build_feature_bin_impact(feature_frame, contributors)),
+            html.Div(
+                [
+                    make_chart_card(charts.build_feature_bin_impact(feature_frame, contributors)),
+                    html.H6("Latest Bin Metrics", className="text-light mt-3 mb-2"),
+                    _render_frame(latest_bin_table, "No bin-level performance data available."),
+                ]
+            ),
             feature_options,
             selected_feature,
-            note_text,
+            html.Div(note_parts),
         )
 
     @app.callback(

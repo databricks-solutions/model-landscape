@@ -186,8 +186,12 @@ Expected tables:
 - `monitor_configs`
 - `drift_metrics`
 - `quality_metrics`
+- `quality_history`
 - `performance_metrics`
 - `incidents`
+- `incident_history`
+- `refresh_runs`
+- `comparison_windows`
 
 If you are testing Lakebase-backed reads, also verify:
 
@@ -256,6 +260,10 @@ Expected result:
 - success banner
 - refresh counts are non-zero
 - the monitor appears on the overview page
+- on the first refresh, Drift and Performance should already show historical windows rather than a single snapshot
+- on the first refresh, Data Quality should show window-history charts instead of only the latest summary row
+- with the scratch dataset and `Baseline Days = 7`, you should have 8 daily comparison windows immediately
+- the remaining historical hardening work is tracked in [Historical Backfill Plan](/Users/volo.vragov/Desktop/work/model-lens/docs/HISTORICAL_BACKFILL_PLAN.md)
 
 ## Step 7: Verify Persisted State In SQL
 
@@ -284,6 +292,30 @@ Expected:
 - `total_rows = 840`
 - `min_date = 2026-01-01`
 - `max_date = 2026-01-21`
+
+```sql
+SELECT model_key, COUNT(*) AS quality_windows
+FROM <control-plane-catalog>.<control-plane-schema>.quality_history
+WHERE model_key = 'fraud_model_demo'
+GROUP BY 1;
+```
+
+Expected:
+
+- one row
+- `quality_windows = 8`
+
+```sql
+SELECT model_key, COUNT(DISTINCT window_end) AS drift_windows
+FROM <control-plane-catalog>.<control-plane-schema>.drift_metrics
+WHERE model_key = 'fraud_model_demo'
+GROUP BY 1;
+```
+
+Expected:
+
+- one row
+- `drift_windows = 8`
 
 ```sql
 SELECT model_key, feature_name, metric_name, COUNT(*) AS row_count
@@ -323,6 +355,46 @@ Expected:
 - zero or more rows
 - with this dataset, at least one drift incident is likely
 
+```sql
+SELECT model_key, requested_mode, run_kind, status, window_count, data_min_date, data_max_date
+FROM <control-plane-catalog>.<control-plane-schema>.refresh_runs
+WHERE model_key = 'fraud_model_demo'
+ORDER BY started_at DESC
+LIMIT 5;
+```
+
+Expected:
+
+- at least one row
+- the first refresh is typically `requested_mode = 'auto'`
+- `run_kind` resolves to `backfill` on first run
+- `status = 'completed'`
+- `window_count = 8` for the scratch dataset with `Baseline Days = 7`
+
+```sql
+SELECT model_key, COUNT(*) AS comparison_windows
+FROM <control-plane-catalog>.<control-plane-schema>.comparison_windows
+WHERE model_key = 'fraud_model_demo'
+GROUP BY 1;
+```
+
+Expected:
+
+- one row
+- `comparison_windows = 8`
+
+```sql
+SELECT model_key, COUNT(*) AS incident_events
+FROM <control-plane-catalog>.<control-plane-schema>.incident_history
+WHERE model_key = 'fraud_model_demo'
+GROUP BY 1;
+```
+
+Expected:
+
+- zero or more rows
+- rows appear when drift crosses thresholds and also when a later window records recovery
+
 If Lakebase is configured for the current app session or refresh workflow, also verify:
 
 ```sql
@@ -343,7 +415,9 @@ Back in the app, verify:
 
 - the overview page shows a `Fraud Model Demo` card
 - the selected monitor can be opened on the drift, quality, and performance pages
+- the quality page shows `Rows Per Comparison Window`, `Null Rate Trends`, and `Prediction Mean Over Time`
 - the performance page still shows KPI cards, feature options, and charts even when recent performance deltas are near zero; in that case the page should show an informational stability message instead of appearing blank
+- open incidents still show on the overview/current inbox surfaces, while deeper incident lifecycle history is now persisted in the warehouse
 - `total_rows`, `latest_data_date`, and `last_refresh_at` are populated in app readback
 
 ## Step 9: Verify Workflow Refresh

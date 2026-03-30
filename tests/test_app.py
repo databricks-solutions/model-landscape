@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from types import SimpleNamespace
 
+import pandas as pd
 from dash.development.base_component import Component
 
 from model_lens import app as app_module
+from model_lens import callbacks as callbacks_module
 from model_lens.app import (
     _control_plane_ready,
     _feature_candidates,
@@ -22,6 +25,19 @@ RENDER_WIZARD_CALLBACK = (
     "...wizard-step-source.style...wizard-step-contract.style...wizard-step-review.style"
     "...wizard-back-btn.style...wizard-next-btn.style...wizard-next-btn.disabled...wizard-next-btn.children"
     "...save-monitor-btn.disabled...onboarding-review-summary.children.."
+)
+RENDER_DRIFT_CALLBACK = (
+    "..drift-heatmap-container.children...drift-categorical-note.children...drift-timeline-container.children"
+    "...drift-top-drifters-container.children.."
+)
+RENDER_PERFORMANCE_CALLBACK = (
+    "..perf-labels-alert.children...perf-kpi-cards.children...perf-timeline-container.children"
+    "...perf-contributors-container.children...perf-feature-select.options...perf-feature-select.value"
+    "...perf-date-range-note.children.."
+)
+RENDER_QUALITY_CALLBACK = (
+    "..quality-kpi-cards.children...quality-volume-container.children...quality-null-rates-container.children"
+    "...quality-prediction-container.children.."
 )
 
 
@@ -264,3 +280,129 @@ def test_render_onboarding_wizard_callback_executes_for_step_two() -> None:
     assert len(result) == 12
     assert result[3] == {}
     assert result[2] == {"display": "none"}
+
+
+def test_render_drift_callback_reports_when_only_one_window_exists(monkeypatch) -> None:
+    class _FakeBackend:
+        def get_monitor_config(self, model_id):
+            return SimpleNamespace(contract=SimpleNamespace(categorical_columns=("segment",)))
+
+        def get_drift_results(self, model_id, granularity="daily"):
+            return pd.DataFrame(
+                [
+                    {
+                        "feature": "amount",
+                        "period": "2026-01-21",
+                        "psi": 0.08,
+                        "js_divergence": 0.03,
+                        "kl_divergence": 0.02,
+                    }
+                ]
+            )
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    callback = app.callback_map[RENDER_DRIFT_CALLBACK]["callback"]
+    fn = getattr(callback, "__wrapped__", callback)
+
+    result = fn("/drift", "fraud_model_demo", "psi", "weekly", 10, 0, {})
+
+    assert "Only one weekly comparison window is available" in str(result[1])
+    assert "Categorical features are stored" in str(result[1])
+
+
+def test_render_performance_callback_surfaces_zero_delta_state(monkeypatch) -> None:
+    latest_bins = pd.DataFrame(
+        [
+            {
+                "feature": "amount",
+                "bin_label": "[0, 100)",
+                "baseline_metric": 0.84,
+                "current_metric": 0.84,
+                "delta": 0.0,
+                "current_volume_pct": 55.0,
+                "degradation_contribution": 0.0,
+                "window_start": "2026-01-14",
+                "window_end": "2026-01-21",
+            }
+        ]
+    )
+
+    class _FakeBackend:
+        def get_monitor_config(self, model_id):
+            return SimpleNamespace(contract=SimpleNamespace(label_col="label"))
+
+        def get_performance_summary(self, model_id, metric_name="f1"):
+            return {
+                "timeline": [{"period": "2026-01-21", "f1": 0.84}],
+                "contributors": pd.DataFrame([{"feature": "amount", "weighted_delta": 0.0}]),
+                "latest_bins": latest_bins,
+                "all_bins": latest_bins,
+                "has_significant_degradation": False,
+                "worst_weighted_delta": 0.0,
+            }
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    callback = app.callback_map[RENDER_PERFORMANCE_CALLBACK]["callback"]
+    fn = getattr(callback, "__wrapped__", callback)
+
+    result = fn("/performance", "fraud_model_demo", "f1", 0, {}, None)
+
+    assert "no significant degradation" in str(result[0]).lower()
+    assert "Latest Bin Metrics" in str(result[3])
+    assert "Only one comparison window is available" in str(result[6])
+
+
+def test_render_quality_callback_surfaces_history_and_latest_snapshot(monkeypatch) -> None:
+    class _FakeBackend:
+        def get_quality_stats(self, model_id):
+            return {
+                "total_rows": 840,
+                "min_date": "2026-01-01",
+                "max_date": "2026-01-21",
+                "prediction_mean": 0.44,
+                "prediction_std": 0.13,
+                "daily_volume": {"2026-01-21": 40},
+                "null_rates": {"amount": 0.0, "velocity_7d": 1.2},
+            }
+
+        def get_quality_history(self, model_id):
+            return pd.DataFrame(
+                [
+                    {
+                        "period": "2026-01-20",
+                        "row_count": 110,
+                        "prediction_mean": 0.42,
+                        "prediction_std": 0.12,
+                    },
+                    {
+                        "period": "2026-01-21",
+                        "row_count": 120,
+                        "prediction_mean": 0.44,
+                        "prediction_std": 0.13,
+                    },
+                ]
+            )
+
+        def get_null_rate_history(self, model_id):
+            return pd.DataFrame(
+                [
+                    {"period": "2026-01-20", "feature": "velocity_7d", "null_rate": 0.8},
+                    {"period": "2026-01-21", "feature": "velocity_7d", "null_rate": 1.2},
+                ]
+            )
+
+        def get_prediction_distribution(self, model_id):
+            return pd.Series([0.2, 0.4, 0.8], dtype=float)
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    callback = app.callback_map[RENDER_QUALITY_CALLBACK]["callback"]
+    fn = getattr(callback, "__wrapped__", callback)
+
+    result = fn("/quality", "fraud_model_demo", 0, {})
+
+    assert "Rows Per Comparison Window" in str(result[1])
+    assert "Null Rate Trends" in str(result[2])
+    assert "Prediction Mean Over Time" in str(result[3])

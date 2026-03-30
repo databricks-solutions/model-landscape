@@ -5,7 +5,12 @@ import pandas as pd
 from model_lens.domain.models import MonitorConfig
 from model_lens.services.contracts import build_contract
 from model_lens.services.onboarding import build_default_baseline, build_fixed_baseline
-from model_lens.workflows.refresh_job import refresh_monitor, split_baseline_current
+from model_lens.services.refresh_engine import (
+    generate_window_pairs,
+    refresh_monitor,
+    refresh_monitor_backfill,
+    split_baseline_current,
+)
 
 
 def test_split_baseline_current_uses_two_recent_adjacent_windows() -> None:
@@ -22,6 +27,80 @@ def test_split_baseline_current_uses_two_recent_adjacent_windows() -> None:
     assert baseline["event_ts"].max() < current["event_ts"].min()
     assert baseline["event_ts"].min().date().isoformat() == "2026-01-05"
     assert current["event_ts"].min().date().isoformat() == "2026-01-08"
+
+
+def test_generate_window_pairs_backfills_all_rolling_windows() -> None:
+    start = datetime(2026, 1, 1)
+    frame = pd.DataFrame({
+        "event_ts": [start + timedelta(days=index) for index in range(21)],
+        "model_id": ["m1"] * 21,
+        "prediction": [0.1 * index for index in range(21)],
+        "f1": [float(index) for index in range(21)],
+    })
+
+    pairs = generate_window_pairs(frame, "event_ts", build_default_baseline(7))
+
+    assert len(pairs) == 8
+    assert {key: pairs[0][2][key] for key in ("baseline_start", "baseline_end", "window_start", "window_end")} == {
+        "baseline_start": "2026-01-01",
+        "baseline_end": "2026-01-07",
+        "window_start": "2026-01-08",
+        "window_end": "2026-01-14",
+    }
+    assert pairs[0][2]["baseline_kind"] == "rolling"
+    assert pairs[0][2]["window_grain"] == "daily"
+    assert {key: pairs[-1][2][key] for key in ("baseline_start", "baseline_end", "window_start", "window_end")} == {
+        "baseline_start": "2026-01-08",
+        "baseline_end": "2026-01-14",
+        "window_start": "2026-01-15",
+        "window_end": "2026-01-21",
+    }
+
+
+def test_refresh_monitor_backfill_produces_all_window_rows() -> None:
+    start = datetime(2026, 1, 1)
+    rows = []
+    for day in range(21):
+        regime = 0 if day < 7 else 1 if day < 14 else 2
+        for offset in range(2):
+            rows.append({
+                "event_ts": start + timedelta(days=day, hours=offset),
+                "model_id": "m1",
+                "prediction": [0.15, 0.35, 0.55, 0.85][regime + offset if regime < 2 else 2 + offset],
+                "label": 0 if regime < 2 else 1,
+                "f1": float((day * 2) + offset + (regime * 5)),
+                "f2": float((day * 3) + offset + (regime * 7)),
+            })
+    frame = pd.DataFrame(rows)
+    contract = build_contract(
+        columns=list(frame.columns),
+        timestamp_col="event_ts",
+        model_id_col="model_id",
+        prediction_col="prediction",
+        label_col="label",
+        feature_columns=["f1", "f2"],
+    )
+
+    result = refresh_monitor_backfill(
+        MonitorConfig(
+            model_key="m1",
+            display_name="Model 1",
+            source_table="cat.sch.logs",
+            contract=contract,
+            baseline=build_default_baseline(),
+        ),
+        inference_df=frame,
+    )
+
+    assert len({row["window_end"] for row in result.drift_rows}) == 8
+    assert len(result.drift_rows) == 8 * 2 * 3
+    assert len({row["window_end"] for row in result.performance_rows}) == 8
+    assert len(result.window_rows) == 8
+    assert isinstance(result.incident_history_rows, list)
+    assert all(row["window_id"] for row in result.incident_history_rows)
+    assert result.window_rows[0]["window_id"].startswith("m1|rolling|2026-01-01|2026-01-07|2026-01-08|2026-01-14")
+    assert result.quality_rows[0]["max_date"] == "2026-01-21"
+    assert all(row["window_end"] == "2026-01-21" for row in result.incident_rows)
 
 
 def test_refresh_monitor_produces_deduplicated_incidents() -> None:
@@ -78,3 +157,34 @@ def test_split_baseline_current_supports_fixed_baseline_range() -> None:
     assert baseline["event_ts"].max().date().isoformat() == "2026-01-05"
     assert current["event_ts"].min().date().isoformat() == "2026-01-16"
     assert current["event_ts"].max().date().isoformat() == "2026-01-20"
+
+
+def test_generate_window_pairs_supports_fixed_baseline_history() -> None:
+    start = datetime(2026, 1, 1)
+    frame = pd.DataFrame({
+        "event_ts": [start + timedelta(days=index) for index in range(20)],
+        "model_id": ["m1"] * 20,
+        "prediction": [0.1 * index for index in range(20)],
+        "f1": [float(index) for index in range(20)],
+    })
+
+    pairs = generate_window_pairs(
+        frame,
+        "event_ts",
+        build_fixed_baseline("2026-01-01", "2026-01-05"),
+    )
+
+    assert len(pairs) == 11
+    assert {key: pairs[0][2][key] for key in ("baseline_start", "baseline_end", "window_start", "window_end")} == {
+        "baseline_start": "2026-01-01",
+        "baseline_end": "2026-01-05",
+        "window_start": "2026-01-06",
+        "window_end": "2026-01-10",
+    }
+    assert pairs[0][2]["baseline_kind"] == "fixed"
+    assert {key: pairs[-1][2][key] for key in ("baseline_start", "baseline_end", "window_start", "window_end")} == {
+        "baseline_start": "2026-01-01",
+        "baseline_end": "2026-01-05",
+        "window_start": "2026-01-16",
+        "window_end": "2026-01-20",
+    }

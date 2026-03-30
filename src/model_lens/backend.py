@@ -46,6 +46,10 @@ def _safe_series_min(series: pd.Series) -> float:
     return float(numeric.min())
 
 
+def _null_rate_dict(value: object) -> dict[str, float]:
+    return {key: float(parsed) for key, parsed in _safe_json_dict(value).items()}
+
+
 def _period_label(series: pd.Series, granularity: str) -> pd.Series:
     timestamps = pd.to_datetime(series, errors="coerce")
     if granularity == "monthly":
@@ -155,6 +159,8 @@ class DashboardBackend:
             return pd.DataFrame()
 
         working = frame.copy()
+        working["window_end_ts"] = pd.to_datetime(working["window_end"], errors="coerce")
+        working["computed_at_ts"] = pd.to_datetime(working["computed_at"], errors="coerce")
         working["period"] = _period_label(working["window_end"], granularity)
         metrics = (
             working.pivot_table(
@@ -165,24 +171,45 @@ class DashboardBackend:
             )
             .reset_index()
         )
-        static = (
-            working.groupby(["feature_name", "period"], as_index=False)
+        window_level = working.drop_duplicates(
+            subset=[
+                "feature_name",
+                "period",
+                "baseline_start",
+                "baseline_end",
+                "window_start",
+                "window_end",
+            ]
+        )
+        latest_static = (
+            window_level.sort_values(["feature_name", "period", "window_end_ts", "computed_at_ts"])
+            .drop_duplicates(subset=["feature_name", "period"], keep="last")
+            [
+                [
+                    "feature_name",
+                    "period",
+                    "window_start",
+                    "window_end",
+                    "baseline_start",
+                    "baseline_end",
+                    "ref_mean",
+                    "cur_mean",
+                    "ref_std",
+                    "cur_std",
+                    "ref_null_pct",
+                    "cur_null_pct",
+                    "computed_at",
+                ]
+            ]
+        )
+        aggregated_counts = (
+            window_level.groupby(["feature_name", "period"], as_index=False)
             .agg(
-                window_start=("window_start", "max"),
-                window_end=("window_end", "max"),
-                baseline_start=("baseline_start", "max"),
-                baseline_end=("baseline_end", "max"),
-                ref_mean=("ref_mean", "max"),
-                cur_mean=("cur_mean", "max"),
-                ref_std=("ref_std", "max"),
-                cur_std=("cur_std", "max"),
-                ref_null_pct=("ref_null_pct", "max"),
-                cur_null_pct=("cur_null_pct", "max"),
-                ref_count=("ref_count", "max"),
-                cur_count=("cur_count", "max"),
-                computed_at=("computed_at", "max"),
+                ref_count=("ref_count", "sum"),
+                cur_count=("cur_count", "sum"),
             )
         )
+        static = latest_static.merge(aggregated_counts, on=["feature_name", "period"], how="left")
         result = static.merge(metrics, on=["feature_name", "period"], how="left").rename(columns={"feature_name": "feature"})
         for metric in ("psi", "js_divergence", "kl_divergence"):
             if metric not in result.columns:
@@ -217,9 +244,59 @@ class DashboardBackend:
             "prediction_mean": _safe_float(row.get("prediction_mean")),
             "prediction_std": _safe_float(row.get("prediction_std")),
             "daily_volume": _safe_json_dict(row.get("daily_volume")),
-            "null_rates": {key: float(value) for key, value in _safe_json_dict(row.get("null_rates")).items()},
+            "null_rates": _null_rate_dict(row.get("null_rates")),
             "computed_at": str(row.get("computed_at") or ""),
         }
+
+    def get_quality_history(self, model_id: str) -> pd.DataFrame:
+        frame = self._warehouse.query_params(
+            f"""
+            SELECT *
+            FROM {self.repository.table_names.quality_history}
+            WHERE model_key = %s
+            ORDER BY window_end
+            """,
+            (model_id,),
+        )
+        if frame.empty:
+            return pd.DataFrame()
+        working = frame.copy()
+        working["window_end_ts"] = pd.to_datetime(working["window_end"], errors="coerce")
+        working["period"] = working["window_end_ts"].dt.date.astype(str)
+        working["row_count"] = pd.to_numeric(working["row_count"], errors="coerce").fillna(0).astype(int)
+        working["prediction_mean"] = pd.to_numeric(working["prediction_mean"], errors="coerce").fillna(0.0)
+        working["prediction_std"] = pd.to_numeric(working["prediction_std"], errors="coerce").fillna(0.0)
+        working["null_rates_dict"] = working["null_rates"].apply(_null_rate_dict)
+        working["max_null_rate"] = working["null_rates_dict"].apply(
+            lambda values: max(values.values()) if values else 0.0
+        )
+        return working.sort_values("window_end_ts").reset_index(drop=True)
+
+    def get_null_rate_history(self, model_id: str, top_n: int = 5) -> pd.DataFrame:
+        history = self.get_quality_history(model_id)
+        if history.empty:
+            return pd.DataFrame()
+        exploded_rows: list[dict] = []
+        for _, row in history.iterrows():
+            rates = row.get("null_rates_dict") or {}
+            for feature, null_rate in rates.items():
+                exploded_rows.append({
+                    "period": row["period"],
+                    "feature": feature,
+                    "null_rate": float(null_rate),
+                    "window_end": row.get("window_end"),
+                })
+        if not exploded_rows:
+            return pd.DataFrame()
+        frame = pd.DataFrame(exploded_rows)
+        top_features = (
+            frame.groupby("feature", as_index=False)["null_rate"]
+            .max()
+            .sort_values("null_rate", ascending=False)
+            .head(top_n)["feature"]
+            .tolist()
+        )
+        return frame[frame["feature"].isin(top_features)].sort_values(["period", "feature"]).reset_index(drop=True)
 
     def get_overview_rows(self, metric: str = "psi") -> list[dict]:
         rows: list[dict] = []

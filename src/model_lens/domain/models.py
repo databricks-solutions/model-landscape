@@ -164,3 +164,6 @@ class RefreshResult:
     quality_rows: list[dict[str, Any]]
     performance_rows: list[dict[str, Any]]
     incident_rows: list[dict[str, Any]]
+    incident_history_rows: list[dict[str, Any]] = field(default_factory=list)
+    quality_history_rows: list[dict[str, Any]] = field(default_factory=list)
+    window_rows: list[dict[str, Any]] = field(default_factory=list)

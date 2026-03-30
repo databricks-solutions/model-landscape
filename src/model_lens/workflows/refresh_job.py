@@ -22,6 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lakebase-password", required=False, default="")
     parser.add_argument("--lakebase-sslmode", required=False, default="require")
     parser.add_argument("--lakebase-schema", required=False, default="")
+    parser.add_argument("--mode", choices=["auto", "backfill", "incremental"], default="auto")
     return parser.parse_args()
 
 
@@ -41,10 +42,10 @@ def main() -> int:
         lakebase_sslmode=args.lakebase_sslmode or None,
         lakebase_schema=args.lakebase_schema or None,
     )
-    counts = run_refresh_cycle(repository, model_key=args.model_key)
+    counts = run_refresh_cycle(repository, model_key=args.model_key, mode=args.mode)
     print(
         "refresh-control-plane complete: "
-        f"models={counts.models} drift_rows={counts.drift_rows} "
+        f"mode={args.mode} models={counts.models} drift_rows={counts.drift_rows} "
         f"quality_rows={counts.quality_rows} performance_rows={counts.performance_rows} "
         f"incident_rows={counts.incident_rows}"
     )

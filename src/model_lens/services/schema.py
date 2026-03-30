@@ -91,6 +91,21 @@ def ddl(table_names: TableNames) -> dict[str, str]:
                 computed_at TIMESTAMP
             ) USING DELTA
         """.strip(),
+        "quality_history": f"""
+            CREATE TABLE IF NOT EXISTS {table_names.quality_history} (
+                model_key STRING,
+                window_id STRING,
+                window_start DATE,
+                window_end DATE,
+                baseline_start DATE,
+                baseline_end DATE,
+                row_count BIGINT,
+                prediction_mean DOUBLE,
+                prediction_std DOUBLE,
+                null_rates STRING,
+                computed_at TIMESTAMP
+            ) USING DELTA
+        """.strip(),
         "performance_metrics": f"""
             CREATE TABLE IF NOT EXISTS {table_names.performance_metrics} (
                 model_key STRING,
@@ -117,6 +132,56 @@ def ddl(table_names: TableNames) -> dict[str, str]:
                 metric_value DOUBLE,
                 window_end DATE,
                 observed_at TIMESTAMP
+            ) USING DELTA
+        """.strip(),
+        "incident_history": f"""
+            CREATE TABLE IF NOT EXISTS {table_names.incident_history} (
+                model_key STRING,
+                feature_name STRING,
+                metric_name STRING,
+                event_type STRING,
+                severity STRING,
+                status STRING,
+                metric_value DOUBLE,
+                window_id STRING,
+                window_start DATE,
+                window_end DATE,
+                baseline_start DATE,
+                baseline_end DATE,
+                observed_at TIMESTAMP
+            ) USING DELTA
+        """.strip(),
+        "refresh_runs": f"""
+            CREATE TABLE IF NOT EXISTS {table_names.refresh_runs} (
+                run_id STRING,
+                model_key STRING,
+                requested_mode STRING,
+                run_kind STRING,
+                status STRING,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP,
+                window_count INT,
+                data_min_date DATE,
+                data_max_date DATE,
+                drift_row_count BIGINT,
+                quality_row_count BIGINT,
+                performance_row_count BIGINT,
+                incident_row_count BIGINT,
+                error_message STRING
+            ) USING DELTA
+        """.strip(),
+        "comparison_windows": f"""
+            CREATE TABLE IF NOT EXISTS {table_names.comparison_windows} (
+                window_id STRING,
+                model_key STRING,
+                window_grain STRING,
+                window_start DATE,
+                window_end DATE,
+                baseline_start DATE,
+                baseline_end DATE,
+                baseline_kind STRING,
+                created_at TIMESTAMP,
+                source_run_id STRING
             ) USING DELTA
         """.strip(),
     }

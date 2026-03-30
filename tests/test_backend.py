@@ -17,6 +17,42 @@ class _FakeWarehouse:
                     {
                         "feature_name": "amount",
                         "metric_name": "psi",
+                        "metric_value": 0.12,
+                        "window_start": "2026-01-13",
+                        "window_end": "2026-01-20",
+                        "baseline_start": "2026-01-06",
+                        "baseline_end": "2026-01-12",
+                        "ref_mean": 8.0,
+                        "cur_mean": 18.0,
+                        "ref_std": 0.8,
+                        "cur_std": 1.8,
+                        "ref_null_pct": 0.0,
+                        "cur_null_pct": 0.4,
+                        "ref_count": 90,
+                        "cur_count": 110,
+                        "computed_at": "2026-01-20T10:00:00",
+                    },
+                    {
+                        "feature_name": "amount",
+                        "metric_name": "js_divergence",
+                        "metric_value": 0.07,
+                        "window_start": "2026-01-13",
+                        "window_end": "2026-01-20",
+                        "baseline_start": "2026-01-06",
+                        "baseline_end": "2026-01-12",
+                        "ref_mean": 8.0,
+                        "cur_mean": 18.0,
+                        "ref_std": 0.8,
+                        "cur_std": 1.8,
+                        "ref_null_pct": 0.0,
+                        "cur_null_pct": 0.4,
+                        "ref_count": 90,
+                        "cur_count": 110,
+                        "computed_at": "2026-01-20T10:00:00",
+                    },
+                    {
+                        "feature_name": "amount",
+                        "metric_name": "psi",
                         "metric_value": 0.21,
                         "window_start": "2026-01-14",
                         "window_end": "2026-01-21",
@@ -68,9 +104,68 @@ class _FakeWarehouse:
                     }
                 ]
             )
+        if "FROM quality_history" in sql:
+            return pd.DataFrame(
+                [
+                    {
+                        "model_key": model_key,
+                        "window_id": "rolling|2026-01-06|2026-01-12|2026-01-13|2026-01-20",
+                        "window_start": "2026-01-13",
+                        "window_end": "2026-01-20",
+                        "baseline_start": "2026-01-06",
+                        "baseline_end": "2026-01-12",
+                        "row_count": 110,
+                        "prediction_mean": 0.42,
+                        "prediction_std": 0.12,
+                        "null_rates": '{"amount": 0.0, "velocity_7d": 0.8}',
+                        "computed_at": "2026-01-20T10:00:00",
+                    },
+                    {
+                        "model_key": model_key,
+                        "window_id": "rolling|2026-01-07|2026-01-13|2026-01-14|2026-01-21",
+                        "window_start": "2026-01-14",
+                        "window_end": "2026-01-21",
+                        "baseline_start": "2026-01-07",
+                        "baseline_end": "2026-01-13",
+                        "row_count": 120,
+                        "prediction_mean": 0.44,
+                        "prediction_std": 0.13,
+                        "null_rates": '{"amount": 0.0, "velocity_7d": 1.2}',
+                        "computed_at": "2026-01-21T10:00:00",
+                    },
+                ]
+            )
         if "FROM performance_metrics" in sql:
             return pd.DataFrame(
                 [
+                    {
+                        "model_key": model_key,
+                        "feature_name": "amount",
+                        "bin_label": "[0, 100)",
+                        "baseline_metric": 0.84,
+                        "current_metric": 0.84,
+                        "delta": 0.0,
+                        "volume_pct": 55.0,
+                        "contribution": 0.0,
+                        "metric_name": "f1",
+                        "window_start": "2026-01-13",
+                        "window_end": "2026-01-20",
+                        "computed_at": "2026-01-20T10:00:00",
+                    },
+                    {
+                        "model_key": model_key,
+                        "feature_name": "velocity_7d",
+                        "bin_label": "[0, 5)",
+                        "baseline_metric": 0.78,
+                        "current_metric": 0.78,
+                        "delta": 0.0,
+                        "volume_pct": 45.0,
+                        "contribution": 0.0,
+                        "metric_name": "f1",
+                        "window_start": "2026-01-13",
+                        "window_end": "2026-01-20",
+                        "computed_at": "2026-01-20T10:00:00",
+                    },
                     {
                         "model_key": model_key,
                         "feature_name": "amount",
@@ -129,6 +224,7 @@ def _make_backend() -> DashboardBackend:
         table_names=SimpleNamespace(
             drift_metrics="drift_metrics",
             quality_metrics="quality_metrics",
+            quality_history="quality_history",
             performance_metrics="performance_metrics",
         ),
         list_monitor_configs=lambda status="active": [config],
@@ -182,11 +278,25 @@ def test_get_drift_results_pivots_long_metrics_into_feature_period_rows() -> Non
 
     drift = backend.get_drift_results("fraud_model_demo", granularity="daily")
 
+    assert list(drift["feature"]) == ["amount", "amount"]
+    assert list(drift["period"]) == ["2026-01-20", "2026-01-21"]
+    assert drift.iloc[1]["psi"] == 0.21
+    assert drift.iloc[1]["js_divergence"] == 0.11
+    assert drift.iloc[1]["kl_divergence"] == 0.0
+
+
+def test_get_drift_results_aggregates_weekly_history_with_latest_overlay_and_summed_counts() -> None:
+    backend = _make_backend()
+
+    drift = backend.get_drift_results("fraud_model_demo", granularity="weekly")
+
     assert list(drift["feature"]) == ["amount"]
-    assert list(drift["period"]) == ["2026-01-21"]
     assert drift.iloc[0]["psi"] == 0.21
     assert drift.iloc[0]["js_divergence"] == 0.11
-    assert drift.iloc[0]["kl_divergence"] == 0.0
+    assert drift.iloc[0]["window_end"] == "2026-01-21"
+    assert drift.iloc[0]["ref_mean"] == 10.0
+    assert drift.iloc[0]["ref_count"] == 190
+    assert drift.iloc[0]["cur_count"] == 230
 
 
 def test_get_quality_stats_parses_json_payloads() -> None:
@@ -199,14 +309,36 @@ def test_get_quality_stats_parses_json_payloads() -> None:
     assert quality["null_rates"] == {"amount": 0.0, "velocity_7d": 1.2}
 
 
+def test_get_quality_history_returns_windowed_rows_with_null_rate_metadata() -> None:
+    backend = _make_backend()
+
+    history = backend.get_quality_history("fraud_model_demo")
+
+    assert list(history["period"]) == ["2026-01-20", "2026-01-21"]
+    assert list(history["row_count"]) == [110, 120]
+    assert history.iloc[1]["null_rates_dict"] == {"amount": 0.0, "velocity_7d": 1.2}
+    assert history.iloc[1]["max_null_rate"] == 1.2
+
+
+def test_get_null_rate_history_explodes_top_features_over_time() -> None:
+    backend = _make_backend()
+
+    history = backend.get_null_rate_history("fraud_model_demo")
+
+    assert set(history["feature"]) == {"amount", "velocity_7d"}
+    assert list(history["period"].unique()) == ["2026-01-20", "2026-01-21"]
+    assert history[history["feature"] == "velocity_7d"]["null_rate"].tolist() == [0.8, 1.2]
+
+
 def test_get_performance_summary_keeps_zero_delta_rows_visible() -> None:
     backend = _make_backend()
 
     performance = backend.get_performance_summary("fraud_model_demo", metric_name="f1")
 
     assert performance["timeline"]
+    assert len(performance["timeline"]) == 2
     assert len(performance["latest_bins"]) == 2
-    assert len(performance["all_bins"]) == 2
+    assert len(performance["all_bins"]) == 4
     assert set(performance["contributors"]["feature"]) == {"amount", "velocity_7d"}
     assert performance["has_significant_degradation"] is False
     assert performance["worst_weighted_delta"] == 0.0

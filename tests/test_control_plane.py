@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
-from model_lens.domain.models import MLflowLineage, MonitorConfig
+from model_lens.domain.models import MLflowLineage, MonitorConfig, RefreshResult
 from model_lens.services.contracts import build_contract
 from model_lens.services.control_plane import ControlPlaneRepository
 from model_lens.services.onboarding import build_default_baseline, build_fixed_baseline
@@ -23,6 +23,8 @@ class FakeWarehouse:
         self.distinct_model_ids = 2
         self.duplicate_label_keys = 0
         self.alter_field_already_exists = False
+        self.comparison_window_rows: list[dict[str, object]] = []
+        self.drift_window_rows: list[dict[str, object]] = []
         self.monitor_row = {
             "model_key": "payments_risk_v1",
             "display_name": "Payments Risk",
@@ -149,6 +151,21 @@ class FakeWarehouse:
 
     def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
         self.query_param_calls.append((sql, params))
+        if "FROM model_observability.control_plane.comparison_windows" in sql:
+            return pd.DataFrame(self.comparison_window_rows)
+        if "FROM model_observability.control_plane.incidents" in sql and "status = 'open'" in sql:
+            return pd.DataFrame([{
+                "model_key": params[0],
+                "feature_name": "amount",
+                "metric_name": "psi",
+                "severity": "critical",
+                "status": "open",
+                "metric_value": 0.34,
+                "window_end": "2026-01-20",
+                "observed_at": "2026-01-20T12:00:00+00:00",
+            }])
+        if "FROM model_observability.control_plane.drift_metrics" in sql and "SELECT DISTINCT" in sql:
+            return pd.DataFrame(self.drift_window_rows)
         if "SELECT * FROM" in sql and "monitor_configs" in sql:
             return pd.DataFrame([self.monitor_row])
         return pd.DataFrame([
@@ -361,10 +378,76 @@ def test_ensure_control_plane_ignores_field_already_exists_during_migration() ->
     assert any("CREATE TABLE IF NOT EXISTS" in sql for sql in warehouse.executed)
 
 
+def test_get_existing_window_keys_falls_back_to_drift_metrics_when_comparison_windows_are_empty() -> None:
+    warehouse = FakeWarehouse()
+    warehouse.drift_window_rows = [{
+        "baseline_start": "2026-01-01",
+        "baseline_end": "2026-01-07",
+        "window_start": "2026-01-08",
+        "window_end": "2026-01-14",
+    }]
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    keys = repository.get_existing_window_keys("payments_risk_v1")
+
+    assert keys == {("2026-01-01", "2026-01-07", "2026-01-08", "2026-01-14")}
+
+
+def test_get_current_incident_state_reads_open_incidents_for_model() -> None:
+    warehouse = FakeWarehouse()
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    state = repository.get_current_incident_state("payments_risk_v1")
+
+    assert state[("payments_risk_v1", "amount", "psi")]["severity"] == "critical"
+    assert state[("payments_risk_v1", "amount", "psi")]["status"] == "open"
+
+
+def test_append_refresh_result_replaces_window_scoped_incident_history_rows() -> None:
+    warehouse = FakeWarehouse()
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    repository.append_refresh_result(
+        "payments_risk_v1",
+        RefreshResult(
+            drift_rows=[],
+            quality_rows=[],
+            performance_rows=[],
+            incident_rows=[],
+            incident_history_rows=[
+                {
+                    "model_key": "payments_risk_v1",
+                    "feature_name": "amount",
+                    "metric_name": "psi",
+                    "event_type": "opened",
+                    "severity": "warning",
+                    "status": "open",
+                    "metric_value": 0.12,
+                    "window_id": "window-1",
+                    "window_start": "2026-01-08",
+                    "window_end": "2026-01-14",
+                    "baseline_start": "2026-01-01",
+                    "baseline_end": "2026-01-07",
+                    "observed_at": "2026-01-14T00:00:00+00:00",
+                }
+            ],
+            quality_history_rows=[],
+            window_rows=[],
+        ),
+        source_run_id="run-1",
+    )
+
+    assert any("DELETE FROM model_observability.control_plane.incident_history" in sql for sql, _ in warehouse.executed_params)
+    assert any("INSERT INTO model_observability.control_plane.incident_history" in sql for sql, _ in warehouse.batch_calls)
+
+
 class StubRepository:
     def __init__(self) -> None:
         self.config = _monitor_config(days=7)
         self.replaced: list[str] = []
+        self.appended: list[str] = []
+        self.started_runs: list[dict[str, str | None]] = []
+        self.completed_runs: list[dict[str, str | int]] = []
 
     def ensure_control_plane(self) -> None:
         return None
@@ -386,9 +469,46 @@ class StubRepository:
             "segment": [float(index % 2) for index in range(5)],
         })
 
-    def replace_refresh_result(self, model_key: str, result) -> None:
+    def get_existing_window_keys(self, model_key: str) -> set[tuple[str, str, str, str]]:
+        assert model_key == self.config.model_key
+        return set()
+
+    def get_current_incident_state(self, model_key: str) -> dict[tuple[str, str, str], dict[str, object]]:
+        assert model_key == self.config.model_key
+        return {}
+
+    def start_refresh_run(
+        self,
+        *,
+        model_key: str,
+        requested_mode: str,
+        run_kind: str,
+        data_min_date: str | None = None,
+        data_max_date: str | None = None,
+    ) -> str:
+        self.started_runs.append({
+            "model_key": model_key,
+            "requested_mode": requested_mode,
+            "run_kind": run_kind,
+            "data_min_date": data_min_date,
+            "data_max_date": data_max_date,
+        })
+        return f"run-{len(self.started_runs)}"
+
+    def complete_refresh_run(self, run_id: str, **kwargs) -> None:
+        payload = {"run_id": run_id}
+        payload.update(kwargs)
+        self.completed_runs.append(payload)
+
+    def replace_all_refresh_results(self, model_key: str, result, source_run_id: str | None = None) -> None:
         del result
+        del source_run_id
         self.replaced.append(model_key)
+
+    def append_refresh_result(self, model_key: str, result, source_run_id: str | None = None) -> None:
+        del result
+        del source_run_id
+        self.appended.append(model_key)
 
 
 def test_run_refresh_cycle_skips_replacing_results_when_not_enough_data() -> None:
@@ -402,6 +522,77 @@ def test_run_refresh_cycle_skips_replacing_results_when_not_enough_data() -> Non
     assert counts.performance_rows == 0
     assert counts.incident_rows == 0
     assert repository.replaced == []
+    assert repository.appended == []
+    assert repository.started_runs[0]["run_kind"] == "skipped"
+    assert repository.completed_runs[0]["status"] == "skipped"
+
+
+class MultiWindowRepository(StubRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.existing_window_keys: set[tuple[str, str, str, str]] = set()
+
+    def load_monitor_frame(self, config: MonitorConfig) -> pd.DataFrame:
+        assert config.model_key == self.config.model_key
+        start = datetime(2026, 1, 1)
+        rows: list[dict[str, object]] = []
+        for day in range(21):
+            regime = 0 if day < 7 else 1 if day < 14 else 2
+            for offset in range(2):
+                rows.append({
+                    "event_ts": start + timedelta(days=day, hours=offset),
+                    "model_id": "m1",
+                    "prediction": [0.15, 0.35, 0.55, 0.85][regime + offset if regime < 2 else 2 + offset],
+                    "label": 0 if regime < 2 else 1,
+                    "entity_id": f"entity-{day}-{offset}",
+                    "amount": float((day * 2) + offset + (regime * 4)),
+                    "segment": float(offset),
+                })
+        return pd.DataFrame(rows)
+
+    def get_existing_window_keys(self, model_key: str) -> set[tuple[str, str, str, str]]:
+        assert model_key == self.config.model_key
+        return set(self.existing_window_keys)
+
+
+def test_run_refresh_cycle_auto_backfills_when_no_existing_windows() -> None:
+    repository = MultiWindowRepository()
+
+    counts = run_refresh_cycle(repository, mode="auto")
+
+    assert counts.models == 1
+    assert counts.drift_rows == 8 * 2 * 3
+    assert counts.quality_rows == 1
+    assert counts.performance_rows > 0
+    assert repository.replaced == [repository.config.model_key]
+    assert repository.appended == []
+    assert repository.started_runs[0]["run_kind"] == "backfill"
+    assert repository.completed_runs[0]["status"] == "completed"
+    assert repository.completed_runs[0]["window_count"] == 8
+
+
+def test_run_refresh_cycle_auto_appends_only_new_windows_when_history_exists() -> None:
+    repository = MultiWindowRepository()
+    repository.existing_window_keys = {
+        ("2026-01-01", "2026-01-07", "2026-01-08", "2026-01-14"),
+        ("2026-01-02", "2026-01-08", "2026-01-09", "2026-01-15"),
+        ("2026-01-03", "2026-01-09", "2026-01-10", "2026-01-16"),
+        ("2026-01-04", "2026-01-10", "2026-01-11", "2026-01-17"),
+        ("2026-01-05", "2026-01-11", "2026-01-12", "2026-01-18"),
+        ("2026-01-06", "2026-01-12", "2026-01-13", "2026-01-19"),
+        ("2026-01-07", "2026-01-13", "2026-01-14", "2026-01-20"),
+    }
+
+    counts = run_refresh_cycle(repository, mode="auto")
+
+    assert counts.models == 1
+    assert counts.drift_rows == 2 * 3
+    assert counts.quality_rows == 1
+    assert repository.replaced == []
+    assert repository.appended == [repository.config.model_key]
+    assert repository.started_runs[0]["run_kind"] == "incremental"
+    assert repository.completed_runs[0]["status"] == "completed"
+    assert repository.completed_runs[0]["window_count"] == 1
 
 
 class FakeReadModel:

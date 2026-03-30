@@ -25,6 +25,10 @@ class TableNames:
         return f"{self.namespace}.quality_metrics"
 
     @property
+    def quality_history(self) -> str:
+        return f"{self.namespace}.quality_history"
+
+    @property
     def performance_metrics(self) -> str:
         return f"{self.namespace}.performance_metrics"
 
@@ -32,3 +36,14 @@ class TableNames:
     def incidents(self) -> str:
         return f"{self.namespace}.incidents"
 
+    @property
+    def incident_history(self) -> str:
+        return f"{self.namespace}.incident_history"
+
+    @property
+    def refresh_runs(self) -> str:
+        return f"{self.namespace}.refresh_runs"
+
+    @property
+    def comparison_windows(self) -> str:
+        return f"{self.namespace}.comparison_windows"

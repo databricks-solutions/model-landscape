@@ -64,7 +64,12 @@ def build_drift_timeline(df: pd.DataFrame, features: list[str], metric: str = "p
 
     fig = go.Figure()
     colors = px.colors.qualitative.Set2
-    for index, feature in enumerate(features[:8]):
+    selected_features = [feature for feature in features if feature in set(df["feature"].astype(str))][:8]
+    if not selected_features:
+        selected_features = df["feature"].dropna().astype(str).drop_duplicates().tolist()[:8]
+    period_count = int(df["period"].nunique()) if "period" in df.columns else 0
+
+    for index, feature in enumerate(selected_features):
         feature_frame = df[df["feature"] == feature].sort_values("period")
         if feature_frame.empty:
             continue
@@ -74,9 +79,9 @@ def build_drift_timeline(df: pd.DataFrame, features: list[str], metric: str = "p
                 x=feature_frame["period"].astype(str),
                 y=feature_frame[metric],
                 name=short_name,
-                mode="lines+markers",
+                mode="markers" if int(feature_frame["period"].nunique()) < 2 else "lines+markers",
                 line=dict(color=colors[index % len(colors)], width=2),
-                marker=dict(size=5),
+                marker=dict(size=8 if period_count < 2 else 5),
             )
         )
 
@@ -95,6 +100,20 @@ def build_drift_timeline(df: pd.DataFrame, features: list[str], metric: str = "p
                 line_color=COLORS["high"],
                 annotation_text="Critical",
             )
+
+    if not fig.data:
+        fig.add_annotation(text="No feature timeline data available yet", showarrow=False)
+    elif period_count < 2:
+        fig.add_annotation(
+            text="Only one comparison window is available. Run more refreshes to see trends over time.",
+            xref="paper",
+            yref="paper",
+            x=0,
+            y=1.08,
+            xanchor="left",
+            showarrow=False,
+            font=dict(size=12, color=COLORS["muted"]),
+        )
 
     return _apply_layout(
         fig,
@@ -176,10 +195,46 @@ def build_feature_distribution(reference, current, feature_name: str, n_bins: in
 
 
 def build_volume_timeline(daily_volume: dict[str, int]):
+    if not daily_volume:
+        fig = go.Figure()
+        fig.add_annotation(text="No daily volume data available", showarrow=False)
+        return _apply_layout(fig, title="Daily Inference Volume", height=300)
     dates = sorted(daily_volume.keys())
     volumes = [daily_volume[date] for date in dates]
     fig = go.Figure(go.Bar(x=[str(date) for date in dates], y=volumes, marker_color=COLORS["accent"]))
     return _apply_layout(fig, title="Daily Inference Volume", xaxis_title="Date", yaxis_title="Transaction Count", height=300)
+
+
+def build_quality_window_timeline(history_df: pd.DataFrame):
+    if history_df.empty:
+        fig = go.Figure()
+        fig.add_annotation(text="No quality history available", showarrow=False)
+        return _apply_layout(fig, title="Window Row Count")
+
+    fig = go.Figure(
+        go.Scatter(
+            x=history_df["period"].astype(str),
+            y=history_df["row_count"],
+            mode="markers" if len(history_df) < 2 else "lines+markers",
+            line=dict(color=COLORS["cyan"], width=3),
+            marker=dict(size=10 if len(history_df) < 2 else 7),
+            name="Rows",
+            fill="tozeroy",
+            fillcolor="rgba(41,128,185,0.10)",
+        )
+    )
+    if len(history_df) < 2:
+        fig.add_annotation(
+            text="Only one comparison window is available so far.",
+            xref="paper",
+            yref="paper",
+            x=0,
+            y=1.08,
+            xanchor="left",
+            showarrow=False,
+            font=dict(size=12, color=COLORS["muted"]),
+        )
+    return _apply_layout(fig, title="Rows Per Comparison Window", xaxis_title="Window End", yaxis_title="Rows", height=300)
 
 
 def build_null_rate_chart(null_rates: dict[str, float]):
@@ -211,6 +266,97 @@ def build_null_rate_chart(null_rates: dict[str, float]):
         yaxis=dict(autorange="reversed", gridcolor=COLORS["grid"]),
         height=max(300, len(features) * 30 + 80),
     )
+
+
+def build_null_rate_timeline(history_df: pd.DataFrame):
+    if history_df.empty:
+        fig = go.Figure()
+        fig.add_annotation(text="No null-rate history available", showarrow=False)
+        return _apply_layout(fig, title="Null Rate Trends")
+
+    fig = go.Figure()
+    colors = px.colors.qualitative.Set2
+    for index, feature in enumerate(history_df["feature"].dropna().astype(str).drop_duplicates().tolist()):
+        feature_frame = history_df[history_df["feature"] == feature].sort_values("period")
+        fig.add_trace(
+            go.Scatter(
+                x=feature_frame["period"].astype(str),
+                y=feature_frame["null_rate"],
+                mode="markers" if len(feature_frame) < 2 else "lines+markers",
+                name=feature,
+                line=dict(color=colors[index % len(colors)], width=2),
+                marker=dict(size=9 if len(feature_frame) < 2 else 6),
+            )
+        )
+    if len(history_df["period"].dropna().astype(str).unique()) < 2:
+        fig.add_annotation(
+            text="Only one comparison window is available so far.",
+            xref="paper",
+            yref="paper",
+            x=0,
+            y=1.08,
+            xanchor="left",
+            showarrow=False,
+            font=dict(size=12, color=COLORS["muted"]),
+        )
+    return _apply_layout(fig, title="Null Rate Trends", xaxis_title="Window End", yaxis_title="Null Rate (%)", height=320)
+
+
+def build_prediction_quality_timeline(history_df: pd.DataFrame):
+    if history_df.empty:
+        fig = go.Figure()
+        fig.add_annotation(text="No prediction-history data available", showarrow=False)
+        return _apply_layout(fig, title="Prediction Mean Over Time")
+
+    frame = history_df.sort_values("period").copy()
+    lower = frame["prediction_mean"] - frame["prediction_std"].fillna(0.0)
+    upper = frame["prediction_mean"] + frame["prediction_std"].fillna(0.0)
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=frame["period"].astype(str),
+            y=upper,
+            mode="lines",
+            line=dict(width=0),
+            showlegend=False,
+            hoverinfo="skip",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=frame["period"].astype(str),
+            y=lower,
+            mode="lines",
+            line=dict(width=0),
+            fill="tonexty",
+            fillcolor="rgba(26,188,156,0.12)",
+            name="std band",
+            hoverinfo="skip",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=frame["period"].astype(str),
+            y=frame["prediction_mean"],
+            mode="markers" if len(frame) < 2 else "lines+markers",
+            line=dict(color=COLORS["accent"], width=3),
+            marker=dict(size=10 if len(frame) < 2 else 7),
+            name="prediction mean",
+        )
+    )
+    if len(frame) < 2:
+        fig.add_annotation(
+            text="Only one comparison window is available so far.",
+            xref="paper",
+            yref="paper",
+            x=0,
+            y=1.08,
+            xanchor="left",
+            showarrow=False,
+            font=dict(size=12, color=COLORS["muted"]),
+        )
+    return _apply_layout(fig, title="Prediction Mean Over Time", xaxis_title="Window End", yaxis_title="Prediction Mean", height=320)
 
 
 def build_multi_model_summary(model_drift_data: list[dict]):
@@ -285,14 +431,25 @@ def build_performance_timeline(metrics_over_time: list[dict], metric_name: str =
         go.Scatter(
             x=frame["period"].astype(str),
             y=frame[metric_name],
-            mode="lines+markers",
+            mode="markers" if len(frame) < 2 else "lines+markers",
             line=dict(color=COLORS["cyan"], width=3),
-            marker=dict(size=8),
+            marker=dict(size=10 if len(frame) < 2 else 8),
             name=metric_name.upper(),
             fill="tozeroy",
             fillcolor="rgba(26,188,156,0.1)",
         )
     )
+    if len(frame) < 2:
+        fig.add_annotation(
+            text="Only one comparison window is available. Run more refreshes to see trends over time.",
+            xref="paper",
+            yref="paper",
+            x=0,
+            y=1.08,
+            xanchor="left",
+            showarrow=False,
+            font=dict(size=12, color=COLORS["muted"]),
+        )
     return _apply_layout(fig, title=f"{metric_name.upper()} Over Time", xaxis_title="Period", yaxis_title=metric_name.upper(), height=350)
 
 

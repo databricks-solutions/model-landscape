@@ -8,7 +8,9 @@ It is built for teams that want an in-house alternative to external observabilit
 
 - onboard monitors from Unity Catalog inference tables
 - map source columns into one stable monitoring contract
+- backfill drift and performance history on the first refresh workflow run, then append new windows incrementally
 - compute drift, quality, and performance-contributor summaries on a refresh workflow
+- backfill drift, quality, and performance window history on the first refresh so timelines are populated immediately
 - persist durable monitoring state in Unity Catalog Delta tables
 - optionally project hot UI state into Lakebase for fast monitor and incident views
 - deep-link overview cards into model-specific drift investigation
@@ -20,7 +22,7 @@ Model Lens has three layers:
 
 1. `Warehouse system of record`
    - Unity Catalog Delta tables under a customer-selected `<catalog>.<schema>`
-   - full monitor configs, metrics, and incidents
+   - full monitor configs, metrics, incidents, refresh runs, and comparison windows
 2. `Optional Lakebase read model`
    - fast monitor-summary and incident projection for the app
    - not the source of truth
@@ -73,6 +75,8 @@ Current engine behavior:
 - onboarding supports two baseline policies:
   - `rolling`: compare the latest `n` days with the preceding `n` days
   - `fixed`: compare a user-selected known-good baseline range with the latest window of the same length
+- the first successful refresh now backfills all valid daily comparison windows for the configured baseline policy, up to the configured comparison horizon
+- later refreshes run in `auto` mode by default: they append new windows when history already exists and fall back to full backfill when the stored history no longer matches the current baseline configuration
 - if an external labels table is not unique on the join key, you must provide an `External Labels Order Column`
 - if a source table contains multiple `model_id` values, you must provide `Monitored Model ID Value`
 
@@ -120,6 +124,18 @@ Recommended deployment model:
 - deploy Model Lens with those namespace values
 - use `Create catalog if missing` only for admin-led setup in a sandbox or internal workspace
 - keep the app namespace fields aligned with the bundle vars so manual app refreshes and the scheduled workflow operate on the same control plane
+
+Current control-plane tables:
+
+- `monitor_configs`
+- `drift_metrics`
+- `quality_metrics`
+- `quality_history`
+- `performance_metrics`
+- `incidents`
+- `incident_history`
+- `refresh_runs`
+- `comparison_windows`
 
 Before handing this to a customer, also make sure the Databricks App service principal can:
 
@@ -206,12 +222,13 @@ After deploy:
 9. If the table contains more than one `model_id`, confirm or fill in `Monitored Model ID Value`.
 10. If external labels are not unique on the join key, confirm or fill in `External Labels Order Column`.
 11. Continue to `Activate`, then save the monitor and run the initial refresh.
-12. Open the overview and analysis pages to confirm the new monitor appears and the initial refresh populated readback.
+12. Open the overview and analysis pages to confirm the new monitor appears and the initial refresh populated historical readback immediately.
 
 ## Full Docs
 
 - [Deployment Guide](/Users/volo.vragov/Desktop/work/model-lens/docs/DEPLOY_TO_WORKSPACE.md)
 - [Architecture](/Users/volo.vragov/Desktop/work/model-lens/docs/ARCHITECTURE.md)
+- [Historical Backfill Plan](/Users/volo.vragov/Desktop/work/model-lens/docs/HISTORICAL_BACKFILL_PLAN.md)
 - [Workspace Smoke Test](/Users/volo.vragov/Desktop/work/model-lens/docs/WORKSPACE_SMOKE_TEST.md)
 - [Scratch Dataset](/Users/volo.vragov/Desktop/work/model-lens/examples/scratch_dataset.sql)
 
@@ -251,6 +268,7 @@ python3 scripts/model_lens_refresh.py \
   --warehouse-id <sql-warehouse-id> \
   --catalog <control-plane-catalog> \
   --schema <control-plane-schema> \
+  --mode auto \
   --use-lakebase-read-model \
   --lakebase-instance-name <lakebase-instance-name> \
   --lakebase-database-name <lakebase-database-name> \
