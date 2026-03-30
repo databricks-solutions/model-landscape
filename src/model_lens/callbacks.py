@@ -24,6 +24,7 @@ from model_lens.ui.components import (
     make_empty_state,
     make_metric_card,
     make_model_status_card,
+    make_wizard_step,
 )
 
 

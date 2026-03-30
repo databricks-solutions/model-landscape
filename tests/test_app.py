@@ -17,6 +17,14 @@ from model_lens.callbacks import _format_runtime_setting_value, _ready_for_sessi
 from model_lens.pages import reference
 
 
+RENDER_WIZARD_CALLBACK = (
+    "..wizard-steps-indicator.children...wizard-step-guidance.children...wizard-step-workspace.style"
+    "...wizard-step-source.style...wizard-step-contract.style...wizard-step-review.style"
+    "...wizard-back-btn.style...wizard-next-btn.style...wizard-next-btn.disabled...wizard-next-btn.children"
+    "...save-monitor-btn.disabled...onboarding-review-summary.children.."
+)
+
+
 def _walk(component: Component) -> Iterator[Component]:
     yield component
     children = getattr(component, "children", None)
@@ -211,3 +219,48 @@ def test_setup_retry_message_tells_user_to_click_setup_again() -> None:
 
     assert "click Setup Control Plane again to retry" in message
     assert "warehouse permission denied" in message
+
+
+def test_render_onboarding_wizard_callback_executes_for_step_two() -> None:
+    app = create_app()
+    callback = app.callback_map[RENDER_WIZARD_CALLBACK]["callback"]
+    fn = getattr(callback, "__wrapped__", callback)
+
+    result = fn(
+        2,
+        {"control_plane_catalog": "model_observability", "control_plane_schema": "control_plane"},
+        "model_observability",
+        "control_plane",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        "entity_id",
+        "label",
+        None,
+        None,
+        None,
+        None,
+        "rolling",
+        7,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+
+    assert len(result) == 12
+    assert result[3] == {}
+    assert result[2] == {"display": "none"}
