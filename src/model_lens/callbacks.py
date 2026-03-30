@@ -53,6 +53,10 @@ def _status_alert(message: str, color: str = "info") -> dbc.Alert:
     return dbc.Alert(message, color=color, className="py-2 mb-3")
 
 
+def _setup_retry_message(error: object) -> str:
+    return f"Setup failed. Fix the issue and click Setup Control Plane again to retry. Details: {error}"
+
+
 def _status_block(items: list[tuple[str, str]]) -> html.Div:
     return html.Div([_status_alert(message, color) for message, color in items])
 
@@ -193,21 +197,16 @@ def _control_plane_ready(
 ) -> bool:
     if not ready_state:
         return False
-    expected = {
-        "control_plane_catalog": (control_plane_catalog or "").strip(),
-        "control_plane_schema": (control_plane_schema or "").strip(),
-        "lakebase_instance_name": (lakebase_instance_name or "").strip(),
-        "lakebase_database_name": (lakebase_database_name or "").strip(),
-        "lakebase_schema": (lakebase_schema or "").strip(),
-    }
-    recorded = {
-        "control_plane_catalog": str(ready_state.get("control_plane_catalog") or "").strip(),
-        "control_plane_schema": str(ready_state.get("control_plane_schema") or "").strip(),
-        "lakebase_instance_name": str(ready_state.get("lakebase_instance_name") or "").strip(),
-        "lakebase_database_name": str(ready_state.get("lakebase_database_name") or "").strip(),
-        "lakebase_schema": str(ready_state.get("lakebase_schema") or "").strip(),
-    }
-    return bool(recorded["control_plane_catalog"] and recorded["control_plane_schema"] and recorded == expected)
+    expected_catalog = (control_plane_catalog or "").strip()
+    expected_schema = (control_plane_schema or "").strip()
+    recorded_catalog = str(ready_state.get("control_plane_catalog") or "").strip()
+    recorded_schema = str(ready_state.get("control_plane_schema") or "").strip()
+    return bool(
+        recorded_catalog
+        and recorded_schema
+        and recorded_catalog == expected_catalog
+        and recorded_schema == expected_schema
+    )
 
 
 def _selected_model_from_search(search: str | None) -> str | None:
@@ -580,7 +579,7 @@ def register_callbacks(app) -> None:
         }.get(step, False)
         guidance = {
             1: (
-                "Confirm the control-plane namespace and run setup. Open the advanced section only if you need Lakebase session settings or catalog creation.",
+                "Confirm the control-plane namespace and run setup. If setup fails, fix the issue and click Setup Control Plane again to retry. Open the advanced section only if you need Lakebase session settings or catalog creation.",
                 "info" if workspace_ready else "secondary",
             ),
             2: (
@@ -1110,7 +1109,7 @@ def register_callbacks(app) -> None:
         try:
             backend.repository.ensure_control_plane(create_catalog="create_catalog" in (create_catalog_value or []))
         except Exception as error:
-            return _status_alert(f"Setup failed: {error}", "danger"), no_update, no_update, no_update
+            return _status_alert(_setup_retry_message(error), "danger"), no_update, no_update, no_update
         return (
             _status_alert(
                 f"Control plane ready at {backend.repository.table_names.catalog}.{backend.repository.table_names.schema}.",

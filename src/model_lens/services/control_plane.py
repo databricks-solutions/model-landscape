@@ -24,6 +24,11 @@ def _as_text(value: Any) -> str:
     return str(value)
 
 
+def _is_field_already_exists_error(error: Exception) -> bool:
+    message = str(error).upper()
+    return "FIELD_ALREADY_EXISTS" in message or "ALREADY EXISTS" in message
+
+
 class ControlPlaneRepository:
     def __init__(
         self,
@@ -54,14 +59,25 @@ class ControlPlaneRepository:
             schema = self._warehouse.describe_table(self._table_names.monitor_configs)
         except Exception:
             return
-        existing = {str(value) for value in schema.get("col_name", pd.Series(dtype=str)).tolist()}
+        existing = {
+            str(value).strip().lower()
+            for value in schema.get("col_name", pd.Series(dtype=str)).tolist()
+            if str(value).strip()
+        }
         for column_name, data_type in monitor_config_migration_columns().items():
-            if column_name in existing:
+            normalized_name = column_name.strip().lower()
+            if normalized_name in existing:
                 continue
-            self._warehouse.execute(
-                f"ALTER TABLE {self._table_names.monitor_configs} "
-                f"ADD COLUMNS ({validate_identifier(column_name)} {data_type})"
-            )
+            try:
+                self._warehouse.execute(
+                    f"ALTER TABLE {self._table_names.monitor_configs} "
+                    f"ADD COLUMNS ({validate_identifier(column_name)} {data_type})"
+                )
+            except Exception as error:
+                if _is_field_already_exists_error(error):
+                    existing.add(normalized_name)
+                    continue
+                raise
 
     def scan_source_table(self, table_name: str, preview_rows: int = 5) -> tuple[list[str], pd.DataFrame, pd.DataFrame]:
         validate_identifier(table_name)

@@ -188,7 +188,7 @@ Verify:
 
 In the app `Setup` step, click `Setup Control Plane`.
 
-The wizard does not unlock the `Discover` step until setup succeeds for the current namespace and optional Lakebase session values.
+The wizard does not unlock the `Discover` step until setup succeeds for the current control-plane namespace. If setup fails, fix the underlying issue and click `Setup Control Plane` again to retry.
 
 Recommended:
 

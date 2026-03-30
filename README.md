@@ -199,7 +199,7 @@ After deploy:
 2. If compute is stopped, run `databricks apps start model-lens`.
 3. In the `Setup` step, confirm the `Control Plane Catalog` and `Control Plane Schema` fields match your deployment target.
 4. Open `Advanced workspace options` only if you want Lakebase-backed reads or need catalog creation during setup.
-5. Click `Setup Control Plane`. The `Setup` step only unlocks after setup succeeds for the current namespace values.
+5. Click `Setup Control Plane`. The `Setup` step only unlocks after setup succeeds for the current namespace values. If setup fails, fix the issue and click `Setup Control Plane` again to retry.
 6. Continue to `Discover`.
 7. In the `Discover` step, enter the inference table. Optionally add a labels table and MLflow experiment or registered model, then click `Discover`.
 8. In the `Confirm` step, review the inferred display name, model key, problem type, and feature set. Use `Advanced` only if the draft needs overrides.

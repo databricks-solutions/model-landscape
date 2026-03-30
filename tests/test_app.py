@@ -13,7 +13,7 @@ from model_lens.app import (
     _workspace_lakebase_instances,
     create_app,
 )
-from model_lens.callbacks import _format_runtime_setting_value
+from model_lens.callbacks import _format_runtime_setting_value, _setup_retry_message
 from model_lens.pages import reference
 
 
@@ -137,6 +137,23 @@ def test_control_plane_ready_requires_successful_setup_state() -> None:
         )
         is True
     )
+    assert (
+        _control_plane_ready(
+            {
+                "control_plane_catalog": "model_observability",
+                "control_plane_schema": "control_plane",
+                "lakebase_instance_name": "",
+                "lakebase_database_name": "",
+                "lakebase_schema": "",
+            },
+            control_plane_catalog="model_observability",
+            control_plane_schema="control_plane",
+            lakebase_instance_name=None,
+            lakebase_database_name=None,
+            lakebase_schema="model_lens_ui",
+        )
+        is True
+    )
 
 
 def test_reference_runtime_settings_show_explicit_placeholders() -> None:
@@ -149,3 +166,10 @@ def test_reference_page_copy_mentions_selected_model_scope() -> None:
     layout = reference.layout()
 
     assert "selected model" in str(layout.children[1].children).lower()
+
+
+def test_setup_retry_message_tells_user_to_click_setup_again() -> None:
+    message = _setup_retry_message("warehouse permission denied")
+
+    assert "click Setup Control Plane again to retry" in message
+    assert "warehouse permission denied" in message

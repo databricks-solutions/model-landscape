@@ -161,7 +161,7 @@ Check immediately:
 
 In the app `Setup` step, click `Setup Control Plane`.
 
-The wizard should keep `Continue to Discover` disabled until setup succeeds for the current namespace/session values.
+The wizard should keep `Continue to Discover` disabled until setup succeeds for the current control-plane namespace. If setup fails, fix the underlying issue and click `Setup Control Plane` again to retry.
 
 Recommended:
 

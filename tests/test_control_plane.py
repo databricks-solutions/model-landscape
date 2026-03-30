@@ -22,6 +22,7 @@ class FakeWarehouse:
         self.query_param_calls: list[tuple[str, tuple]] = []
         self.distinct_model_ids = 2
         self.duplicate_label_keys = 0
+        self.alter_field_already_exists = False
         self.monitor_row = {
             "model_key": "payments_risk_v1",
             "display_name": "Payments Risk",
@@ -56,6 +57,8 @@ class FakeWarehouse:
         }
 
     def execute(self, sql: str) -> None:
+        if self.alter_field_already_exists and "ALTER TABLE" in sql and "ADD COLUMNS" in sql:
+            raise Exception("[FIELD_ALREADY_EXISTS] Column already exists")
         self.executed.append(sql)
 
     def execute_params(self, sql: str, params: tuple) -> None:
@@ -345,6 +348,17 @@ def test_profile_labels_mapping_reports_match_counts_and_binary_values() -> None
     assert result["duplicate_join_keys"] == 2
     assert result["distinct_label_values"] == ("0", "1")
     assert result["binary_compatible"] is True
+
+
+def test_ensure_control_plane_ignores_field_already_exists_during_migration() -> None:
+    warehouse = FakeWarehouse()
+    warehouse.alter_field_already_exists = True
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    repository.ensure_control_plane()
+
+    assert any("CREATE SCHEMA IF NOT EXISTS" in sql for sql in warehouse.executed)
+    assert any("CREATE TABLE IF NOT EXISTS" in sql for sql in warehouse.executed)
 
 
 class StubRepository:
