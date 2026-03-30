@@ -97,7 +97,26 @@ INDEX_STRING = """<!DOCTYPE html>
         overflow-y: auto;
         padding-right: 4px;
     }
-    .model-lens-sidebar-footer { margin-top: auto; }
+    .model-lens-sidebar-bottom-action {
+        margin-top: auto;
+        padding-top: 8px;
+    }
+    .model-lens-sidebar-cta {
+        color: #fff !important;
+        background: linear-gradient(135deg, #0f3460 0%, #e94560 100%);
+        border: 1px solid rgba(233, 69, 96, 0.4);
+        border-radius: 10px;
+        padding: 12px 14px;
+        font-weight: 600;
+        box-shadow: 0 10px 24px rgba(15, 52, 96, 0.22);
+    }
+    .model-lens-sidebar-cta:hover,
+    .model-lens-sidebar-cta.active {
+        color: #fff !important;
+        background: linear-gradient(135deg, #16497f 0%, #ee5e76 100%) !important;
+        transform: translateY(-1px);
+    }
+    .model-lens-sidebar-footer { margin-top: 12px; }
     .model-lens-content {
         margin-left: 300px;
         padding: 20px;
@@ -135,6 +154,10 @@ INDEX_STRING = """<!DOCTYPE html>
         .model-lens-sidebar-nav {
             overflow-y: visible;
             padding-right: 0;
+        }
+        .model-lens-sidebar-bottom-action {
+            margin-top: 0;
+            padding-top: 0;
         }
         .model-lens-content {
             margin-left: 0;

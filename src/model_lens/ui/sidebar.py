@@ -7,9 +7,8 @@ from model_lens.config import settings
 from model_lens.ui.styles import COLORS
 
 
-NAV_ITEMS = [
+PRIMARY_NAV_ITEMS = [
     {"label": "Overview", "icon": "fas fa-chart-line", "href": "/"},
-    {"label": "Onboarding", "icon": "fas fa-plus-circle", "href": "/onboarding"},
     {"label": "Drift Analysis", "icon": "fas fa-wave-square", "href": "/drift"},
     {"label": "Feature Deep Dive", "icon": "fas fa-search", "href": "/features"},
     {"label": "Performance", "icon": "fas fa-tachometer-alt", "href": "/performance"},
@@ -37,13 +36,26 @@ def build_sidebar():
                     dbc.Nav(
                         [
                             dbc.NavLink([html.I(className=f"{item['icon']} me-2"), item["label"]], href=item["href"], active="exact")
-                            for item in NAV_ITEMS
+                            for item in PRIMARY_NAV_ITEMS
                         ],
                         vertical=True,
                         pills=True,
+                        id="sidebar-primary-nav",
                     ),
                 ],
                 className="model-lens-sidebar-nav",
+            ),
+            html.Div(
+                [
+                    dbc.NavLink(
+                        [html.I(className="fas fa-plus-circle me-2"), "Add Monitor"],
+                        href="/onboarding",
+                        active="exact",
+                        id="sidebar-onboarding-link",
+                        className="model-lens-sidebar-cta",
+                    ),
+                ],
+                className="model-lens-sidebar-bottom-action",
             ),
             html.Div(
                 [

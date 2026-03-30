@@ -35,6 +35,8 @@ def test_app_layout_exposes_slimmed_onboarding_flow() -> None:
         "url",
         "page-content",
         "global-model-select",
+        "sidebar-primary-nav",
+        "sidebar-onboarding-link",
         "session-config-store",
         "reload-token",
     }.issubset(shell_ids)
