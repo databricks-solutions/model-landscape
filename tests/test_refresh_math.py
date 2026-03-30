@@ -4,7 +4,7 @@ import pandas as pd
 
 from model_lens.domain.models import MonitorConfig
 from model_lens.services.contracts import build_contract
-from model_lens.services.onboarding import build_default_baseline
+from model_lens.services.onboarding import build_default_baseline, build_fixed_baseline
 from model_lens.workflows.refresh_job import refresh_monitor, split_baseline_current
 
 
@@ -54,3 +54,27 @@ def test_refresh_monitor_produces_deduplicated_incidents() -> None:
     )
     assert result.drift_rows
     assert len({(row["model_key"], row["feature_name"], row["metric_name"]) for row in result.incident_rows}) == len(result.incident_rows)
+    assert result.drift_rows[0]["window_start"] == "2026-01-14"
+    if result.performance_rows:
+        assert result.performance_rows[0]["window_start"] == "2026-01-14"
+
+
+def test_split_baseline_current_supports_fixed_baseline_range() -> None:
+    start = datetime(2026, 1, 1)
+    frame = pd.DataFrame({
+        "event_ts": [start + timedelta(days=index) for index in range(20)],
+        "model_id": ["m1"] * 20,
+        "prediction": [0.1 * index for index in range(20)],
+        "f1": [float(index) for index in range(20)],
+    })
+
+    baseline, current = split_baseline_current(
+        frame,
+        "event_ts",
+        build_fixed_baseline("2026-01-01", "2026-01-05"),
+    )
+
+    assert baseline["event_ts"].min().date().isoformat() == "2026-01-01"
+    assert baseline["event_ts"].max().date().isoformat() == "2026-01-05"
+    assert current["event_ts"].min().date().isoformat() == "2026-01-16"
+    assert current["event_ts"].max().date().isoformat() == "2026-01-20"

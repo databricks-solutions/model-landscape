@@ -13,6 +13,8 @@ from model_lens.app import (
     _workspace_lakebase_instances,
     create_app,
 )
+from model_lens.callbacks import _format_runtime_setting_value
+from model_lens.pages import reference
 
 
 def _walk(component: Component) -> Iterator[Component]:
@@ -28,8 +30,10 @@ def _walk(component: Component) -> Iterator[Component]:
 
 def test_app_layout_exposes_slimmed_onboarding_flow() -> None:
     app = create_app()
-    shell_ids = {component.id for component in _walk(app.layout) if getattr(component, "id", None)}
-    page_ids = {component.id for component in _walk(app.validation_layout) if getattr(component, "id", None)}
+    shell_components = [component for component in _walk(app.layout) if getattr(component, "id", None)]
+    page_components = [component for component in _walk(app.validation_layout) if getattr(component, "id", None)]
+    shell_ids = {component.id for component in shell_components}
+    page_ids = {component.id for component in page_components}
     ids = shell_ids | page_ids
     assert {
         "url",
@@ -59,11 +63,19 @@ def test_app_layout_exposes_slimmed_onboarding_flow() -> None:
         "mlflow-registered-model-input",
         "scan-source-btn",
         "save-monitor-btn",
+        "baseline-kind-input",
+        "baseline-fixed-range-input",
         "create-catalog-toggle",
         "model-id-value-input",
         "model-version-value-input",
         "labels-order-col-input",
     }.issubset(ids)
+
+    components_by_id = {component.id: component for component in page_components}
+    assert getattr(components_by_id["wizard-step-workspace"], "style", {}) == {}
+    assert getattr(components_by_id["wizard-step-source"], "style", {}) == {"display": "none"}
+    assert getattr(components_by_id["wizard-step-contract"], "style", {}) == {"display": "none"}
+    assert getattr(components_by_id["wizard-step-review"], "style", {}) == {"display": "none"}
 
 
 def test_schema_helpers_flag_non_numeric_selected_features() -> None:
@@ -125,3 +137,15 @@ def test_control_plane_ready_requires_successful_setup_state() -> None:
         )
         is True
     )
+
+
+def test_reference_runtime_settings_show_explicit_placeholders() -> None:
+    assert _format_runtime_setting_value("use_lakebase_read_model", False) == "false"
+    assert _format_runtime_setting_value("lakebase_database_name", "") == "(not configured)"
+    assert _format_runtime_setting_value("genie_space_id", None) == "(not configured)"
+
+
+def test_reference_page_copy_mentions_selected_model_scope() -> None:
+    layout = reference.layout()
+
+    assert "selected model" in str(layout.children[1].children).lower()

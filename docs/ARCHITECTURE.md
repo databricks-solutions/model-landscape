@@ -57,7 +57,9 @@ Responsibilities:
 - initialize the control-plane schema
 - let operators override the control-plane catalog/schema used by the app session
 - discover monitor drafts from source-table schema, preview rows, optional labels tables, and optional MLflow metadata
+- preview external labels tables during discovery, infer join/label/order columns, and validate matched vs unmatched source rows before activation
 - let operators override inferred columns only when the draft is ambiguous
+- let operators choose either a rolling baseline window or a fixed known-good baseline date range
 - save monitor configs
 - trigger the initial refresh during monitor activation
 - render monitor summaries and incidents from Lakebase when configured
@@ -121,7 +123,7 @@ Responsibilities:
 - read source inference data
 - optionally join labels from an external table with deterministic dedupe
 - scope shared source tables down to one monitored model/version when configured
-- build recent rolling baseline/current windows
+- build either recent rolling comparison windows or fixed-baseline-versus-latest comparison windows
 - compute drift, quality, and degradation summaries
 - replace the current persisted snapshot for the refreshed model
 - sync the current UI projection into Lakebase

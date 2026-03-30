@@ -215,12 +215,19 @@ In the app:
    - `Optional MLflow Experiment`: leave blank for this smoke test unless you have one ready
    - `Optional Registered Model`: leave blank for this smoke test unless you have one ready
 3. Click `Discover`.
+   With the labels table filled in, verify the app now shows:
+   - labels columns: `entity_id`, `label_timestamp`, `label`
+   - sample label rows
+   - inferred `Join Column=entity_id`, `Label Column=label`, `Order Column=label_timestamp`
+   - join validation with matched rows, unmatched rows, and duplicate label-key counts
 4. Review the schema and sample rows, then continue to the `Confirm` step.
 5. Confirm the inferred contract:
    - `Display Name`: `Fraud Model Demo`
    - `Model Key`: `fraud_model_demo`
    - `Problem Type`: `classification`
+   - `Baseline Policy`: `Rolling`
    - `Baseline Days`: `7`
+   Keep the default rolling baseline for this smoke test. Fixed baselines are supported, but the default rolling window is enough to exercise the full pipeline.
 6. Open `Advanced mappings and overrides` and confirm:
    - `Timestamp Column`: `event_ts`
    - `Model ID Column`: `model_id`
@@ -336,6 +343,7 @@ Back in the app, verify:
 
 - the overview page shows a `Fraud Model Demo` card
 - the selected monitor can be opened on the drift, quality, and performance pages
+- the performance page still shows KPI cards, feature options, and charts even when recent performance deltas are near zero; in that case the page should show an informational stability message instead of appearing blank
 - `total_rows`, `latest_data_date`, and `last_refresh_at` are populated in app readback
 
 ## Step 9: Verify Workflow Refresh

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -7,7 +8,7 @@ import pandas as pd
 from model_lens.domain.models import MLflowLineage, MonitorConfig
 from model_lens.services.contracts import build_contract
 from model_lens.services.control_plane import ControlPlaneRepository
-from model_lens.services.onboarding import build_default_baseline
+from model_lens.services.onboarding import build_default_baseline, build_fixed_baseline
 from model_lens.services.refresh_runner import run_refresh_cycle
 from model_lens.services.table_names import TableNames
 
@@ -37,8 +38,10 @@ class FakeWarehouse:
             "feature_columns": '["amount","segment"]',
             "slice_columns": '["segment"]',
             "categorical_columns": '["segment"]',
-            "baseline_kind": "rolling_n_days",
+            "baseline_kind": "rolling",
             "baseline_n_days": 7,
+            "baseline_start": "",
+            "baseline_end": "",
             "baseline_max_comparison_days": 90,
             "problem_type": "classification",
             "labels_table": "",
@@ -76,17 +79,19 @@ class FakeWarehouse:
                 "categorical_columns": '["segment"]',
                 "baseline_kind": params[12],
                 "baseline_n_days": params[13],
-                "baseline_max_comparison_days": params[14],
-                "problem_type": params[15],
-                "labels_table": params[16],
-                "labels_join_col": params[17],
-                "labels_order_col": params[18],
-                "mlflow_experiment_name": params[19],
-                "mlflow_experiment_id": params[20],
-                "mlflow_run_id": params[21],
-                "mlflow_registered_model_name": params[22],
-                "mlflow_model_version": params[23],
-                "created_by": params[24],
+                "baseline_start": params[14] or "",
+                "baseline_end": params[15] or "",
+                "baseline_max_comparison_days": params[16],
+                "problem_type": params[17],
+                "labels_table": params[18],
+                "labels_join_col": params[19],
+                "labels_order_col": params[20],
+                "mlflow_experiment_name": params[21],
+                "mlflow_experiment_id": params[22],
+                "mlflow_run_id": params[23],
+                "mlflow_registered_model_name": params[24],
+                "mlflow_model_version": params[25],
+                "created_by": params[26],
             }
 
     def execute_batch(self, insert_template: str, rows: list[tuple], batch_size: int = 200) -> None:
@@ -100,6 +105,10 @@ class FakeWarehouse:
             return pd.DataFrame([{"distinct_model_ids": self.distinct_model_ids}])
         if "duplicate_key_count" in sql:
             return pd.DataFrame([{"duplicate_key_count": self.duplicate_label_keys}])
+        if "matched_rows" in sql and "unmatched_rows" in sql:
+            return pd.DataFrame([{"inference_rows": 10, "matched_rows": 7, "unmatched_rows": 3}])
+        if "AS label_value" in sql:
+            return pd.DataFrame([{"label_value": "0"}, {"label_value": "1"}])
         if "AS sampled_value" in sql:
             return pd.DataFrame([{"sampled_value": "m1"}])
         if "WITH latest_window AS" in sql:
@@ -216,10 +225,15 @@ def test_upsert_monitor_config_keeps_full_feature_and_categorical_metadata() -> 
     insert_sql, insert_params = warehouse.executed_params[-1]
     assert "ARRAY('amount', 'segment')" in insert_sql
     assert "ARRAY('segment')" in insert_sql
+    assert "CAST(%s AS DATE), CAST(%s AS DATE)" in insert_sql
+    assert "VALUES (\n                %s, %s, %s, %s, %s," in insert_sql
     assert insert_params[0] == "payments_risk_v1"
     assert insert_params[1] == "Payments Risk"
-    assert insert_params[19] == "fraud_monitoring"
-    assert insert_params[23] == "7"
+    assert insert_params[12] == "rolling"
+    assert insert_params[14] is None
+    assert insert_params[15] is None
+    assert insert_params[21] == "fraud_monitoring"
+    assert insert_params[25] == "7"
 
 
 def test_load_monitor_frame_uses_external_labels_join_and_model_filter() -> None:
@@ -267,6 +281,25 @@ def test_list_monitor_configs_round_trips_mlflow_lineage() -> None:
     assert config.mlflow.model_version == "7"
 
 
+def test_list_monitor_configs_round_trips_fixed_baseline_dates() -> None:
+    warehouse = FakeWarehouse()
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    repository.upsert_monitor_config(
+        replace(
+            _monitor_config(),
+            baseline=build_fixed_baseline("2026-01-01", "2026-01-07"),
+        )
+    )
+
+    config = repository.list_monitor_configs()[0]
+
+    assert config.baseline.kind == "fixed"
+    assert config.baseline.n_days == 7
+    assert config.baseline.baseline_start == "2026-01-01"
+    assert config.baseline.baseline_end == "2026-01-07"
+
+
 def test_validate_monitor_source_requires_model_id_value_for_shared_tables() -> None:
     warehouse = FakeWarehouse()
     warehouse.distinct_model_ids = 3
@@ -291,6 +324,27 @@ def test_validate_monitor_source_requires_label_order_column_when_join_keys_repe
         assert "External Labels Order Column" in str(error)
     else:
         raise AssertionError("expected validation failure")
+
+
+def test_profile_labels_mapping_reports_match_counts_and_binary_values() -> None:
+    warehouse = FakeWarehouse()
+    warehouse.duplicate_label_keys = 2
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    result = repository.profile_labels_mapping(
+        source_table="catalog.schema.inference_logs",
+        source_join_col="entity_id",
+        labels_table="catalog.schema.labels",
+        labels_join_col="entity_id",
+        label_col="label",
+        labels_order_col="label_timestamp",
+    )
+
+    assert result["matched_rows"] == 7
+    assert result["unmatched_rows"] == 3
+    assert result["duplicate_join_keys"] == 2
+    assert result["distinct_label_values"] == ("0", "1")
+    assert result["binary_compatible"] is True
 
 
 class StubRepository:

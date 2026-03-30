@@ -41,4 +41,6 @@ def test_monitor_payload_keeps_all_features_and_categorical_columns() -> None:
     assert payload["mlflow_run_id"] == "run-abc"
     assert payload["mlflow_registered_model_name"] == "catalog.schema.fraud_model"
     assert payload["mlflow_model_version"] == "12"
-    assert payload["baseline_kind"] == "rolling_n_days"
+    assert payload["baseline_kind"] == "rolling"
+    assert payload["baseline_start"] == ""
+    assert payload["baseline_end"] == ""

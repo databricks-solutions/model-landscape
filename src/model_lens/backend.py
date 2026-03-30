@@ -9,6 +9,7 @@ from model_lens.config import settings
 from model_lens.domain.models import MonitorConfig, MonitorDiscoveryResult
 from model_lens.services.control_plane import ControlPlaneRepository, build_repository
 from model_lens.services.monitor_discovery import MonitorDiscoveryService
+from model_lens.services.onboarding import baseline_label
 from model_lens.services.refresh_engine import split_baseline_current
 
 
@@ -36,6 +37,13 @@ def _safe_int(value: object) -> int:
     if pd.isna(numeric):
         return 0
     return int(numeric)
+
+
+def _safe_series_min(series: pd.Series) -> float:
+    numeric = pd.to_numeric(series, errors="coerce").dropna()
+    if numeric.empty:
+        return 0.0
+    return float(numeric.min())
 
 
 def _period_label(series: pd.Series, granularity: str) -> pd.Series:
@@ -81,6 +89,8 @@ class DashboardBackend:
                     "slice_columns": list(config.contract.slice_columns),
                     "has_labels": bool(config.contract.label_col),
                     "baseline_days": config.baseline.n_days,
+                    "baseline_kind": config.baseline.kind,
+                    "baseline_label": baseline_label(config.baseline),
                     "max_psi": _safe_float(row.get("max_psi", 0)),
                     "total_rows": _safe_int(row.get("total_rows", 0)),
                     "open_incident_count": _safe_int(row.get("open_incident_count", 0)),
@@ -254,7 +264,7 @@ class DashboardBackend:
         if not config:
             return None, pd.DataFrame(), pd.DataFrame()
         frame = self.repository.load_monitor_frame(config)
-        baseline, current = split_baseline_current(frame, config.contract.timestamp_col, config.baseline.n_days)
+        baseline, current = split_baseline_current(frame, config.contract.timestamp_col, config.baseline)
         return config, baseline, current
 
     def get_feature_distribution(self, model_id: str, feature: str) -> tuple[pd.Series, pd.Series]:
@@ -306,41 +316,67 @@ class DashboardBackend:
         )
         if frame.empty:
             return pd.DataFrame()
-        return frame.rename(
+        renamed = frame.rename(
             columns={
                 "feature_name": "feature",
                 "volume_pct": "current_volume_pct",
                 "contribution": "degradation_contribution",
             }
         )
+        for column in ("baseline_metric", "current_metric", "delta", "current_volume_pct", "degradation_contribution"):
+            if column in renamed.columns:
+                renamed[column] = pd.to_numeric(renamed[column], errors="coerce")
+        return renamed
 
     def get_performance_summary(self, model_id: str, metric_name: str = "f1") -> dict:
         frame = self.get_performance_rows(model_id, metric_name=metric_name)
         if frame.empty:
-            return {"timeline": [], "contributors": pd.DataFrame(), "latest_bins": pd.DataFrame()}
+            return {
+                "timeline": [],
+                "contributors": pd.DataFrame(),
+                "latest_bins": pd.DataFrame(),
+                "all_bins": pd.DataFrame(),
+                "has_significant_degradation": False,
+            }
+        frame = frame.copy()
         frame["window_end"] = pd.to_datetime(frame["window_end"], errors="coerce")
+        dated = frame[frame["window_end"].notna()].copy()
         timeline = (
-            frame.groupby("window_end", as_index=False)
-            .apply(
-                lambda group: pd.Series(
-                    {
-                        "period": str(group["window_end"].iloc[0].date()),
-                        metric_name: float((group["current_metric"] * group["current_volume_pct"]).sum() / max(group["current_volume_pct"].sum(), 1)),
-                    }
-                ),
-                include_groups=False,
-            )
-            .reset_index(drop=True)
-            .to_dict("records")
+            [
+                {
+                    "period": str(window_end.date()),
+                    metric_name: float(
+                        (group["current_metric"] * group["current_volume_pct"]).sum()
+                        / max(group["current_volume_pct"].sum(), 1)
+                    ),
+                }
+                for window_end, group in dated.groupby("window_end", sort=True)
+            ]
+            if not dated.empty
+            else []
         )
-        latest_window = frame["window_end"].max()
-        latest_bins = frame[frame["window_end"] == latest_window].copy()
+        latest_bins = dated.copy() if dated.empty else dated[dated["window_end"] == dated["window_end"].max()].copy()
         contributors = (
             latest_bins.groupby("feature", as_index=False)
             .agg(weighted_delta=("degradation_contribution", "sum"))
             .sort_values("weighted_delta")
+            if not latest_bins.empty
+            else pd.DataFrame(columns=["feature", "weighted_delta"])
         )
-        return {"timeline": timeline, "contributors": contributors, "latest_bins": latest_bins}
+        delta_source = latest_bins if not latest_bins.empty else frame
+        has_significant_degradation = bool(
+            "delta" in delta_source.columns and (pd.to_numeric(delta_source["delta"], errors="coerce").fillna(0.0) < -0.005).any()
+        )
+        return {
+            "timeline": timeline,
+            "contributors": contributors,
+            "latest_bins": latest_bins,
+            "all_bins": frame,
+            "has_significant_degradation": has_significant_degradation,
+            "worst_weighted_delta": _safe_series_min(
+                contributors["weighted_delta"] if "weighted_delta" in contributors.columns else pd.Series(dtype=float)
+            ),
+        }
 
     def get_reference_data(self, model_id: str) -> dict:
         config = self.get_monitor_config(model_id)

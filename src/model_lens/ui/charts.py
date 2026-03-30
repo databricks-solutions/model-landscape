@@ -302,6 +302,16 @@ def build_feature_bin_impact(degradation_df: pd.DataFrame, feature_contributors:
         fig.add_annotation(text="No degradation data", showarrow=False)
         return _apply_layout(fig, title="Feature Impact on Performance")
 
+    contribution_values = pd.to_numeric(degradation_df.get("degradation_contribution"), errors="coerce").fillna(0.0)
+    if not contribution_values.empty and float(contribution_values.abs().max()) < 1e-9:
+        fig = go.Figure()
+        fig.add_annotation(
+            text="No significant degradation detected in the latest window",
+            showarrow=False,
+            font=dict(size=14, color=COLORS["text"]),
+        )
+        return _apply_layout(fig, title="Feature Impact on Performance")
+
     if not feature_contributors.empty:
         feature_order = feature_contributors.sort_values("weighted_delta")["feature"].tolist()
     else:
@@ -429,4 +439,3 @@ def build_prediction_distribution(values, prob_column: str = "prediction"):
         )
     )
     return _apply_layout(fig, title="Prediction Score Distribution", xaxis_title=prob_column, yaxis_title="Density", height=300)
-

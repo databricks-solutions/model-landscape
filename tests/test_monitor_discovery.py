@@ -56,6 +56,14 @@ class FakeRepository:
             ("main.demo.inference_logs", "model_id"): ["fraud_model_demo"],
             ("main.demo.inference_logs", "model_version"): ["7"],
         }
+        self.labels_validation = {
+            "matched_rows": 1,
+            "unmatched_rows": 1,
+            "duplicate_join_keys": 1,
+            "match_rate_pct": 50.0,
+            "distinct_label_values": ("0", "1"),
+            "binary_compatible": True,
+        }
 
     def scan_source_table(self, table_name: str, preview_rows: int = 5):
         del preview_rows
@@ -68,6 +76,24 @@ class FakeRepository:
     def sample_distinct_values(self, table_name: str, column_name: str, limit: int = 20) -> list[str]:
         del limit
         return list(self.distinct_values.get((table_name, column_name), []))
+
+    def profile_labels_mapping(
+        self,
+        *,
+        source_table: str,
+        source_join_col: str,
+        labels_table: str,
+        labels_join_col: str,
+        label_col: str,
+        labels_order_col: str | None = None,
+    ) -> dict:
+        assert source_table == "main.demo.inference_logs"
+        assert source_join_col == "entity_id"
+        assert labels_table == "main.demo.labels"
+        assert labels_join_col == "entity_id"
+        assert label_col == "label"
+        assert labels_order_col == "label_timestamp"
+        return dict(self.labels_validation)
 
 
 class FakeMLflow:
@@ -131,6 +157,10 @@ def test_discovery_uses_mlflow_and_labels_to_fill_scope_and_lineage() -> None:
     assert result.config.labels_join_col == "entity_id"
     assert result.config.labels_order_col == "label_timestamp"
     assert result.config.contract.label_col == "label"
+    assert result.label_schema_rows[0]["col_name"] == "entity_id"
+    assert result.label_preview_rows[0]["label"] == "1"
+    assert result.label_validation["matched_rows"] == 1
+    assert result.label_validation["duplicate_join_keys"] == 1
     assert result.config.contract.feature_columns == ("velocity_7d", "amount")
     assert result.config.mlflow.experiment_id == "exp-1"
     assert result.config.mlflow.run_id == "run-1"

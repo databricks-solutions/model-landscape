@@ -217,8 +217,49 @@ def _contract_step(form_style: dict) -> dbc.Row:
                                         md=6,
                                         style=form_style,
                                     ),
-                                    dbc.Col([dbc.Label("Baseline Days"), dbc.Input(id="baseline-days-input", type="number", min=1, value=7)], md=6, style=form_style),
+                                    dbc.Col(
+                                        [
+                                            dbc.Label("Baseline Policy"),
+                                            dbc.RadioItems(
+                                                id="baseline-kind-input",
+                                                options=[
+                                                    {"label": "Rolling", "value": "rolling"},
+                                                    {"label": "Fixed", "value": "fixed"},
+                                                ],
+                                                value="rolling",
+                                                inline=True,
+                                                className="pt-2",
+                                            ),
+                                        ],
+                                        md=6,
+                                        style=form_style,
+                                    ),
                                 ]
+                            ),
+                            html.Div(
+                                [
+                                    dbc.Label("Baseline Days"),
+                                    dbc.Input(id="baseline-days-input", type="number", min=1, value=7),
+                                ],
+                                id="baseline-days-wrapper",
+                                style=form_style,
+                            ),
+                            html.Div(
+                                [
+                                    dbc.Label("Fixed Baseline Date Range"),
+                                    dcc.DatePickerRange(
+                                        id="baseline-fixed-range-input",
+                                        display_format="YYYY-MM-DD",
+                                        minimum_nights=0,
+                                        clearable=True,
+                                    ),
+                                    html.Small(
+                                        "Model Lens compares this fixed known-good window to the latest window of the same length.",
+                                        className="text-muted d-block mt-2",
+                                    ),
+                                ],
+                                id="baseline-fixed-range-wrapper",
+                                style={**form_style, "display": "none"},
                             ),
                             dbc.Accordion(
                                 [
@@ -347,10 +388,10 @@ def layout():
             ),
             html.Div(id="wizard-step-guidance", className="mb-3"),
             html.Div(id="action-status"),
-            html.Div(id="wizard-step-workspace", children=_workspace_step(form_style), className="mb-4"),
-            html.Div(id="wizard-step-source", children=_source_step(), className="mb-4"),
-            html.Div(id="wizard-step-contract", children=_contract_step(form_style), className="mb-4"),
-            html.Div(id="wizard-step-review", children=_review_step(), className="mb-4"),
+            html.Div(id="wizard-step-workspace", children=_workspace_step(form_style), className="mb-4", style={}),
+            html.Div(id="wizard-step-source", children=_source_step(), className="mb-4", style={"display": "none"}),
+            html.Div(id="wizard-step-contract", children=_contract_step(form_style), className="mb-4", style={"display": "none"}),
+            html.Div(id="wizard-step-review", children=_review_step(), className="mb-4", style={"display": "none"}),
             dbc.Row(
                 [
                     dbc.Col(

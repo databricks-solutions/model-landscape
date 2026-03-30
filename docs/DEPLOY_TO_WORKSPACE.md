@@ -233,11 +233,18 @@ In the app:
    - `Optional MLflow Experiment`: `<your experiment path>` if you want lineage-assisted discovery
    - `Optional Registered Model`: `<catalog>.<schema>.<model>` if you want registry-assisted discovery
 3. Click `Discover`
+   If you entered a labels table, the app should also show:
+   - labels table columns and sample rows
+   - detected `Join Column`, `Label Column`, and `Order Column`
+   - join validation with matched rows, unmatched rows, and duplicate label keys
 4. Continue to the `Confirm` step. The core fields should already be inferred. Use:
    - `Display Name`: `Fraud Model Demo`
    - `Model Key`: `fraud_model_demo`
    - `Problem Type`: `classification`
+   - `Baseline Policy`: `Rolling`
    - `Baseline Days`: `7`
+   Fixed baselines are also supported here if you want to compare against a known-good historical window instead of trailing windows.
+   After the first successful refresh, a stable comparison window should still render the Performance page with KPI cards, charts, and an informational stability message instead of an empty state.
 5. Open `Advanced mappings and overrides` and confirm:
    - `Timestamp Column`: `event_ts`
    - `Model ID Column`: `model_id`

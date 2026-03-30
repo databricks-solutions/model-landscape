@@ -68,8 +68,11 @@ Current engine behavior:
 - numeric features participate in drift calculations
 - non-numeric selected features are kept in the contract and projected into the UI
 - labels can come from the source table or an external labels table
+- when you provide an external labels table, Model Lens scans it during discovery, shows schema/sample rows, infers join/label/order columns, and reports matched vs unmatched inference rows before activation
 - an optional MLflow experiment or registered model can contribute feature ordering, model/version hints, and lineage metadata during onboarding
-- refresh compares the latest `n` days with the preceding `n` days
+- onboarding supports two baseline policies:
+  - `rolling`: compare the latest `n` days with the preceding `n` days
+  - `fixed`: compare a user-selected known-good baseline range with the latest window of the same length
 - if an external labels table is not unique on the join key, you must provide an `External Labels Order Column`
 - if a source table contains multiple `model_id` values, you must provide `Monitored Model ID Value`
 
@@ -259,7 +262,7 @@ python3 scripts/model_lens_refresh.py \
 - `src/model_lens/app.py`: route-based Databricks App shell
 - `src/model_lens/backend.py`: frontend query layer over the control-plane repository
 - `src/model_lens/callbacks.py`: global and page-specific Dash callbacks
-- `src/model_lens/pages/`: overview, onboarding, drift, feature, performance, quality, and reference pages
+- `src/model_lens/pages/`: overview, onboarding, drift, feature, performance, quality, and a reference page scoped to the selected monitor plus global runtime settings
 - `src/model_lens/ui/`: shared styles, sidebar, components, and charts
 - `src/model_lens/services/control_plane.py`: warehouse-backed system-of-record repository with Lakebase sync hooks
 - `src/model_lens/services/lakebase.py`: Lakebase connection and read-model projection

@@ -68,6 +68,39 @@ class _FakeWarehouse:
                     }
                 ]
             )
+        if "FROM performance_metrics" in sql:
+            return pd.DataFrame(
+                [
+                    {
+                        "model_key": model_key,
+                        "feature_name": "amount",
+                        "bin_label": "[0, 100)",
+                        "baseline_metric": 0.84,
+                        "current_metric": 0.84,
+                        "delta": 0.0,
+                        "volume_pct": 55.0,
+                        "contribution": 0.0,
+                        "metric_name": "f1",
+                        "window_start": "2026-01-14",
+                        "window_end": "2026-01-21",
+                        "computed_at": "2026-01-21T10:00:00",
+                    },
+                    {
+                        "model_key": model_key,
+                        "feature_name": "velocity_7d",
+                        "bin_label": "[0, 5)",
+                        "baseline_metric": 0.78,
+                        "current_metric": 0.78,
+                        "delta": 0.0,
+                        "volume_pct": 45.0,
+                        "contribution": 0.0,
+                        "metric_name": "f1",
+                        "window_start": "2026-01-14",
+                        "window_end": "2026-01-21",
+                        "computed_at": "2026-01-21T10:00:00",
+                    },
+                ]
+            )
         raise AssertionError(f"Unexpected query: {sql}")
 
 
@@ -93,7 +126,11 @@ def _make_backend() -> DashboardBackend:
     )
     repository = SimpleNamespace(
         _warehouse=_FakeWarehouse(),
-        table_names=SimpleNamespace(drift_metrics="drift_metrics", quality_metrics="quality_metrics"),
+        table_names=SimpleNamespace(
+            drift_metrics="drift_metrics",
+            quality_metrics="quality_metrics",
+            performance_metrics="performance_metrics",
+        ),
         list_monitor_configs=lambda status="active": [config],
         get_monitor_summary=lambda: pd.DataFrame(
             [
@@ -131,6 +168,8 @@ def test_list_models_merges_monitor_configs_with_summary() -> None:
             "slice_columns": ["region"],
             "has_labels": True,
             "baseline_days": 7,
+            "baseline_kind": "rolling",
+            "baseline_label": "Rolling: 7 days",
             "max_psi": 0.21,
             "total_rows": 840,
             "open_incident_count": 1,
@@ -158,3 +197,16 @@ def test_get_quality_stats_parses_json_payloads() -> None:
     assert quality["total_rows"] == 840
     assert quality["daily_volume"] == {"2026-01-21": 40}
     assert quality["null_rates"] == {"amount": 0.0, "velocity_7d": 1.2}
+
+
+def test_get_performance_summary_keeps_zero_delta_rows_visible() -> None:
+    backend = _make_backend()
+
+    performance = backend.get_performance_summary("fraud_model_demo", metric_name="f1")
+
+    assert performance["timeline"]
+    assert len(performance["latest_bins"]) == 2
+    assert len(performance["all_bins"]) == 2
+    assert set(performance["contributors"]["feature"]) == {"amount", "velocity_7d"}
+    assert performance["has_significant_degradation"] is False
+    assert performance["worst_weighted_delta"] == 0.0

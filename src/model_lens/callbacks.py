@@ -15,7 +15,7 @@ from model_lens.config import settings
 from model_lens.domain.models import MLflowLineage, MonitorConfig
 from model_lens.pages import onboarding
 from model_lens.services.contracts import build_contract
-from model_lens.services.onboarding import build_default_baseline
+from model_lens.services.onboarding import baseline_label, build_default_baseline, build_fixed_baseline
 from model_lens.services.refresh_runner import run_refresh_cycle
 from model_lens.ui import charts
 from model_lens.ui.components import (
@@ -68,6 +68,19 @@ def _render_frame(frame: pd.DataFrame, empty_message: str, max_rows: int = 20) -
         dbc.Table.from_dataframe(rendered, striped=True, bordered=True, hover=True, size="sm"),
         style={"overflowX": "auto"},
     )
+
+
+def _format_runtime_setting_value(field: str, value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return "(not configured)"
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return "(not configured)"
+        return stripped
+    return str(value)
 
 
 def _option_list(columns: list[str], include_blank: bool = False) -> list[dict]:
@@ -251,6 +264,10 @@ def _monitor_contract_ready(
     labels_table: str | None,
     labels_join_col: str | None,
     feature_columns: list[str] | None,
+    baseline_kind: str | None,
+    baseline_days: int | None,
+    baseline_start: str | None,
+    baseline_end: str | None,
 ) -> bool:
     if not scan_data or not scan_data.get("columns"):
         return False
@@ -264,6 +281,13 @@ def _monitor_contract_ready(
             feature_columns,
         ]
     ):
+        return False
+    try:
+        if (baseline_kind or "rolling") == "fixed":
+            build_fixed_baseline((baseline_start or "").strip(), (baseline_end or "").strip())
+        else:
+            build_default_baseline(int(baseline_days or 7))
+    except (TypeError, ValueError):
         return False
     if (model_version_value or "").strip() and not model_version_col:
         return False
@@ -287,7 +311,10 @@ def _review_summary(
     labels_table: str | None,
     source_label_col: str | None,
     external_label_col: str | None,
+    baseline_kind: str | None,
     baseline_days: int | None,
+    baseline_start: str | None,
+    baseline_end: str | None,
     problem_type: str | None,
     lakebase_instance_name: str | None,
     lakebase_database_name: str | None,
@@ -295,13 +322,18 @@ def _review_summary(
     mlflow_registered_model_name: str | None,
 ) -> html.Div:
     label_source = (labels_table or "").strip() if (labels_table or "").strip() else ((source_label_col or "").strip() or "none")
+    baseline_policy = (
+        build_fixed_baseline((baseline_start or "").strip(), (baseline_end or "").strip())
+        if (baseline_kind or "rolling") == "fixed" and (baseline_start or "").strip() and (baseline_end or "").strip()
+        else build_default_baseline(int(baseline_days or 7))
+    )
     rows = [
         ("Control Plane", f"{(control_plane_catalog or '').strip()}.{(control_plane_schema or '').strip()}"),
         ("Source Table", (source_table or "").strip() or "Not scanned yet"),
         ("Display Name", (display_name or "").strip() or "Not set"),
         ("Model Key", (model_key or "").strip() or "Not set"),
         ("Problem Type", (problem_type or "classification").title()),
-        ("Baseline Window", f"{int(baseline_days or 7)} days"),
+        ("Baseline Policy", baseline_label(baseline_policy)),
         ("Feature Columns", str(len(feature_columns or []))),
         ("Categorical Columns", str(len(categorical_columns or []))),
         ("Slice Columns", str(len(slice_columns or []))),
@@ -323,6 +355,63 @@ def _review_summary(
     ]
     frame = pd.DataFrame(rows, columns=["setting", "value"])
     return _render_frame(frame, empty_message="")
+
+
+def _render_labels_discovery(
+    *,
+    labels_table: str,
+    label_schema: pd.DataFrame,
+    label_preview: pd.DataFrame,
+    label_validation: dict | None,
+    join_col: str,
+    label_col: str,
+    order_col: str,
+) -> html.Div:
+    validation = label_validation or {}
+    mapping_frame = pd.DataFrame(
+        [
+            {"field": "join_column", "value": join_col or "Not detected"},
+            {"field": "label_column", "value": label_col or "Not detected"},
+            {"field": "order_column", "value": order_col or "Not detected"},
+        ]
+    )
+    validation_frame = pd.DataFrame(
+        [
+            {"check": "matched_rows", "value": int(validation.get("matched_rows", 0) or 0)},
+            {"check": "unmatched_rows", "value": int(validation.get("unmatched_rows", 0) or 0)},
+            {"check": "match_rate_pct", "value": float(validation.get("match_rate_pct", 0.0) or 0.0)},
+            {"check": "duplicate_join_keys", "value": int(validation.get("duplicate_join_keys", 0) or 0)},
+            {
+                "check": "distinct_label_values",
+                "value": ", ".join(validation.get("distinct_label_values", ())) or "(none)",
+            },
+            {
+                "check": "binary_compatible",
+                "value": "yes" if validation.get("binary_compatible") else "no",
+            },
+        ]
+    )
+    return html.Div(
+        [
+            html.Hr(),
+            html.H6(f"Labels Table Preview: {labels_table}", className="mb-2"),
+            html.P(
+                "Model Lens scanned the labels table, inferred the join and label columns, and validated the join against the source table.",
+                className="text-muted",
+            ),
+            html.H6("Detected Label Mapping", className="mb-2"),
+            _render_frame(mapping_frame, "No label mapping detected."),
+            html.Hr(),
+            html.H6("Join Validation", className="mb-2"),
+            _render_frame(validation_frame, "No join validation available."),
+            html.Hr(),
+            html.H6("Labels Schema", className="mb-2"),
+            _render_frame(label_schema, "No label schema metadata returned."),
+            html.Hr(),
+            html.H6("Labels Sample Rows", className="mb-2"),
+            _render_frame(label_preview, "No labels preview rows returned.", max_rows=5),
+        ]
+    )
 
 
 def _deployment_mode_prompt(session_data: dict | None):
@@ -409,7 +498,10 @@ def register_callbacks(app) -> None:
         Input("categorical-cols-dropdown", "value"),
         Input("slice-cols-dropdown", "value"),
         Input("problem-type-dropdown", "value"),
+        Input("baseline-kind-input", "value"),
         Input("baseline-days-input", "value"),
+        Input("baseline-fixed-range-input", "start_date"),
+        Input("baseline-fixed-range-input", "end_date"),
         Input("mlflow-experiment-input", "value"),
         Input("mlflow-registered-model-input", "value"),
         Input("lakebase-instance-input", "value"),
@@ -440,7 +532,10 @@ def register_callbacks(app) -> None:
         categorical_columns,
         slice_columns,
         problem_type,
+        baseline_kind,
         baseline_days,
+        baseline_start,
+        baseline_end,
         mlflow_experiment_name,
         mlflow_registered_model_name,
         lakebase_instance_name,
@@ -472,6 +567,10 @@ def register_callbacks(app) -> None:
             labels_table=labels_table,
             labels_join_col=labels_join_col,
             feature_columns=feature_columns,
+            baseline_kind=baseline_kind,
+            baseline_days=baseline_days,
+            baseline_start=baseline_start,
+            baseline_end=baseline_end,
         )
         next_disabled = {
             1: not workspace_ready,
@@ -517,7 +616,10 @@ def register_callbacks(app) -> None:
             labels_table=labels_table,
             source_label_col=source_label_col,
             external_label_col=external_label_col,
+            baseline_kind=baseline_kind,
             baseline_days=baseline_days,
+            baseline_start=baseline_start,
+            baseline_end=baseline_end,
             problem_type=problem_type,
             lakebase_instance_name=lakebase_instance_name,
             lakebase_database_name=lakebase_database_name,
@@ -538,6 +640,17 @@ def register_callbacks(app) -> None:
             not (workspace_ready and contract_ready),
             review,
         )
+
+    @app.callback(
+        Output("baseline-days-wrapper", "style"),
+        Output("baseline-fixed-range-wrapper", "style"),
+        Input("baseline-kind-input", "value"),
+    )
+    def toggle_baseline_policy_inputs(baseline_kind):
+        shared = {"marginBottom": "16px"}
+        if (baseline_kind or "rolling") == "fixed":
+            return {**shared, "display": "none"}, shared
+        return shared, {**shared, "display": "none"}
 
     @app.callback(
         Output("global-model-select", "options"),
@@ -583,7 +696,10 @@ def register_callbacks(app) -> None:
         status = html.Div(
             [
                 html.Small(model["description"], className="text-muted d-block"),
-                html.Small(f"Features: {model['feature_count']} | Baseline: {model['baseline_days']} days", className="text-muted d-block"),
+                html.Small(
+                    f"Features: {model['feature_count']} | Baseline: {model['baseline_label']}",
+                    className="text-muted d-block",
+                ),
                 html.Small(f"Rows observed: {model['total_rows']}", className="text-muted d-block"),
             ]
         )
@@ -630,6 +746,9 @@ def register_callbacks(app) -> None:
         columns = list(discovery.columns)
         preview = pd.DataFrame(discovery.preview_rows)
         schema = pd.DataFrame(discovery.schema_rows)
+        label_preview = pd.DataFrame(discovery.label_preview_rows)
+        label_schema = pd.DataFrame(discovery.label_schema_rows)
+        label_validation = dict(discovery.label_validation or {})
         numeric_count = 0
         if not schema.empty and "data_type" in schema.columns:
             numeric_count = sum(
@@ -642,6 +761,8 @@ def register_callbacks(app) -> None:
             "columns": columns,
             "preview": preview.fillna("").astype(str).to_dict("records"),
             "schema": schema.fillna("").astype(str).to_dict("records"),
+            "labels_preview": label_preview.fillna("").astype(str).to_dict("records"),
+            "labels_schema": label_schema.fillna("").astype(str).to_dict("records"),
             "discovery": {
                 "display_name": discovery.config.display_name,
                 "model_key": discovery.config.model_key,
@@ -657,11 +778,15 @@ def register_callbacks(app) -> None:
                 "external_label_col": (discovery.config.contract.label_col or "") if discovery.config.labels_table else "",
                 "labels_join_col": discovery.config.labels_join_col or "",
                 "labels_order_col": discovery.config.labels_order_col or "",
+                "labels_validation": label_validation,
                 "feature_columns": list(discovery.config.contract.feature_columns),
                 "categorical_columns": list(discovery.config.contract.categorical_columns),
                 "slice_columns": list(discovery.config.contract.slice_columns),
                 "problem_type": discovery.config.problem_type,
+                "baseline_kind": discovery.config.baseline.kind,
                 "baseline_days": discovery.config.baseline.n_days,
+                "baseline_start": discovery.config.baseline.baseline_start or "",
+                "baseline_end": discovery.config.baseline.baseline_end or "",
                 "confidence": discovery.confidence,
                 "requires_review": discovery.requires_review,
                 "warnings": list(discovery.warnings),
@@ -681,7 +806,24 @@ def register_callbacks(app) -> None:
             )
         ]
         if discovery.config.labels_table:
-            status_items.append((f"Detected external labels via {discovery.config.labels_table}.", "info"))
+            status_items.append(
+                (
+                    "Detected external labels via "
+                    f"{discovery.config.labels_table} (join={discovery.config.labels_join_col or 'n/a'}, "
+                    f"label={discovery.config.contract.label_col or 'n/a'}, "
+                    f"order={discovery.config.labels_order_col or 'n/a'}).",
+                    "info",
+                )
+            )
+            if label_validation:
+                status_items.append(
+                    (
+                        f"Join validation: matched={int(label_validation.get('matched_rows', 0) or 0)}, "
+                        f"unmatched={int(label_validation.get('unmatched_rows', 0) or 0)}, "
+                        f"duplicate_keys={int(label_validation.get('duplicate_join_keys', 0) or 0)}.",
+                        "info",
+                    )
+                )
         if discovery.config.mlflow.connected:
             status_items.append(
                 (
@@ -700,6 +842,19 @@ def register_callbacks(app) -> None:
                 html.Hr(),
                 html.H6("Sample Rows", className="mb-2"),
                 _render_frame(preview, "No preview rows returned.", max_rows=5),
+                _render_labels_discovery(
+                    labels_table=discovery.config.labels_table or "",
+                    label_schema=label_schema[[column for column in ("col_name", "data_type") if column in label_schema.columns]]
+                    if not label_schema.empty
+                    else label_schema,
+                    label_preview=label_preview,
+                    label_validation=label_validation,
+                    join_col=discovery.config.labels_join_col or "",
+                    label_col=discovery.config.contract.label_col or "",
+                    order_col=discovery.config.labels_order_col or "",
+                )
+                if discovery.config.labels_table
+                else html.Div(),
             ]
         )
         return store, status, preview_div
@@ -733,7 +888,10 @@ def register_callbacks(app) -> None:
         Output("slice-cols-dropdown", "options"),
         Output("slice-cols-dropdown", "value"),
         Output("problem-type-dropdown", "value"),
+        Output("baseline-kind-input", "value"),
         Output("baseline-days-input", "value"),
+        Output("baseline-fixed-range-input", "start_date"),
+        Output("baseline-fixed-range-input", "end_date"),
         Input("scan-data", "data"),
     )
     def populate_monitor_form(scan_data):
@@ -766,7 +924,10 @@ def register_callbacks(app) -> None:
                 [],
                 [],
                 "classification",
+                "rolling",
                 7,
+                None,
+                None,
             )
         columns = scan_data.get("columns", [])
         defaults = _discovery_defaults(scan_data) or _guess_defaults(scan_data.get("table_name", ""), columns)
@@ -819,7 +980,10 @@ def register_callbacks(app) -> None:
             slice_options,
             slice_values,
             defaults.get("problem_type", "classification"),
+            defaults.get("baseline_kind", "rolling"),
             defaults.get("baseline_days", 7),
+            defaults.get("baseline_start") or None,
+            defaults.get("baseline_end") or None,
         )
 
     @app.callback(
@@ -982,7 +1146,10 @@ def register_callbacks(app) -> None:
         State("categorical-cols-dropdown", "value"),
         State("slice-cols-dropdown", "value"),
         State("problem-type-dropdown", "value"),
+        State("baseline-kind-input", "value"),
         State("baseline-days-input", "value"),
+        State("baseline-fixed-range-input", "start_date"),
+        State("baseline-fixed-range-input", "end_date"),
         State("control-plane-catalog-input", "value"),
         State("control-plane-schema-input", "value"),
         State("lakebase-instance-input", "value"),
@@ -1013,7 +1180,10 @@ def register_callbacks(app) -> None:
         categorical_columns,
         slice_columns,
         problem_type,
+        baseline_kind,
         baseline_days,
+        baseline_start,
+        baseline_end,
         control_plane_catalog,
         control_plane_schema,
         lakebase_instance_name,
@@ -1068,7 +1238,11 @@ def register_callbacks(app) -> None:
                 display_name=(display_name or model_key or scan_data["table_name"]).strip(),
                 source_table=scan_data["table_name"],
                 contract=contract,
-                baseline=build_default_baseline(int(baseline_days or 7)),
+                baseline=(
+                    build_fixed_baseline((baseline_start or "").strip(), (baseline_end or "").strip())
+                    if (baseline_kind or "rolling") == "fixed"
+                    else build_default_baseline(int(baseline_days or 7))
+                ),
                 problem_type=problem_type or "classification",
                 model_id_value=model_id_value or None,
                 model_version_value=model_version_value or None,
@@ -1337,7 +1511,8 @@ def register_callbacks(app) -> None:
             )
         performance = backend.get_performance_summary(model_id, metric_name=metric_name or "f1")
         latest_bins = performance["latest_bins"]
-        if latest_bins.empty:
+        all_bins = performance.get("all_bins", pd.DataFrame())
+        if all_bins.empty:
             return (
                 _status_alert("No performance metrics available yet. Run a refresh after labels arrive.", "warning"),
                 html.Div(),
@@ -1348,24 +1523,47 @@ def register_callbacks(app) -> None:
                 html.Div(),
             )
         contributors = performance["contributors"]
-        feature_options = _option_list(sorted(latest_bins["feature"].unique().tolist()))
+        feature_frame = latest_bins if not latest_bins.empty else all_bins
+        features = sorted(
+            {
+                str(value)
+                for value in feature_frame.get("feature", pd.Series(dtype=str)).dropna().tolist()
+                if str(value).strip()
+            }
+        )
+        feature_options = _option_list(features)
         feature_values = {option["value"] for option in feature_options}
         selected_feature = current_feature if current_feature in feature_values else (feature_options[0]["value"] if feature_options else None)
+        degradation_detected = bool(performance.get("has_significant_degradation"))
+        alert = html.Div()
+        if not degradation_detected:
+            alert = _status_alert(
+                "Performance metrics are populated, but no significant degradation is detected in the latest window.",
+                "info",
+            )
         kpi_cards = [
             dbc.Col(make_metric_card("Tracked Features", str(len(feature_options)), "With labeled performance bins"), md=4),
-            dbc.Col(make_metric_card("Worst Weighted Delta", f"{contributors['weighted_delta'].min():.4f}", "Most degraded feature"), md=4),
+            dbc.Col(
+                make_metric_card(
+                    "Worst Weighted Delta",
+                    f"{float(performance.get('worst_weighted_delta', 0.0)):.4f}",
+                    "Most degraded feature" if degradation_detected else "Stable latest window",
+                ),
+                md=4,
+            ),
             dbc.Col(make_metric_card("Windows", str(len(performance["timeline"])), "Historical performance snapshots"), md=4),
         ]
-        note = latest_bins[["window_start", "window_end"]].drop_duplicates().astype(str)
+        note_source = latest_bins if not latest_bins.empty else all_bins
+        note = note_source[[column for column in ("window_start", "window_end") if column in note_source.columns]].drop_duplicates().astype(str)
         note_text = html.Small(
             f"Latest comparison window: {note.iloc[0]['window_start']} to {note.iloc[0]['window_end']}" if not note.empty else "",
             className="text-muted",
         )
         return (
-            html.Div(),
+            alert,
             kpi_cards,
             make_chart_card(charts.build_performance_timeline(performance["timeline"], metric_name=metric_name or "f1")),
-            make_chart_card(charts.build_feature_bin_impact(latest_bins, contributors)),
+            make_chart_card(charts.build_feature_bin_impact(feature_frame, contributors)),
             feature_options,
             selected_feature,
             note_text,
@@ -1387,7 +1585,7 @@ def register_callbacks(app) -> None:
             return html.Div()
         backend = _make_backend(session_data)
         performance = backend.get_performance_summary(model_id, metric_name=metric_name or "f1")
-        latest_bins = performance["latest_bins"]
+        latest_bins = performance["latest_bins"] if not performance["latest_bins"].empty else performance.get("all_bins", pd.DataFrame())
         feature_bins = latest_bins[latest_bins["feature"] == feature]
         return make_chart_card(charts.build_bin_detail(feature_bins, feature, metric_name=metric_name or "f1"))
 
@@ -1428,14 +1626,26 @@ def register_callbacks(app) -> None:
                 {"field": "feature_columns", "value": ", ".join(config.contract.feature_columns)},
                 {"field": "categorical_columns", "value": ", ".join(config.contract.categorical_columns)},
                 {"field": "slice_columns", "value": ", ".join(config.contract.slice_columns)},
+                {"field": "baseline_kind", "value": config.baseline.kind},
                 {"field": "baseline_days", "value": config.baseline.n_days},
+                {"field": "baseline_start", "value": config.baseline.baseline_start or ""},
+                {"field": "baseline_end", "value": config.baseline.baseline_end or ""},
                 {"field": "problem_type", "value": config.problem_type},
             ]
         )
         summary_frame = pd.DataFrame([data["summary"]]) if data["summary"] else pd.DataFrame()
-        settings_frame = pd.DataFrame([data["settings"]])
+        settings_frame = pd.DataFrame(
+            [
+                {"field": field, "value": _format_runtime_setting_value(field, value)}
+                for field, value in data["settings"].items()
+            ]
+        )
         return html.Div(
             [
+                html.P(
+                    f"Showing contract and latest summary for the currently selected monitor: {config.display_name} ({config.model_key}). Runtime settings are global to the app.",
+                    className="text-muted mb-3",
+                ),
                 html.H6("Monitor Contract", className="text-light mb-2"),
                 _render_frame(contract_frame, "No contract data."),
                 html.Hr(),

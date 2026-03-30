@@ -88,6 +88,20 @@ def _preview_unique_count(preview: pd.DataFrame, column_name: str) -> int:
     return int(values.nunique())
 
 
+def _preview_distinct_values(preview: pd.DataFrame, column_name: str, limit: int = 10) -> list[str]:
+    if preview.empty or column_name not in preview.columns:
+        return []
+    values = preview[column_name].dropna().astype(str).str.strip()
+    values = values[values != ""]
+    distinct: list[str] = []
+    for value in values.tolist():
+        if value not in distinct:
+            distinct.append(value)
+        if len(distinct) >= limit:
+            break
+    return distinct
+
+
 def _fallback_column(columns: list[str], data_types: dict[str, str], preferred_types: tuple[str, ...] = ()) -> str:
     if not columns:
         return ""
@@ -96,6 +110,13 @@ def _fallback_column(columns: list[str], data_types: dict[str, str], preferred_t
             if _is_type(data_types.get(column, ""), preferred_types):
                 return column
     return columns[0]
+
+
+def _is_binary_label_values(values: list[str]) -> bool:
+    if not values:
+        return False
+    normalized = {value.strip().lower() for value in values if value.strip()}
+    return normalized.issubset({"0", "1", "0.0", "1.0", "true", "false"})
 
 
 class MonitorDiscoveryService:
@@ -209,18 +230,35 @@ class MonitorDiscoveryService:
         labels_order_col = None
         label_col = source_label_col
         label_columns: tuple[str, ...] = ()
+        label_schema_rows: tuple[dict[str, str], ...] = ()
+        label_preview_rows: tuple[dict[str, str], ...] = ()
+        label_validation: dict[str, object] = {}
         if labels_table:
-            label_columns, _, label_schema = self._repository.scan_source_table(labels_table, preview_rows=3)
+            label_columns, label_preview, label_schema = self._repository.scan_source_table(labels_table, preview_rows=5)
             label_types = _schema_types(label_schema)
             label_columns = tuple(label_columns)
-            label_candidates_external = _rank_columns(
+            label_schema_rows = tuple(label_schema.fillna("").astype(str).to_dict("records"))
+            label_preview_rows = tuple(label_preview.fillna("").astype(str).to_dict("records"))
+
+            order_candidates = _rank_columns(
                 list(label_columns),
-                ("label", "target", "actual", "ground_truth"),
+                ("label_timestamp", "updated_at", "event_ts", "created_at", "timestamp"),
                 label_types,
+                preferred_types=TIMESTAMP_TYPE_TOKENS,
             )
+            shared_columns = [column for column in columns if column in label_columns]
             join_candidates = []
-            if entity_id_col and entity_id_col in label_columns:
+            if entity_id_col and entity_id_col in shared_columns:
                 join_candidates.append(entity_id_col)
+            join_candidates.extend(
+                column
+                for column in _rank_columns(
+                    shared_columns,
+                    ("entity_id", "request_id", "user_id", "account_id", "id"),
+                    label_types,
+                )
+                if column not in join_candidates and column not in order_candidates
+            )
             join_candidates.extend(
                 column
                 for column in _rank_columns(
@@ -228,22 +266,67 @@ class MonitorDiscoveryService:
                     ("entity_id", "request_id", "user_id", "account_id", "id"),
                     label_types,
                 )
-                if column not in join_candidates
-            )
-            order_candidates = _rank_columns(
-                list(label_columns),
-                ("label_timestamp", "updated_at", "event_ts", "created_at", "timestamp"),
-                label_types,
-                preferred_types=TIMESTAMP_TYPE_TOKENS,
+                if column not in join_candidates and column not in order_candidates
             )
 
-            label_col = label_candidates_external[0] if label_candidates_external else source_label_col
+            categorical_label_candidates = [
+                column
+                for column in label_columns
+                if column not in set(join_candidates)
+                and column not in set(order_candidates)
+                and not _is_type(label_types.get(column, ""), TIMESTAMP_TYPE_TOKENS)
+                and _preview_unique_count(label_preview, column) <= 12
+            ]
+            binary_label_candidates = [
+                column
+                for column in categorical_label_candidates
+                if _is_binary_label_values(_preview_distinct_values(label_preview, column))
+            ]
+            label_candidates_external = _rank_columns(
+                [column for column in label_columns if column not in set(join_candidates)],
+                ("label", "target", "actual", "ground_truth"),
+                label_types,
+            )
+
+            label_col = (
+                label_candidates_external[0]
+                if label_candidates_external
+                else (binary_label_candidates[0] if binary_label_candidates else (categorical_label_candidates[0] if categorical_label_candidates else source_label_col))
+            )
             labels_join_col = join_candidates[0] if join_candidates else entity_id_col
             labels_order_col = order_candidates[0] if order_candidates else None
 
             if not label_col or not labels_join_col:
                 warnings.append("External labels table needs a join column and label column; review advanced mappings.")
                 requires_review = True
+            elif not entity_id_col or entity_id_col not in columns:
+                warnings.append("Could not find a matching inference-table join column for external labels; review mappings.")
+                requires_review = True
+            elif labels_join_col not in label_columns:
+                warnings.append("Detected labels join column is not present in the labels table schema.")
+                requires_review = True
+            else:
+                label_validation = self._repository.profile_labels_mapping(
+                    source_table=source_table.strip(),
+                    source_join_col=entity_id_col,
+                    labels_table=labels_table,
+                    labels_join_col=labels_join_col,
+                    label_col=label_col,
+                    labels_order_col=labels_order_col,
+                )
+                if int(label_validation.get("unmatched_rows", 0) or 0) > 0:
+                    warnings.append(
+                        f"Labels join leaves {int(label_validation.get('unmatched_rows', 0) or 0)} inference rows unmatched."
+                    )
+                if int(label_validation.get("duplicate_join_keys", 0) or 0) > 0 and not labels_order_col:
+                    warnings.append("Labels table has duplicate join keys and no timestamp-like order column was detected.")
+                    requires_review = True
+                distinct_label_values = list(label_validation.get("distinct_label_values", ()))
+                if distinct_label_values and not bool(label_validation.get("binary_compatible")):
+                    warnings.append(
+                        f"Detected label values are not strictly binary: {', '.join(distinct_label_values[:5])}. Confirm the problem type and label mapping."
+                    )
+                    requires_review = True
 
         model_id_value, model_scope_requires_review = self._infer_model_scope(
             source_table=source_table,
@@ -327,6 +410,9 @@ class MonitorDiscoveryService:
             schema_rows=tuple(schema.fillna("").astype(str).to_dict("records")),
             preview_rows=tuple(preview.fillna("").astype(str).to_dict("records")),
             label_columns=label_columns,
+            label_schema_rows=label_schema_rows,
+            label_preview_rows=label_preview_rows,
+            label_validation=label_validation,
             confidence=confidence,
             requires_review=requires_review,
             warnings=tuple(dict.fromkeys(_option_texts(warnings))),

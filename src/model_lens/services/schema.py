@@ -5,6 +5,8 @@ from model_lens.services.table_names import TableNames
 
 def monitor_config_migration_columns() -> dict[str, str]:
     return {
+        "baseline_start": "DATE",
+        "baseline_end": "DATE",
         "model_id_value": "STRING",
         "model_version_value": "STRING",
         "labels_order_col": "STRING",
@@ -37,6 +39,8 @@ def ddl(table_names: TableNames) -> dict[str, str]:
                 categorical_columns ARRAY<STRING>,
                 baseline_kind STRING,
                 baseline_n_days INT,
+                baseline_start DATE,
+                baseline_end DATE,
                 baseline_max_comparison_days INT,
                 problem_type STRING,
                 labels_table STRING,

@@ -7,7 +7,7 @@ import pandas as pd
 
 from model_lens.analytics.drift import compute_feature_drift
 from model_lens.analytics.performance import rank_degradation_contributors
-from model_lens.domain.models import MonitorConfig, RefreshResult
+from model_lens.domain.models import BaselinePolicy, MonitorConfig, RefreshResult
 from model_lens.services.incidents import build_incidents
 
 
@@ -18,12 +18,12 @@ def _safe_float(value: object) -> float | None:
     return float(converted)
 
 
-def split_baseline_current(df: pd.DataFrame, timestamp_col: str, n_days: int) -> tuple[pd.DataFrame, pd.DataFrame]:
-    ordered = df.copy()
-    ordered[timestamp_col] = pd.to_datetime(ordered[timestamp_col])
-    ordered = ordered.sort_values(timestamp_col)
-    if ordered.empty:
-        return ordered, ordered
+def _rolling_windows(
+    ordered: pd.DataFrame,
+    *,
+    timestamp_col: str,
+    n_days: int,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     latest_date = ordered[timestamp_col].max().normalize()
     current_start = latest_date - timedelta(days=max(n_days - 1, 0))
     baseline_end = current_start - timedelta(days=1)
@@ -34,11 +34,46 @@ def split_baseline_current(df: pd.DataFrame, timestamp_col: str, n_days: int) ->
     return baseline, current
 
 
+def _fixed_windows(
+    ordered: pd.DataFrame,
+    *,
+    timestamp_col: str,
+    policy: BaselinePolicy,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    baseline_start = pd.Timestamp(policy.baseline_start).normalize()
+    baseline_end = pd.Timestamp(policy.baseline_end).normalize()
+    latest_date = ordered[timestamp_col].max().normalize()
+    current_end = latest_date
+    current_start = latest_date - timedelta(days=max(policy.n_days - 1, 0))
+    if current_start <= baseline_end:
+        current_start = baseline_end + timedelta(days=1)
+    normalized = ordered[timestamp_col].dt.normalize()
+    baseline = ordered[(normalized >= baseline_start) & (normalized <= baseline_end)]
+    current = ordered[(normalized >= current_start) & (normalized <= current_end)]
+    return baseline, current
+
+
+def split_baseline_current(
+    df: pd.DataFrame,
+    timestamp_col: str,
+    baseline: BaselinePolicy | int,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    ordered = df.copy()
+    ordered[timestamp_col] = pd.to_datetime(ordered[timestamp_col])
+    ordered = ordered.sort_values(timestamp_col)
+    if ordered.empty:
+        return ordered, ordered
+    policy = baseline if isinstance(baseline, BaselinePolicy) else BaselinePolicy(kind="rolling", n_days=int(baseline))
+    if policy.kind == "fixed":
+        return _fixed_windows(ordered, timestamp_col=timestamp_col, policy=policy)
+    return _rolling_windows(ordered, timestamp_col=timestamp_col, n_days=policy.n_days)
+
+
 def refresh_monitor(config: MonitorConfig, inference_df: pd.DataFrame) -> RefreshResult:
     baseline_df, current_df = split_baseline_current(
         inference_df,
         config.contract.timestamp_col,
-        config.baseline.n_days,
+        config.baseline,
     )
     if baseline_df.empty or current_df.empty:
         return RefreshResult(drift_rows=[], quality_rows=[], performance_rows=[], incident_rows=[])
@@ -52,6 +87,7 @@ def refresh_monitor(config: MonitorConfig, inference_df: pd.DataFrame) -> Refres
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     baseline_start = str(pd.to_datetime(baseline_df[config.contract.timestamp_col]).min().date())
     baseline_end = str(pd.to_datetime(baseline_df[config.contract.timestamp_col]).max().date())
+    current_start = str(pd.to_datetime(current_df[config.contract.timestamp_col]).min().date())
     current_end = str(pd.to_datetime(current_df[config.contract.timestamp_col]).max().date())
 
     drift_rows: list[dict] = []
@@ -62,7 +98,7 @@ def refresh_monitor(config: MonitorConfig, inference_df: pd.DataFrame) -> Refres
                 "feature_name": row["feature_name"],
                 "metric_name": metric_name,
                 "metric_value": float(row[metric_name]),
-                "window_start": baseline_end,
+                "window_start": current_start,
                 "window_end": current_end,
                 "baseline_start": baseline_start,
                 "baseline_end": baseline_end,
@@ -117,7 +153,7 @@ def refresh_monitor(config: MonitorConfig, inference_df: pd.DataFrame) -> Refres
             "volume_pct": float(row["volume_pct"]),
             "contribution": float(row["contribution"]),
             "metric_name": "f1",
-            "window_start": baseline_end,
+            "window_start": current_start,
             "window_end": current_end,
             "computed_at": now,
         } for _, row in performance_frame.iterrows()]

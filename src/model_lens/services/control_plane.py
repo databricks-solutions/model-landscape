@@ -92,6 +92,88 @@ class ControlPlaneRepository:
                 values.append(text)
         return values
 
+    def profile_labels_mapping(
+        self,
+        *,
+        source_table: str,
+        source_join_col: str,
+        labels_table: str,
+        labels_join_col: str,
+        label_col: str,
+        labels_order_col: str | None = None,
+    ) -> dict[str, Any]:
+        validate_identifier(source_table)
+        validate_identifier(labels_table)
+        source_join_col = validate_identifier(source_join_col)
+        labels_join_col = validate_identifier(labels_join_col)
+        label_col = validate_identifier(label_col)
+        order_col = validate_identifier(labels_order_col) if labels_order_col else None
+
+        duplicate_keys = self._warehouse.query(
+            f"""
+            SELECT COUNT(*) AS duplicate_key_count
+            FROM (
+                SELECT {quote_column(labels_join_col)}
+                FROM {labels_table}
+                GROUP BY {quote_column(labels_join_col)}
+                HAVING COUNT(*) > 1
+            ) duplicate_keys
+            """
+        )
+        duplicate_key_count = 0 if duplicate_keys.empty else int(duplicate_keys.iloc[0]["duplicate_key_count"] or 0)
+
+        join_presence = self._warehouse.query(
+            f"""
+            SELECT
+                COUNT(*) AS inference_rows,
+                SUM(CASE WHEN l.{quote_column(labels_join_col)} IS NOT NULL THEN 1 ELSE 0 END) AS matched_rows,
+                SUM(CASE WHEN l.{quote_column(labels_join_col)} IS NULL THEN 1 ELSE 0 END) AS unmatched_rows
+            FROM {source_table} s
+            LEFT JOIN (
+                SELECT DISTINCT {quote_column(labels_join_col)}
+                FROM {labels_table}
+                WHERE {quote_column(labels_join_col)} IS NOT NULL
+            ) l
+                ON s.{quote_column(source_join_col)} = l.{quote_column(labels_join_col)}
+            """
+        )
+        if join_presence.empty:
+            inference_rows = matched_rows = unmatched_rows = 0
+        else:
+            row = join_presence.iloc[0]
+            inference_rows = int(row.get("inference_rows", 0) or 0)
+            matched_rows = int(row.get("matched_rows", 0) or 0)
+            unmatched_rows = int(row.get("unmatched_rows", 0) or 0)
+
+        label_values_frame = self._warehouse.query(
+            f"""
+            SELECT DISTINCT CAST({quote_column(label_col)} AS STRING) AS label_value
+            FROM {labels_table}
+            WHERE {quote_column(label_col)} IS NOT NULL
+            LIMIT 10
+            """
+        )
+        distinct_label_values: list[str] = []
+        if not label_values_frame.empty and "label_value" in label_values_frame.columns:
+            for value in label_values_frame["label_value"].tolist():
+                text = str(value).strip()
+                if text and text not in distinct_label_values:
+                    distinct_label_values.append(text)
+
+        binary_compatible = bool(distinct_label_values) and set(distinct_label_values).issubset({"0", "1"})
+        match_rate_pct = round((matched_rows / inference_rows) * 100, 2) if inference_rows else 0.0
+
+        return {
+            "inference_rows": inference_rows,
+            "matched_rows": matched_rows,
+            "unmatched_rows": unmatched_rows,
+            "match_rate_pct": match_rate_pct,
+            "duplicate_join_keys": duplicate_key_count,
+            "distinct_label_values": tuple(distinct_label_values),
+            "binary_compatible": binary_compatible,
+            "order_column": order_col or "",
+        }
+
     def upsert_monitor_config(self, config: MonitorConfig) -> None:
         now = pd.Timestamp.utcnow().isoformat()
         feature_columns = array_literal(list(config.contract.feature_columns))
@@ -108,18 +190,17 @@ class ControlPlaneRepository:
                 timestamp_col, model_id_col, model_id_value, prediction_col,
                 model_version_col, model_version_value, prediction_score_col, label_col, entity_id_col,
                 feature_columns, slice_columns, categorical_columns,
-                baseline_kind, baseline_n_days, baseline_max_comparison_days,
+                baseline_kind, baseline_n_days, baseline_start, baseline_end, baseline_max_comparison_days,
                 problem_type, labels_table, labels_join_col, labels_order_col,
                 mlflow_experiment_name, mlflow_experiment_id, mlflow_run_id,
                 mlflow_registered_model_name, mlflow_model_version,
                 created_by, status,
                 created_at, updated_at
             ) VALUES (
-                %s, %s, %s,
-                %s, %s, %s, %s,
                 %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s,
                 {feature_columns}, {slice_columns}, {categorical_columns},
-                %s, %s, %s,
+                %s, %s, CAST(%s AS DATE), CAST(%s AS DATE), %s,
                 %s, %s, %s, %s,
                 %s, %s, %s, %s, %s,
                 %s, %s,
@@ -141,6 +222,8 @@ class ControlPlaneRepository:
                 config.contract.entity_id_col or "",
                 config.baseline.kind,
                 config.baseline.n_days,
+                config.baseline.baseline_start or None,
+                config.baseline.baseline_end or None,
                 config.baseline.max_comparison_days,
                 config.problem_type,
                 config.labels_table or "",
@@ -183,8 +266,10 @@ class ControlPlaneRepository:
             categorical_columns=parse_string_array(row.get("categorical_columns")),
         )
         baseline = BaselinePolicy(
-            kind=_as_text(row.get("baseline_kind")) or "rolling_n_days",
+            kind=_as_text(row.get("baseline_kind")) or "rolling",
             n_days=int(row.get("baseline_n_days", 7) or 7),
+            baseline_start=_as_text(row.get("baseline_start")) or None,
+            baseline_end=_as_text(row.get("baseline_end")) or None,
             max_comparison_days=int(row.get("baseline_max_comparison_days", 90) or 90),
         )
         return MonitorConfig(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -24,9 +25,60 @@ class InferenceContract:
 
 @dataclass(frozen=True)
 class BaselinePolicy:
-    kind: str = "rolling_n_days"
+    kind: str = "rolling"
     n_days: int = 7
     max_comparison_days: int = 90
+    baseline_start: str | None = None
+    baseline_end: str | None = None
+
+    def __post_init__(self) -> None:
+        normalized_kind = (self.kind or "rolling").strip().lower()
+        if normalized_kind == "rolling_n_days":
+            normalized_kind = "rolling"
+        if normalized_kind not in {"rolling", "fixed"}:
+            raise ValueError("Baseline kind must be 'rolling' or 'fixed'.")
+        object.__setattr__(self, "kind", normalized_kind)
+
+        if self.max_comparison_days < 1:
+            raise ValueError("max_comparison_days must be positive")
+
+        if normalized_kind == "rolling":
+            if self.n_days < 1:
+                raise ValueError("n_days must be positive")
+            object.__setattr__(self, "baseline_start", None)
+            object.__setattr__(self, "baseline_end", None)
+            return
+
+        start = _coerce_iso_date(self.baseline_start)
+        end = _coerce_iso_date(self.baseline_end)
+        if not start or not end:
+            raise ValueError("Fixed baselines require baseline_start and baseline_end.")
+        if end < start:
+            raise ValueError("baseline_end must be on or after baseline_start.")
+        object.__setattr__(self, "baseline_start", start)
+        object.__setattr__(self, "baseline_end", end)
+        object.__setattr__(self, "n_days", (date.fromisoformat(end) - date.fromisoformat(start)).days + 1)
+
+    @property
+    def is_fixed(self) -> bool:
+        return self.kind == "fixed"
+
+    @property
+    def label(self) -> str:
+        if self.is_fixed and self.baseline_start and self.baseline_end:
+            return f"Fixed: {self.baseline_start} to {self.baseline_end}"
+        return f"Rolling: {self.n_days} days"
+
+
+def _coerce_iso_date(value: str | None) -> str | None:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if "T" in text:
+        text = text.split("T", 1)[0]
+    return date.fromisoformat(text).isoformat()
 
 
 @dataclass(frozen=True)
@@ -82,6 +134,9 @@ class MonitorDiscoveryResult:
     schema_rows: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     preview_rows: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     label_columns: tuple[str, ...] = field(default_factory=tuple)
+    label_schema_rows: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    label_preview_rows: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    label_validation: dict[str, Any] = field(default_factory=dict)
     confidence: str = "high"
     requires_review: bool = False
     warnings: tuple[str, ...] = field(default_factory=tuple)
