@@ -7,7 +7,7 @@ from typing import Any
 import pandas as pd
 
 from model_lens.config import settings
-from model_lens.domain.models import BaselinePolicy, InferenceContract, MonitorConfig, RefreshResult
+from model_lens.domain.models import BaselinePolicy, InferenceContract, MLflowLineage, MonitorConfig, RefreshResult
 from model_lens.services.lakebase import LakebaseConnection, LakebaseReadModel
 from model_lens.services.schema import ddl, monitor_config_migration_columns
 from model_lens.services.sql_utils import array_literal, parse_string_array, quote_column, validate_identifier
@@ -71,6 +71,27 @@ class ControlPlaneRepository:
         preview = self._warehouse.query(f"SELECT * FROM {table_name} LIMIT {preview_rows}")
         return columns, preview, schema
 
+    def sample_distinct_values(self, table_name: str, column_name: str, limit: int = 20) -> list[str]:
+        validate_identifier(table_name)
+        column_name = validate_identifier(column_name)
+        limit = max(1, min(limit, 50))
+        frame = self._warehouse.query(
+            f"""
+            SELECT DISTINCT {quote_column(column_name)} AS sampled_value
+            FROM {table_name}
+            WHERE {quote_column(column_name)} IS NOT NULL
+            LIMIT {limit}
+            """
+        )
+        if frame.empty or "sampled_value" not in frame.columns:
+            return []
+        values: list[str] = []
+        for value in frame["sampled_value"].tolist():
+            text = str(value).strip()
+            if text:
+                values.append(text)
+        return values
+
     def upsert_monitor_config(self, config: MonitorConfig) -> None:
         now = pd.Timestamp.utcnow().isoformat()
         feature_columns = array_literal(list(config.contract.feature_columns))
@@ -88,7 +109,10 @@ class ControlPlaneRepository:
                 model_version_col, model_version_value, prediction_score_col, label_col, entity_id_col,
                 feature_columns, slice_columns, categorical_columns,
                 baseline_kind, baseline_n_days, baseline_max_comparison_days,
-                problem_type, labels_table, labels_join_col, labels_order_col, created_by, status,
+                problem_type, labels_table, labels_join_col, labels_order_col,
+                mlflow_experiment_name, mlflow_experiment_id, mlflow_run_id,
+                mlflow_registered_model_name, mlflow_model_version,
+                created_by, status,
                 created_at, updated_at
             ) VALUES (
                 %s, %s, %s,
@@ -96,7 +120,9 @@ class ControlPlaneRepository:
                 %s, %s, %s, %s, %s,
                 {feature_columns}, {slice_columns}, {categorical_columns},
                 %s, %s, %s,
-                %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s,
+                %s, %s, %s, %s, %s,
+                %s, %s,
                 CAST(%s AS TIMESTAMP), CAST(%s AS TIMESTAMP)
             )
             """,
@@ -120,6 +146,11 @@ class ControlPlaneRepository:
                 config.labels_table or "",
                 config.labels_join_col or "",
                 config.labels_order_col or "",
+                config.mlflow.experiment_name or "",
+                config.mlflow.experiment_id or "",
+                config.mlflow.run_id or "",
+                config.mlflow.registered_model_name or "",
+                config.mlflow.model_version or "",
                 config.created_by,
                 "active",
                 now,
@@ -168,6 +199,13 @@ class ControlPlaneRepository:
             labels_table=_as_text(row.get("labels_table")) or None,
             labels_join_col=_as_text(row.get("labels_join_col")) or None,
             labels_order_col=_as_text(row.get("labels_order_col")) or None,
+            mlflow=MLflowLineage(
+                experiment_name=_as_text(row.get("mlflow_experiment_name")) or None,
+                experiment_id=_as_text(row.get("mlflow_experiment_id")) or None,
+                run_id=_as_text(row.get("mlflow_run_id")) or None,
+                registered_model_name=_as_text(row.get("mlflow_registered_model_name")) or None,
+                model_version=_as_text(row.get("mlflow_model_version")) or None,
+            ),
             created_by=_as_text(row.get("created_by")) or "app",
         )
 

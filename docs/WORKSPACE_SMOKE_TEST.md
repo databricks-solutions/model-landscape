@@ -210,43 +210,37 @@ In the app:
 
 1. Continue to the `Source` step and set the source table to:
    - `main.model_lens_demo.inference_logs`
-2. Optional Lakebase values for app reads:
-   - `Lakebase Instance Name`: `<your-lakebase-instance>`
-   - `Lakebase Database Name`: `<your-lakebase-database>`
-3. Click `Scan`.
+2. Optional draft inputs:
+   - `Optional Labels Table`: `main.model_lens_demo.labels`
+   - `Optional MLflow Experiment`: leave blank for this smoke test unless you have one ready
+   - `Optional Registered Model`: leave blank for this smoke test unless you have one ready
+3. Click `Discover`.
 4. Review the schema and sample rows, then continue to the `Contract` step.
-
-Use these field mappings:
-
-- `Display Name`: `Fraud Model Demo`
-- `Model Key`: `fraud_model_demo`
-- `Timestamp Column`: `event_ts`
-- `Model ID Column`: `model_id`
-- `Monitored Model ID Value`: `fraud_model_v1`
-- `Prediction Column`: `prediction`
-- `Model Version Column`: `(none)`
-- `Prediction Score Column`: `(none)`
-- `Entity ID Column`: `entity_id`
-- `Label Column In Source`: `(none)`
-- `External Labels Table`: `main.model_lens_demo.labels`
-- `External Labels Join Column`: `entity_id`
-- `External Label Column`: `label`
-- `External Labels Order Column`: `label_timestamp`
-- `Problem Type`: `classification`
-- `Baseline Days`: `7`
-
-For the happy-path feature selection, choose:
-
-- `amount`
-- `velocity_7d`
-- `device_score`
-
-Optional categorical/slice test after the happy path:
-
-- add `region`
-- add `merchant_segment`
-
-Continue to the `Review` step, then save the monitor:
+5. Confirm the inferred contract:
+   - `Display Name`: `Fraud Model Demo`
+   - `Model Key`: `fraud_model_demo`
+   - `Problem Type`: `classification`
+   - `Baseline Days`: `7`
+6. Open `Advanced mappings and overrides` and confirm:
+   - `Timestamp Column`: `event_ts`
+   - `Model ID Column`: `model_id`
+   - `Monitored Model ID Value`: `fraud_model_v1`
+   - `Prediction Column`: `prediction`
+   - `Model Version Column`: `(none)`
+   - `Prediction Score Column`: `(none)`
+   - `Entity ID Column`: `entity_id`
+   - `Label Column In Source`: `(none)`
+   - `External Labels Join Column`: `entity_id`
+   - `External Label Column`: `label`
+   - `External Labels Order Column`: `label_timestamp`
+7. In the same `Advanced` section, confirm feature selection:
+   - `amount`
+   - `velocity_7d`
+   - `device_score`
+8. Optional slice check after the happy path:
+   - confirm `region`
+   - confirm `merchant_segment` if you added it to the dataset
+9. Continue to the `Review` step, then save the monitor:
 
 - click `Save Monitor And Run Initial Refresh`
 

@@ -68,6 +68,7 @@ Current engine behavior:
 - numeric features participate in drift calculations
 - non-numeric selected features are kept in the contract and projected into the UI
 - labels can come from the source table or an external labels table
+- an optional MLflow experiment or registered model can contribute feature ordering, model/version hints, and lineage metadata during onboarding
 - refresh compares the latest `n` days with the preceding `n` days
 - if an external labels table is not unique on the join key, you must provide an `External Labels Order Column`
 - if a source table contains multiple `model_id` values, you must provide `Monitored Model ID Value`
@@ -197,10 +198,10 @@ After deploy:
 4. If Lakebase is available and you want faster app reads, fill in `Lakebase Instance Name` and `Lakebase Database Name`.
 5. Click `Setup Control Plane`. The `Workspace` step only unlocks after setup succeeds for the current namespace values.
 6. Continue to `Source`.
-7. In the `Source` step, scan a source table.
-8. In the `Contract` step, map the fields and feature set.
-9. If the table contains more than one `model_id`, fill in `Monitored Model ID Value`.
-10. If external labels are not unique on the join key, fill in `External Labels Order Column`.
+7. In the `Source` step, enter the inference table. Optionally add a labels table and MLflow experiment or registered model, then click `Discover`.
+8. In the `Contract` step, review the inferred display name, model key, problem type, and feature set. Use `Advanced` only if the draft needs overrides.
+9. If the table contains more than one `model_id`, confirm or fill in `Monitored Model ID Value`.
+10. If external labels are not unique on the join key, confirm or fill in `External Labels Order Column`.
 11. Continue to `Review`, then save the monitor and run the initial refresh.
 12. Confirm the monitor summary and incidents load.
 

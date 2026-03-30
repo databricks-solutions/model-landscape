@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
-from model_lens.domain.models import MonitorConfig
+from model_lens.domain.models import MLflowLineage, MonitorConfig
 from model_lens.services.contracts import build_contract
 from model_lens.services.control_plane import ControlPlaneRepository
 from model_lens.services.onboarding import build_default_baseline
@@ -44,6 +44,11 @@ class FakeWarehouse:
             "labels_table": "",
             "labels_join_col": "",
             "labels_order_col": "",
+            "mlflow_experiment_name": "",
+            "mlflow_experiment_id": "",
+            "mlflow_run_id": "",
+            "mlflow_registered_model_name": "",
+            "mlflow_model_version": "",
             "created_by": "app",
         }
 
@@ -76,7 +81,12 @@ class FakeWarehouse:
                 "labels_table": params[16],
                 "labels_join_col": params[17],
                 "labels_order_col": params[18],
-                "created_by": params[19],
+                "mlflow_experiment_name": params[19],
+                "mlflow_experiment_id": params[20],
+                "mlflow_run_id": params[21],
+                "mlflow_registered_model_name": params[22],
+                "mlflow_model_version": params[23],
+                "created_by": params[24],
             }
 
     def execute_batch(self, insert_template: str, rows: list[tuple], batch_size: int = 200) -> None:
@@ -90,6 +100,8 @@ class FakeWarehouse:
             return pd.DataFrame([{"distinct_model_ids": self.distinct_model_ids}])
         if "duplicate_key_count" in sql:
             return pd.DataFrame([{"duplicate_key_count": self.duplicate_label_keys}])
+        if "AS sampled_value" in sql:
+            return pd.DataFrame([{"sampled_value": "m1"}])
         if "WITH latest_window AS" in sql:
             return pd.DataFrame([{
                 "model_key": self.monitor_row["model_key"],
@@ -184,6 +196,13 @@ def _monitor_config(
         labels_table="catalog.schema.labels" if with_external_labels else None,
         labels_join_col="entity_id" if with_external_labels else None,
         labels_order_col=labels_order_col if with_external_labels else None,
+        mlflow=MLflowLineage(
+            experiment_name="fraud_monitoring",
+            experiment_id="123",
+            run_id="run-123",
+            registered_model_name="fraud_model_v1",
+            model_version="7",
+        ),
         created_by="app",
     )
 
@@ -199,6 +218,8 @@ def test_upsert_monitor_config_keeps_full_feature_and_categorical_metadata() -> 
     assert "ARRAY('segment')" in insert_sql
     assert insert_params[0] == "payments_risk_v1"
     assert insert_params[1] == "Payments Risk"
+    assert insert_params[19] == "fraud_monitoring"
+    assert insert_params[23] == "7"
 
 
 def test_load_monitor_frame_uses_external_labels_join_and_model_filter() -> None:
@@ -228,6 +249,22 @@ def test_scan_source_table_returns_schema_and_preview() -> None:
         "col_name": "event_ts",
         "data_type": "timestamp",
     }
+
+
+def test_list_monitor_configs_round_trips_mlflow_lineage() -> None:
+    warehouse = FakeWarehouse()
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    config = repository.list_monitor_configs()[0]
+
+    assert config.mlflow.experiment_name is None
+    repository.upsert_monitor_config(_monitor_config())
+    config = repository.list_monitor_configs()[0]
+    assert config.mlflow.experiment_name == "fraud_monitoring"
+    assert config.mlflow.experiment_id == "123"
+    assert config.mlflow.run_id == "run-123"
+    assert config.mlflow.registered_model_name == "fraud_model_v1"
+    assert config.mlflow.model_version == "7"
 
 
 def test_validate_monitor_source_requires_model_id_value_for_shared_tables() -> None:

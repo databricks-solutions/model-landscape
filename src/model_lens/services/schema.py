@@ -8,6 +8,11 @@ def monitor_config_migration_columns() -> dict[str, str]:
         "model_id_value": "STRING",
         "model_version_value": "STRING",
         "labels_order_col": "STRING",
+        "mlflow_experiment_name": "STRING",
+        "mlflow_experiment_id": "STRING",
+        "mlflow_run_id": "STRING",
+        "mlflow_registered_model_name": "STRING",
+        "mlflow_model_version": "STRING",
     }
 
 
@@ -37,6 +42,11 @@ def ddl(table_names: TableNames) -> dict[str, str]:
                 labels_table STRING,
                 labels_join_col STRING,
                 labels_order_col STRING,
+                mlflow_experiment_name STRING,
+                mlflow_experiment_id STRING,
+                mlflow_run_id STRING,
+                mlflow_registered_model_name STRING,
+                mlflow_model_version STRING,
                 created_by STRING,
                 status STRING,
                 created_at TIMESTAMP,

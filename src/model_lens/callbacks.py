@@ -12,7 +12,7 @@ from dash import Input, Output, State, dcc, html, ctx, no_update
 
 from model_lens.backend import DashboardBackend, build_dashboard_backend
 from model_lens.config import settings
-from model_lens.domain.models import MonitorConfig
+from model_lens.domain.models import MLflowLineage, MonitorConfig
 from model_lens.pages import onboarding
 from model_lens.services.contracts import build_contract
 from model_lens.services.onboarding import build_default_baseline
@@ -117,6 +117,13 @@ def _guess_defaults(table_name: str, columns: list[str]) -> dict:
         "categorical": [column for column in categorical if column in features],
         "slices": [column for column in categorical if column in features],
     }
+
+
+def _discovery_defaults(scan_data: dict | None) -> dict | None:
+    if not scan_data:
+        return None
+    discovery = scan_data.get("discovery")
+    return discovery if isinstance(discovery, dict) and discovery else None
 
 
 def _schema_frame(scan_data: dict | None) -> pd.DataFrame:
@@ -284,6 +291,8 @@ def _review_summary(
     problem_type: str | None,
     lakebase_instance_name: str | None,
     lakebase_database_name: str | None,
+    mlflow_experiment_name: str | None,
+    mlflow_registered_model_name: str | None,
 ) -> html.Div:
     label_source = (labels_table or "").strip() if (labels_table or "").strip() else ((source_label_col or "").strip() or "none")
     rows = [
@@ -299,6 +308,12 @@ def _review_summary(
         ("Model Scope", (model_id_value or "").strip() or "All model_id values"),
         ("Version Scope", (model_version_value or "").strip() or "All versions"),
         ("Labels", label_source),
+        (
+            "MLflow",
+            (mlflow_registered_model_name or "").strip()
+            or (mlflow_experiment_name or "").strip()
+            or "Not linked",
+        ),
         (
             "Lakebase Session",
             f"{(lakebase_instance_name or '').strip()} / {(lakebase_database_name or '').strip()}"
@@ -415,6 +430,8 @@ def register_callbacks(app) -> None:
         Input("slice-cols-dropdown", "value"),
         Input("problem-type-dropdown", "value"),
         Input("baseline-days-input", "value"),
+        Input("mlflow-experiment-input", "value"),
+        Input("mlflow-registered-model-input", "value"),
         Input("lakebase-instance-input", "value"),
         Input("lakebase-database-input", "value"),
         Input("lakebase-schema-input", "value"),
@@ -444,6 +461,8 @@ def register_callbacks(app) -> None:
         slice_columns,
         problem_type,
         baseline_days,
+        mlflow_experiment_name,
+        mlflow_registered_model_name,
         lakebase_instance_name,
         lakebase_database_name,
         lakebase_schema,
@@ -525,6 +544,8 @@ def register_callbacks(app) -> None:
             problem_type=problem_type,
             lakebase_instance_name=lakebase_instance_name,
             lakebase_database_name=lakebase_database_name,
+            mlflow_experiment_name=mlflow_experiment_name,
+            mlflow_registered_model_name=mlflow_registered_model_name,
         )
         return (
             [make_wizard_step(index + 1, label, step) for index, label in enumerate(onboarding.STEP_LABELS)],
@@ -617,17 +638,28 @@ def register_callbacks(app) -> None:
         Output("scan-preview", "children"),
         Input("scan-source-btn", "n_clicks"),
         State("source-table-input", "value"),
+        State("labels-table-input", "value"),
+        State("mlflow-experiment-input", "value"),
+        State("mlflow-registered-model-input", "value"),
         State("session-config-store", "data"),
         prevent_initial_call=True,
     )
-    def scan_source_table(_, source_table, session_data):
+    def scan_source_table(_, source_table, labels_table, mlflow_experiment_name, mlflow_registered_model_name, session_data):
         if not source_table:
             return no_update, _status_alert("Enter a fully qualified source table name.", "warning"), no_update
         try:
             backend = _make_backend(session_data)
-            columns, preview, schema = backend.repository.scan_source_table(source_table.strip())
+            discovery = backend.discover_monitor(
+                source_table=source_table.strip(),
+                labels_table=(labels_table or "").strip() or None,
+                mlflow_experiment_name=(mlflow_experiment_name or "").strip() or None,
+                mlflow_registered_model_name=(mlflow_registered_model_name or "").strip() or None,
+            )
         except Exception as error:
             return no_update, _status_alert(f"Scan failed: {error}", "danger"), html.Div()
+        columns = list(discovery.columns)
+        preview = pd.DataFrame(discovery.preview_rows)
+        schema = pd.DataFrame(discovery.schema_rows)
         numeric_count = 0
         if not schema.empty and "data_type" in schema.columns:
             numeric_count = sum(
@@ -640,15 +672,57 @@ def register_callbacks(app) -> None:
             "columns": columns,
             "preview": preview.fillna("").astype(str).to_dict("records"),
             "schema": schema.fillna("").astype(str).to_dict("records"),
+            "discovery": {
+                "display_name": discovery.config.display_name,
+                "model_key": discovery.config.model_key,
+                "timestamp_col": discovery.config.contract.timestamp_col,
+                "model_id_col": discovery.config.contract.model_id_col,
+                "prediction_col": discovery.config.contract.prediction_col,
+                "model_id_value": discovery.config.model_id_value or "",
+                "model_version_col": discovery.config.contract.model_version_col or "",
+                "model_version_value": discovery.config.model_version_value or "",
+                "prediction_score_col": discovery.config.contract.prediction_score_col or "",
+                "entity_id_col": discovery.config.contract.entity_id_col or "",
+                "source_label_col": "" if discovery.config.labels_table else (discovery.config.contract.label_col or ""),
+                "external_label_col": (discovery.config.contract.label_col or "") if discovery.config.labels_table else "",
+                "labels_join_col": discovery.config.labels_join_col or "",
+                "labels_order_col": discovery.config.labels_order_col or "",
+                "feature_columns": list(discovery.config.contract.feature_columns),
+                "categorical_columns": list(discovery.config.contract.categorical_columns),
+                "slice_columns": list(discovery.config.contract.slice_columns),
+                "problem_type": discovery.config.problem_type,
+                "baseline_days": discovery.config.baseline.n_days,
+                "confidence": discovery.confidence,
+                "requires_review": discovery.requires_review,
+                "warnings": list(discovery.warnings),
+                "mlflow": {
+                    "experiment_name": discovery.config.mlflow.experiment_name or (mlflow_experiment_name or "").strip(),
+                    "experiment_id": discovery.config.mlflow.experiment_id or "",
+                    "run_id": discovery.config.mlflow.run_id or "",
+                    "registered_model_name": discovery.config.mlflow.registered_model_name or (mlflow_registered_model_name or "").strip(),
+                    "model_version": discovery.config.mlflow.model_version or "",
+                },
+            },
         }
-        status = _status_block(
-            [
+        status_items = [
+            (
+                f"Discovered a {discovery.confidence}-confidence monitor draft from {source_table.strip()} with {len(columns)} columns and {numeric_count} numeric candidates.",
+                "success" if not discovery.requires_review else "warning",
+            )
+        ]
+        if discovery.config.labels_table:
+            status_items.append((f"Detected external labels via {discovery.config.labels_table}.", "info"))
+        if discovery.config.mlflow.connected:
+            status_items.append(
                 (
-                    f"Scanned {source_table.strip()} with {len(columns)} columns. Detected {numeric_count} numeric columns that can participate in the current drift engine.",
-                    "success",
+                    "Linked MLflow lineage for this draft."
+                    if discovery.config.mlflow.registered_model_name or discovery.config.mlflow.experiment_name
+                    else "MLflow metadata is available for this draft.",
+                    "info",
                 )
-            ]
-        )
+            )
+        status_items.extend((warning, "warning") for warning in discovery.warnings[:4])
+        status = _status_block(status_items)
         preview_div = html.Div(
             [
                 html.H6("Column Types", className="mb-2"),
@@ -677,23 +751,75 @@ def register_callbacks(app) -> None:
         Output("entity-id-col-dropdown", "value"),
         Output("source-label-col-dropdown", "options"),
         Output("source-label-col-dropdown", "value"),
+        Output("model-id-value-input", "value"),
+        Output("model-version-value-input", "value"),
+        Output("labels-join-col-input", "value"),
+        Output("external-label-col-input", "value"),
+        Output("labels-order-col-input", "value"),
         Output("feature-cols-dropdown", "options"),
         Output("feature-cols-dropdown", "value"),
         Output("categorical-cols-dropdown", "options"),
         Output("categorical-cols-dropdown", "value"),
         Output("slice-cols-dropdown", "options"),
         Output("slice-cols-dropdown", "value"),
+        Output("problem-type-dropdown", "value"),
+        Output("baseline-days-input", "value"),
         Input("scan-data", "data"),
     )
     def populate_monitor_form(scan_data):
         if not scan_data:
             empty = [], ""
-            return "", "", *empty, *empty, *empty, [{"label": "(none)", "value": ""}], "", [{"label": "(none)", "value": ""}], "", [{"label": "(none)", "value": ""}], "", [{"label": "(none)", "value": ""}], "", [], [], [], [], [], []
+            blank_options = [{"label": "(none)", "value": ""}]
+            return (
+                "",
+                "",
+                *empty,
+                *empty,
+                *empty,
+                blank_options,
+                "",
+                blank_options,
+                "",
+                blank_options,
+                "",
+                blank_options,
+                "",
+                "",
+                "",
+                "entity_id",
+                "label",
+                "label_timestamp",
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+                "classification",
+                7,
+            )
         columns = scan_data.get("columns", [])
-        defaults = _guess_defaults(scan_data.get("table_name", ""), columns)
+        defaults = _discovery_defaults(scan_data) or _guess_defaults(scan_data.get("table_name", ""), columns)
         required_options = _option_list(columns)
         optional_options = _option_list(columns, include_blank=True)
-        feature_options = _option_list(defaults["features"])
+        feature_values = defaults.get("feature_columns") or defaults.get("features") or []
+        categorical_values = defaults.get("categorical_columns") or defaults.get("categorical") or []
+        slice_values = defaults.get("slice_columns") or defaults.get("slices") or []
+        feature_options = _option_list(feature_values)
+        slice_options = _option_list(
+            _feature_candidates(
+                scan_data,
+                [
+                    defaults["timestamp_col"],
+                    defaults["model_id_col"],
+                    defaults["prediction_col"],
+                    defaults.get("model_version_col"),
+                    defaults.get("prediction_score_col"),
+                    defaults.get("entity_id_col"),
+                    defaults.get("source_label_col"),
+                ],
+            )
+        )
         return (
             defaults["display_name"],
             defaults["model_key"],
@@ -711,12 +837,19 @@ def register_callbacks(app) -> None:
             defaults["entity_id_col"],
             optional_options,
             defaults["source_label_col"],
+            defaults.get("model_id_value", ""),
+            defaults.get("model_version_value", ""),
+            defaults.get("labels_join_col", "entity_id"),
+            defaults.get("external_label_col", "label"),
+            defaults.get("labels_order_col", "label_timestamp"),
             feature_options,
-            defaults["features"],
+            feature_values,
             feature_options,
-            defaults["categorical"],
-            feature_options,
-            defaults["slices"],
+            categorical_values,
+            slice_options,
+            slice_values,
+            defaults.get("problem_type", "classification"),
+            defaults.get("baseline_days", 7),
         )
 
     @app.callback(
@@ -764,17 +897,50 @@ def register_callbacks(app) -> None:
         Output("categorical-cols-dropdown", "value", allow_duplicate=True),
         Output("slice-cols-dropdown", "options", allow_duplicate=True),
         Output("slice-cols-dropdown", "value", allow_duplicate=True),
+        Input("scan-data", "data"),
         Input("feature-cols-dropdown", "value"),
+        Input("timestamp-col-dropdown", "value"),
+        Input("model-id-col-dropdown", "value"),
+        Input("prediction-col-dropdown", "value"),
+        Input("model-version-col-dropdown", "value"),
+        Input("prediction-score-col-dropdown", "value"),
+        Input("entity-id-col-dropdown", "value"),
+        Input("source-label-col-dropdown", "value"),
         State("categorical-cols-dropdown", "value"),
         State("slice-cols-dropdown", "value"),
         prevent_initial_call=True,
     )
-    def sync_feature_dependent_options(feature_columns, categorical_columns, slice_columns):
+    def sync_feature_dependent_options(
+        scan_data,
+        feature_columns,
+        timestamp_col,
+        model_id_col,
+        prediction_col,
+        model_version_col,
+        prediction_score_col,
+        entity_id_col,
+        source_label_col,
+        categorical_columns,
+        slice_columns,
+    ):
         options = _option_list(feature_columns or [])
         allowed = set(feature_columns or [])
         categorical_values = [column for column in (categorical_columns or []) if column in allowed]
-        slice_values = [column for column in (slice_columns or []) if column in allowed]
-        return options, categorical_values, options, slice_values
+        slice_candidates = _feature_candidates(
+            scan_data,
+            [
+                timestamp_col,
+                model_id_col,
+                prediction_col,
+                model_version_col,
+                prediction_score_col,
+                entity_id_col,
+                source_label_col,
+            ],
+        )
+        slice_allowed = set(slice_candidates)
+        slice_values = [column for column in (slice_columns or []) if column in slice_allowed]
+        return options, categorical_values, _option_list(slice_candidates), slice_values
 
     @app.callback(
         Output("action-status", "children", allow_duplicate=True),
@@ -922,6 +1088,7 @@ def register_callbacks(app) -> None:
             return _status_alert("Scan a source table before saving a monitor.", "warning"), no_update, no_update
         if not feature_columns:
             return _status_alert("Select at least one feature column.", "warning"), no_update, no_update
+        discovery = (scan_data or {}).get("discovery", {}) if isinstance(scan_data, dict) else {}
         labels_table = (labels_table or "").strip()
         external_label_col = (external_label_col or "").strip()
         labels_join_col = (labels_join_col or "").strip()
@@ -971,6 +1138,13 @@ def register_callbacks(app) -> None:
                 labels_table=labels_table or None,
                 labels_join_col=labels_join_col or None,
                 labels_order_col=labels_order_col or None,
+                mlflow=MLflowLineage(
+                    experiment_name=str(((discovery.get("mlflow") or {}).get("experiment_name") or "")).strip() or None,
+                    experiment_id=str(((discovery.get("mlflow") or {}).get("experiment_id") or "")).strip() or None,
+                    run_id=str(((discovery.get("mlflow") or {}).get("run_id") or "")).strip() or None,
+                    registered_model_name=str(((discovery.get("mlflow") or {}).get("registered_model_name") or "")).strip() or None,
+                    model_version=str(((discovery.get("mlflow") or {}).get("model_version") or "")).strip() or None,
+                ),
                 created_by="app",
             )
             backend = _make_backend(session)
@@ -1360,6 +1534,11 @@ def register_callbacks(app) -> None:
                 {"field": "labels_table", "value": config.labels_table or ""},
                 {"field": "labels_join_col", "value": config.labels_join_col or ""},
                 {"field": "labels_order_col", "value": config.labels_order_col or ""},
+                {"field": "mlflow_experiment_name", "value": config.mlflow.experiment_name or ""},
+                {"field": "mlflow_experiment_id", "value": config.mlflow.experiment_id or ""},
+                {"field": "mlflow_run_id", "value": config.mlflow.run_id or ""},
+                {"field": "mlflow_registered_model_name", "value": config.mlflow.registered_model_name or ""},
+                {"field": "mlflow_model_version", "value": config.mlflow.model_version or ""},
                 {"field": "feature_columns", "value": ", ".join(config.contract.feature_columns)},
                 {"field": "categorical_columns", "value": ", ".join(config.contract.categorical_columns)},
                 {"field": "slice_columns", "value": ", ".join(config.contract.slice_columns)},

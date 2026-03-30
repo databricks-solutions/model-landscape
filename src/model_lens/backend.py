@@ -6,8 +6,9 @@ from dataclasses import dataclass
 import pandas as pd
 
 from model_lens.config import settings
-from model_lens.domain.models import MonitorConfig
+from model_lens.domain.models import MonitorConfig, MonitorDiscoveryResult
 from model_lens.services.control_plane import ControlPlaneRepository, build_repository
+from model_lens.services.monitor_discovery import MonitorDiscoveryService
 from model_lens.services.refresh_engine import split_baseline_current
 
 
@@ -95,6 +96,24 @@ class DashboardBackend:
             if config.model_key == model_id:
                 return config
         return None
+
+    def discover_monitor(
+        self,
+        *,
+        source_table: str,
+        labels_table: str | None = None,
+        mlflow_experiment_name: str | None = None,
+        mlflow_registered_model_name: str | None = None,
+        baseline_days: int = 7,
+    ) -> MonitorDiscoveryResult:
+        service = MonitorDiscoveryService(self.repository)
+        return service.discover(
+            source_table=source_table,
+            labels_table=labels_table,
+            mlflow_experiment_name=mlflow_experiment_name,
+            mlflow_registered_model_name=mlflow_registered_model_name,
+            baseline_days=baseline_days,
+        )
 
     def get_drift_results(self, model_id: str, granularity: str = "daily") -> pd.DataFrame:
         frame = self._warehouse.query_params(

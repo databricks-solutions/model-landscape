@@ -27,6 +27,11 @@ def build_monitor_config_payload(config: MonitorConfig) -> dict:
         "labels_table": config.labels_table or "",
         "labels_join_col": config.labels_join_col or "",
         "labels_order_col": config.labels_order_col or "",
+        "mlflow_experiment_name": config.mlflow.experiment_name or "",
+        "mlflow_experiment_id": config.mlflow.experiment_id or "",
+        "mlflow_run_id": config.mlflow.run_id or "",
+        "mlflow_registered_model_name": config.mlflow.registered_model_name or "",
+        "mlflow_model_version": config.mlflow.model_version or "",
         "created_by": config.created_by,
         "status": "active",
     }

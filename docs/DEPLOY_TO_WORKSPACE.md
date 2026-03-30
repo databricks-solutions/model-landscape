@@ -228,30 +228,31 @@ In the app:
 
 1. Continue to the `Source` step and set the source table:
    - `main.model_lens_demo.inference_logs`
-2. Optional Lakebase setup:
-   - `Lakebase Instance Name`: `<your-lakebase-instance>` if you want fast app reads
-   - `Lakebase Database Name`: `<your-lakebase-database>` if you want fast app reads
-3. Click `Scan`
-4. Continue to the `Contract` step and use:
+2. Optional draft inputs:
+   - `Optional Labels Table`: `main.model_lens_demo.labels`
+   - `Optional MLflow Experiment`: `<your experiment path>` if you want lineage-assisted discovery
+   - `Optional Registered Model`: `<catalog>.<schema>.<model>` if you want registry-assisted discovery
+3. Click `Discover`
+4. Continue to the `Contract` step. The core fields should already be inferred. Use:
    - `Display Name`: `Fraud Model Demo`
    - `Model Key`: `fraud_model_demo`
+   - `Problem Type`: `classification`
+   - `Baseline Days`: `7`
+5. Open `Advanced mappings and overrides` and confirm:
    - `Timestamp Column`: `event_ts`
    - `Model ID Column`: `model_id`
    - `Monitored Model ID Value`: `fraud_model_v1`
    - `Prediction Column`: `prediction`
    - `Entity ID Column`: `entity_id`
-   - `External Labels Table`: `main.model_lens_demo.labels`
    - `External Labels Join Column`: `entity_id`
    - `External Label Column`: `label`
    - `External Labels Order Column`: `label_timestamp`
-   - `Problem Type`: `classification`
-   - `Baseline Days`: `7`
-5. Select features:
+6. In the same `Advanced` section, confirm features:
    - `amount`
    - `velocity_7d`
    - `device_score`
-6. Continue to `Review`
-7. Click `Save Monitor And Run Initial Refresh`
+7. Continue to `Review`
+8. Click `Save Monitor And Run Initial Refresh`
 
 Expected result:
 

@@ -53,11 +53,11 @@ Responsibilities:
 
 - provide a route-based operator shell with persistent model selection and page navigation
 - let operators move from overview cards straight into model-specific drift analysis
-- use a staged onboarding wizard so workspace setup, source scan, contract mapping, and review are separated into explicit steps
+- use a staged onboarding wizard so workspace setup, source discovery, contract review, and final activation are separated into explicit steps
 - initialize the control-plane schema
 - let operators override the control-plane catalog/schema used by the app session
-- scan source tables
-- map source columns into the monitoring contract
+- discover monitor drafts from source-table schema, preview rows, optional labels tables, and optional MLflow metadata
+- let operators override inferred columns only when the draft is ambiguous
 - save monitor configs
 - trigger refreshes
 - render monitor summaries and incidents from Lakebase when configured
@@ -143,15 +143,16 @@ Primary code:
 
 ### Onboarding Flow
 
-1. The operator scans a source table from the app.
+1. The operator enters a source inference table and can optionally add a labels table plus an MLflow experiment or registered model.
 2. The app loads schema metadata and sample rows through the SQL warehouse.
-3. In the contract step, the operator maps fields into the monitoring contract.
-4. If the source table contains multiple model IDs, the operator pins the monitor to one `model_id_value`.
-5. If the labels table is not unique on the join key, the operator provides a label ordering column.
-6. In the review step, the app summarizes the final namespace, feature set, model scope, and labels strategy before activation.
-7. The app writes one active row into `monitor_configs`.
-8. If Lakebase mode is active, the repository syncs the projected monitor inventory into Lakebase.
-9. The app can immediately trigger the first refresh.
+3. The discovery service infers the monitoring contract, feature set, slices, model scope candidates, and optional MLflow lineage.
+4. In the contract step, the operator reviews the inferred draft and only opens `Advanced` when overrides are needed.
+5. If the source table contains multiple model IDs, the operator confirms or pins one `model_id_value`.
+6. If the labels table is not unique on the join key, the operator confirms or provides a label ordering column.
+7. In the review step, the app summarizes the final namespace, feature set, model scope, labels strategy, and MLflow linkage before activation.
+8. The app writes one active row into `monitor_configs`.
+9. If Lakebase mode is active, the repository syncs the projected monitor inventory into Lakebase.
+10. The app can immediately trigger the first refresh.
 
 ### Refresh Flow
 

@@ -30,6 +30,27 @@ class BaselinePolicy:
 
 
 @dataclass(frozen=True)
+class MLflowLineage:
+    experiment_name: str | None = None
+    experiment_id: str | None = None
+    run_id: str | None = None
+    registered_model_name: str | None = None
+    model_version: str | None = None
+
+    @property
+    def connected(self) -> bool:
+        return any(
+            [
+                self.experiment_name,
+                self.experiment_id,
+                self.run_id,
+                self.registered_model_name,
+                self.model_version,
+            ]
+        )
+
+
+@dataclass(frozen=True)
 class MonitorConfig:
     model_key: str
     display_name: str
@@ -42,7 +63,28 @@ class MonitorConfig:
     labels_table: str | None = None
     labels_join_col: str | None = None
     labels_order_col: str | None = None
+    mlflow: MLflowLineage = field(default_factory=MLflowLineage)
     created_by: str = "app"
+
+
+@dataclass(frozen=True)
+class MLflowDiscovery:
+    lineage: MLflowLineage = field(default_factory=MLflowLineage)
+    feature_columns: tuple[str, ...] = field(default_factory=tuple)
+    problem_type: str | None = None
+    warnings: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class MonitorDiscoveryResult:
+    config: MonitorConfig
+    columns: tuple[str, ...] = field(default_factory=tuple)
+    schema_rows: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    preview_rows: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    label_columns: tuple[str, ...] = field(default_factory=tuple)
+    confidence: str = "high"
+    requires_review: bool = False
+    warnings: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)

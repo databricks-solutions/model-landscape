@@ -126,18 +126,44 @@ def _source_step() -> dbc.Row:
                 dbc.Card(
                     dbc.CardBody(
                         [
-                            html.H5("Scan Source Table", className="mb-3"),
+                            html.H5("Discover Monitor Draft", className="mb-3"),
                             html.P(
-                                "Scan the inference table you want to monitor. Model Lens will inspect the schema, "
-                                "preview rows, and propose initial field mappings.",
+                                "Paste the inference table you want to monitor. You can optionally add a labels table "
+                                "and MLflow experiment or registered model, then let Model Lens infer the contract and scope.",
                                 className="text-muted",
                             ),
                             dbc.InputGroup(
                                 [
                                     dbc.Input(id="source-table-input", placeholder="catalog.schema.inference_logs"),
-                                    dbc.Button("Scan", id="scan-source-btn", color="primary"),
+                                    dbc.Button("Discover", id="scan-source-btn", color="primary"),
                                 ],
                                 className="mb-3",
+                            ),
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        [
+                                            dbc.Label("Optional Labels Table"),
+                                            dbc.Input(id="labels-table-input", placeholder="catalog.schema.labels"),
+                                        ],
+                                        md=4,
+                                    ),
+                                    dbc.Col(
+                                        [
+                                            dbc.Label("Optional MLflow Experiment"),
+                                            dbc.Input(id="mlflow-experiment-input", placeholder="/Users/name/fraud-monitoring"),
+                                        ],
+                                        md=4,
+                                    ),
+                                    dbc.Col(
+                                        [
+                                            dbc.Label("Optional Registered Model"),
+                                            dbc.Input(id="mlflow-registered-model-input", placeholder="catalog.schema.fraud_model"),
+                                        ],
+                                        md=4,
+                                    ),
+                                ],
+                                className="g-3 mb-3",
                             ),
                             html.Div(id="scan-status"),
                             html.Div(id="scan-preview"),
@@ -178,8 +204,22 @@ def _contract_step(form_style: dict) -> dbc.Row:
                             ),
                             dbc.Row(
                                 [
-                                    dbc.Col([dbc.Label("Optional Labels Table"), dbc.Input(id="labels-table-input", placeholder="catalog.schema.labels_table")], md=6, style=form_style),
-                                    dbc.Col([dbc.Label("Feature Columns"), dcc.Dropdown(id="feature-cols-dropdown", multi=True)], md=6, style=form_style),
+                                    dbc.Col(
+                                        [
+                                            dbc.Label("Problem Type"),
+                                            dcc.Dropdown(
+                                                id="problem-type-dropdown",
+                                                options=[
+                                                    {"label": "Classification", "value": "classification"},
+                                                    {"label": "Regression", "value": "regression"},
+                                                ],
+                                                value="classification",
+                                            ),
+                                        ],
+                                        md=6,
+                                        style=form_style,
+                                    ),
+                                    dbc.Col([dbc.Label("Baseline Days"), dbc.Input(id="baseline-days-input", type="number", min=1, value=7)], md=6, style=form_style),
                                 ]
                             ),
                             dbc.Accordion(
@@ -216,22 +256,7 @@ def _contract_step(form_style: dict) -> dbc.Row:
                                             dbc.Row(
                                                 [
                                                     dbc.Col([dbc.Label("External Labels Order Column"), dbc.Input(id="labels-order-col-input", value="label_timestamp", placeholder="label_timestamp")], md=4, style=form_style),
-                                                    dbc.Col(
-                                                        [
-                                                            dbc.Label("Problem Type"),
-                                                            dcc.Dropdown(
-                                                                id="problem-type-dropdown",
-                                                                options=[
-                                                                    {"label": "Classification", "value": "classification"},
-                                                                    {"label": "Regression", "value": "regression"},
-                                                                ],
-                                                                value="classification",
-                                                            ),
-                                                        ],
-                                                        md=4,
-                                                        style=form_style,
-                                                    ),
-                                                    dbc.Col([dbc.Label("Baseline Days"), dbc.Input(id="baseline-days-input", type="number", min=1, value=7)], md=4, style=form_style),
+                                                    dbc.Col([dbc.Label("Feature Columns"), dcc.Dropdown(id="feature-cols-dropdown", multi=True)], md=8, style=form_style),
                                                 ]
                                             ),
                                             dbc.Row(
