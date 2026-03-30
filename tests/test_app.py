@@ -72,6 +72,8 @@ def test_app_layout_exposes_slimmed_onboarding_flow() -> None:
     }.issubset(ids)
 
     components_by_id = {component.id: component for component in page_components}
+    assert getattr(components_by_id["onboarding-current-step"], "storage_type", None) in (None, "memory")
+    assert getattr(components_by_id["control-plane-ready-store"], "storage_type", None) in (None, "memory")
     assert getattr(components_by_id["wizard-step-workspace"], "style", {}) == {}
     assert getattr(components_by_id["wizard-step-source"], "style", {}) == {"display": "none"}
     assert getattr(components_by_id["wizard-step-contract"], "style", {}) == {"display": "none"}

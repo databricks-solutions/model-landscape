@@ -374,8 +374,8 @@ def layout():
     return html.Div(
         [
             dcc.Store(id="scan-data"),
-            dcc.Store(id="onboarding-current-step", storage_type="session", data=1),
-            dcc.Store(id="control-plane-ready-store", storage_type="session", data={}),
+            dcc.Store(id="onboarding-current-step", data=1),
+            dcc.Store(id="control-plane-ready-store", data={}),
             html.H4("Add Monitor", className="text-light mb-1"),
             html.P(
                 "Set up the workspace once, discover a monitor draft, confirm it, and activate monitoring.",
