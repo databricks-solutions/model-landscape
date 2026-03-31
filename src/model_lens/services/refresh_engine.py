@@ -24,7 +24,7 @@ WindowKey = tuple[str, str, str, str]
 
 def _normalize_frame(df: pd.DataFrame, timestamp_col: str) -> pd.DataFrame:
     ordered = df.copy()
-    ordered[timestamp_col] = pd.to_datetime(ordered[timestamp_col], errors="coerce")
+    ordered[timestamp_col] = pd.to_datetime(ordered[timestamp_col], errors="coerce", utc=True).dt.tz_localize(None)
     ordered = ordered[ordered[timestamp_col].notna()].sort_values(timestamp_col).reset_index(drop=True)
     return ordered
 

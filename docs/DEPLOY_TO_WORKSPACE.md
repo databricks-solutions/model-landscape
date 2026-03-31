@@ -150,6 +150,7 @@ Expected result:
 ## 4. Grant The App Access
 
 Model Lens creates an app service principal automatically, but it does not receive warehouse or Unity Catalog access by default.
+Also do not assume the bundle's `sql_warehouse: CAN_USE` binding is sufficient forever. If the app is started, source-deployed, restarted, or otherwise managed outside the bundle lifecycle, explicitly verify the warehouse grant after deployment.
 
 Find the app identity:
 
@@ -163,6 +164,8 @@ Then grant the app identity all of the following:
 - read access to the source data catalog/schema/tables
 - read/write access to the control-plane catalog/schema/tables
 - if Model Lens should create the control-plane tables itself, `CREATE TABLE` in the control-plane schema
+
+Treat the warehouse grant as a post-deploy check, not a one-time assumption. After every `databricks apps start model-lens` + `databricks apps deploy model-lens ...` cycle, verify the same app identity still has `CAN_USE` on the configured SQL warehouse and regrant it if the app shows warehouse-access errors.
 
 At a minimum, the app identity and the scheduled refresh job identity must be able to do this:
 

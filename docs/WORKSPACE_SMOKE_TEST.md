@@ -51,6 +51,8 @@ The Databricks App service principal also needs:
 - read access to the source tables
 - read/write access to the control-plane namespace
 
+Treat the warehouse grant as something you verify after deployment, not as a one-time guarantee from the bundle binding. If the app is restarted, recreated, or source-deployed separately, recheck that the app service principal still has `CAN_USE` on the SQL warehouse.
+
 If you manually deleted the app in this workspace before redeploying, clear stale bundle state first:
 
 ```bash
@@ -134,6 +136,7 @@ databricks apps deploy model-lens \
   --source-code-path /Workspace/Users/<your-email>/.bundle/model-lens/warehouse_only/files
 
 databricks apps get model-lens
+databricks apps get model-lens -o json
 ```
 
 Expected result:
@@ -142,6 +145,7 @@ Expected result:
 - the Databricks app `model-lens` exists
 - `databricks apps start model-lens` reaches `ACTIVE`
 - the workflow `model-lens-refresh` exists
+- the app service principal shown in `databricks apps get model-lens -o json` still has `CAN_USE` on the SQL warehouse
 
 ## Step 4: Open The App
 

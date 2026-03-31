@@ -143,6 +143,8 @@ Before handing this to a customer, also make sure the Databricks App service pri
 - read the source data catalog/schema/tables
 - read/write the control-plane catalog/schema/tables
 
+Do not rely on the bundle's `sql_warehouse: CAN_USE` binding as the only warehouse grant. If the app is started, redeployed, or managed outside the bundle lifecycle, explicitly verify the app service principal still has `CAN_USE` on the warehouse and regrant it if needed.
+
 If you delete and recreate the app while reusing the same workspace, clean up stale bundle state first:
 
 ```bash
@@ -177,6 +179,14 @@ databricks apps deploy model-lens \
 
 databricks apps get model-lens
 ```
+
+Then explicitly verify the app service principal still has warehouse access. The safest flow is:
+
+```bash
+databricks apps get model-lens -o json
+```
+
+Use the returned app identity to confirm `CAN_USE` on the SQL warehouse before opening the app.
 
 Lakebase-enabled:
 
