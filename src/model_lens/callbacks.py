@@ -586,7 +586,7 @@ def register_callbacks(app) -> None:
         }.get(step, False)
         guidance = {
             1: (
-                "Confirm the control-plane namespace and run setup. If setup fails, fix the issue and click Setup Control Plane again to retry. If you change the catalog or schema later, run setup again before saving the monitor.",
+                "Confirm the control-plane namespace, verify the warehouse and Unity Catalog grants in the setup checklist, and run setup. If setup fails, fix the issue and click Setup Control Plane again to retry. If you change the catalog or schema later, run setup again before saving the monitor.",
                 "info" if workspace_ready else "secondary",
             ),
             2: (

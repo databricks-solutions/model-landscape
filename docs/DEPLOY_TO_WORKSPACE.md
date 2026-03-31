@@ -34,6 +34,23 @@ On Databricks CLI `v0.260.0`, the bundle can bind the SQL warehouse to the app b
 - `dev` / `prod` automate the workflow-side Lakebase sync inputs
 - the app-side Lakebase read path is enabled either from the workspace setup fields in the UI or by pre-populating `LAKEBASE_INSTANCE_NAME` / `LAKEBASE_DATABASE_NAME` in `app.yaml` before `databricks apps deploy`
 
+## Permission Matrix
+
+Treat permissions as identity-specific:
+
+- Deployer or platform operator:
+  deploy apps and workflows, select the SQL warehouse, and provision or approve the control-plane namespace.
+- App service principal:
+  `CAN_USE` on the SQL warehouse; source data `USE CATALOG`, `USE SCHEMA`, `SELECT`; control plane `USE CATALOG`, `USE SCHEMA`, `SELECT`, `MODIFY`.
+- App service principal, if Setup should create missing objects:
+  `CREATE TABLE` in the control-plane schema; `CREATE SCHEMA` if the schema may not exist yet; `CREATE CATALOG` only if you intend to use the `Create catalog if missing` toggle.
+- Refresh workflow identity:
+  the same warehouse, source-data, and control-plane permissions as the app, because the workflow reads source data and writes monitoring results.
+- Optional MLflow-assisted onboarding:
+  read access to the target experiment and/or registered model metadata.
+- Optional Lakebase app reads or workflow sync:
+  permission to resolve the Lakebase instance and connect to the target database; workflow sync also needs write access to the target Lakebase schema.
+
 ## Variables You Must Supply
 
 For `warehouse_only`, Model Lens expects:

@@ -102,6 +102,9 @@ def test_app_layout_exposes_slimmed_onboarding_flow() -> None:
     assert getattr(components_by_id["wizard-step-source"], "style", {}) == {"display": "none"}
     assert getattr(components_by_id["wizard-step-contract"], "style", {}) == {"display": "none"}
     assert getattr(components_by_id["wizard-step-review"], "style", {}) == {"display": "none"}
+    layout_text = str(app.validation_layout)
+    assert "Permission checklist" in layout_text
+    assert "CAN_USE on the SQL warehouse" in layout_text
 
 
 def test_schema_helpers_flag_non_numeric_selected_features() -> None:

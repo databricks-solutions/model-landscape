@@ -43,6 +43,36 @@ def _workspace_step(form_style: dict) -> dbc.Row:
                                     ),
                                 ]
                             ),
+                            html.Details(
+                                [
+                                    html.Summary("Permission checklist", className="fw-semibold"),
+                                    html.Ul(
+                                        [
+                                            html.Li(
+                                                "App service principal: CAN_USE on the SQL warehouse, "
+                                                "source-data USE CATALOG / USE SCHEMA / SELECT, and "
+                                                "control-plane USE CATALOG / USE SCHEMA / SELECT / MODIFY."
+                                            ),
+                                            html.Li(
+                                                "If setup should create objects: CREATE TABLE in the control-plane schema, "
+                                                "CREATE SCHEMA if the schema is missing, and CREATE CATALOG only when you enable the toggle."
+                                            ),
+                                            html.Li(
+                                                "Refresh workflow identity: the same warehouse, source-data, and control-plane access as the app."
+                                            ),
+                                            html.Li(
+                                                "Optional MLflow discovery: read access to the target experiment or registered model."
+                                            ),
+                                            html.Li(
+                                                "Optional Lakebase reads or sync: permission to resolve the Lakebase instance and connect to the target database; "
+                                                "workflow sync also needs write access to the Lakebase schema."
+                                            ),
+                                        ],
+                                        className="text-muted small mt-2 mb-0",
+                                    ),
+                                ],
+                                className="mb-3",
+                            ),
                             dbc.Button("Setup Control Plane", id="setup-control-plane-btn", color="primary", className="mt-2"),
                             dbc.Accordion(
                                 [

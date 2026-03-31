@@ -145,6 +145,21 @@ Before handing this to a customer, also make sure the Databricks App service pri
 
 Do not rely on the bundle's `sql_warehouse: CAN_USE` binding as the only warehouse grant. If the app is started, redeployed, or managed outside the bundle lifecycle, explicitly verify the app service principal still has `CAN_USE` on the warehouse and regrant it if needed.
 
+Permission matrix by identity:
+
+- Deployer or platform operator:
+  deploy apps and workflows, use the chosen SQL warehouse, and provision or approve the control-plane namespace.
+- App service principal:
+  `CAN_USE` on the SQL warehouse; source data `USE CATALOG`, `USE SCHEMA`, `SELECT`; control plane `USE CATALOG`, `USE SCHEMA`, `SELECT`, `MODIFY`.
+- App service principal, if Setup should create missing objects:
+  `CREATE TABLE` in the control-plane schema; `CREATE SCHEMA` if the schema may not exist yet; `CREATE CATALOG` only if you want the `Create catalog if missing` toggle to work.
+- Refresh workflow identity:
+  the same warehouse, source-data, and control-plane permissions as the app, because the workflow reads source data and writes monitoring results.
+- Optional MLflow-assisted onboarding:
+  read access to the target experiment and/or registered model metadata.
+- Optional Lakebase app reads or workflow sync:
+  permission to resolve the Lakebase instance and connect to the target database; if the workflow keeps the projection fresh, it also needs write access to the target Lakebase schema.
+
 If you delete and recreate the app while reusing the same workspace, clean up stale bundle state first:
 
 ```bash

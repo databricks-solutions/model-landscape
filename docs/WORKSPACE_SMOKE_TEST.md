@@ -53,6 +53,21 @@ The Databricks App service principal also needs:
 
 Treat the warehouse grant as something you verify after deployment, not as a one-time guarantee from the bundle binding. If the app is restarted, recreated, or source-deployed separately, recheck that the app service principal still has `CAN_USE` on the SQL warehouse.
 
+Identity checklist for this smoke test:
+
+- deployer or platform operator:
+  can deploy the bundle/app and has approved the control-plane namespace
+- app service principal:
+  `CAN_USE` on the SQL warehouse; source data `USE CATALOG`, `USE SCHEMA`, `SELECT`; control plane `USE CATALOG`, `USE SCHEMA`, `SELECT`, `MODIFY`
+- app service principal, if Setup should create missing objects:
+  `CREATE TABLE` in the control-plane schema; `CREATE SCHEMA` if the schema is missing; `CREATE CATALOG` only if you plan to use the toggle
+- refresh workflow identity:
+  the same warehouse, source-data, and control-plane permissions as the app
+- optional MLflow-assisted onboarding:
+  read access to the target experiment and/or registered model metadata
+- optional Lakebase read model:
+  permission to resolve the Lakebase instance and connect to the target database; workflow sync also needs write access to the Lakebase schema
+
 If you manually deleted the app in this workspace before redeploying, clear stale bundle state first:
 
 ```bash
