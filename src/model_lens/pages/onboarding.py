@@ -365,7 +365,7 @@ def _review_step() -> dbc.Row:
                             ),
                             html.Div(id="onboarding-review-summary"),
                             dbc.Button(
-                                "Save Monitor And Run Initial Refresh",
+                                "Save Monitor And Trigger Refresh",
                                 id="save-monitor-btn",
                                 color="success",
                                 className="mt-3",
@@ -383,8 +383,8 @@ def _review_step() -> dbc.Row:
                             html.Ul(
                                 [
                                     html.Li("The monitor config is written into the control-plane namespace."),
-                                    html.Li("The initial refresh computes drift, quality, and performance summaries."),
-                                    html.Li("If Lakebase is configured, the UI projection is synchronized after refresh."),
+                                    html.Li("The refresh workflow is triggered asynchronously so the UI does not block while the first run starts."),
+                                    html.Li("If Lakebase is configured, the workflow syncs the UI projection after refresh."),
                                     html.Li("After activation, use Overview and the analysis pages to inspect the monitor."),
                                 ],
                                 className="text-muted mb-0",

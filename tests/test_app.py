@@ -105,6 +105,7 @@ def test_app_layout_exposes_slimmed_onboarding_flow() -> None:
     layout_text = str(app.validation_layout)
     assert "Permission checklist" in layout_text
     assert "CAN_USE on the SQL warehouse" in layout_text
+    assert "Save Monitor And Trigger Refresh" in layout_text
 
 
 def test_schema_helpers_flag_non_numeric_selected_features() -> None:

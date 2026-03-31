@@ -170,6 +170,7 @@ Check immediately:
 
 - the app title reads `Model Lens`
 - `SQL_WAREHOUSE_ID` is populated
+- `REFRESH_JOB_ID` is populated or `REFRESH_JOB_NAME` matches the deployed workflow name
 - `USE_LAKEBASE_READ_MODEL` is `false`
 - `Control Plane Catalog` and `Control Plane Schema` show the namespace you want to use
 - if Lakebase exists in the workspace and is visible to the app identity, an informational banner recommends Lakebase
@@ -272,15 +273,16 @@ In the app:
    - confirm `merchant_segment` if you added it to the dataset
 9. Continue to the `Activate` step, then save the monitor:
 
-- click `Save Monitor And Run Initial Refresh`
+- click `Save Monitor And Trigger Refresh`
 
 Expected result:
 
 - success banner
-- refresh counts are non-zero
+- the success banner says the monitor was saved and the refresh job was triggered asynchronously
+- if the app cannot resolve the workflow from `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`, it warns that the monitor was saved but the workflow must be run manually
 - the monitor appears on the overview page
-- on the first refresh, Drift and Performance should already show historical windows rather than a single snapshot
-- on the first refresh, Data Quality should show window-history charts instead of only the latest summary row
+- after the workflow finishes, Drift and Performance should already show historical windows rather than a single snapshot
+- after the workflow finishes, Data Quality should show window-history charts instead of only the latest summary row
 - with the scratch dataset and `Baseline Days = 7`, you should have 8 daily comparison windows immediately
 - the remaining historical hardening work is tracked in [Historical Backfill Plan](/Users/volo.vragov/Desktop/work/model-lens/docs/HISTORICAL_BACKFILL_PLAN.md)
 
@@ -441,7 +443,7 @@ Back in the app, verify:
 
 ## Step 9: Verify Workflow Refresh
 
-Open the Databricks workflow `model-lens-refresh` and run it manually once.
+If the async trigger is not configured or fails, open the Databricks workflow `model-lens-refresh` and run it manually once.
 
 Expected:
 

@@ -467,6 +467,8 @@ class DashboardBackend:
                 "control_plane_catalog": self.repository.table_names.catalog,
                 "control_plane_schema": self.repository.table_names.schema,
                 "sql_warehouse_id": settings.sql_warehouse_id,
+                "refresh_job_id": settings.refresh_job_id,
+                "refresh_job_name": settings.refresh_job_name,
                 "use_lakebase_read_model": settings.use_lakebase_read_model,
                 "lakebase_database_name": settings.lakebase_database_name,
                 "genie_space_id": settings.genie_space_id,

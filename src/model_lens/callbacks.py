@@ -16,7 +16,7 @@ from model_lens.domain.models import MLflowLineage, MonitorConfig
 from model_lens.pages import onboarding
 from model_lens.services.contracts import build_contract
 from model_lens.services.onboarding import baseline_label, build_default_baseline, build_fixed_baseline
-from model_lens.services.refresh_runner import run_refresh_cycle
+from model_lens.services.refresh_jobs import trigger_refresh_job
 from model_lens.ui import charts
 from model_lens.ui.components import (
     get_thresholds,
@@ -598,7 +598,7 @@ def register_callbacks(app) -> None:
                 "success" if contract_ready else "secondary",
             ),
             4: (
-                "Activate the monitor. Model Lens saves the config and runs the initial refresh for you.",
+                "Activate the monitor. Model Lens saves the config and triggers the refresh workflow asynchronously.",
                 "primary",
             ),
         }
@@ -1267,15 +1267,31 @@ def register_callbacks(app) -> None:
             backend = _make_backend(session)
             backend.repository.validate_monitor_source(config)
             backend.repository.upsert_monitor_config(config)
-            counts = run_refresh_cycle(backend.repository, model_key=config.model_key)
         except Exception as error:
             return _status_alert(f"Save failed: {error}", "danger"), no_update, no_update
-        messages = [(
-            f"Saved monitor {config.model_key} and ran initial refresh: drift_rows={counts.drift_rows}, quality_rows={counts.quality_rows}, performance_rows={counts.performance_rows}, incidents={counts.incident_rows}.",
-            "success" if counts.models else "warning",
-        )]
-        if not counts.models:
-            messages.append(("The monitor was saved, but the current source data did not produce a comparable baseline/current window yet.", "warning"))
+        messages: list[tuple[str, str]] = []
+        try:
+            trigger = trigger_refresh_job(
+                model_key=config.model_key,
+                control_plane_catalog=session["control_plane_catalog"],
+                control_plane_schema=session["control_plane_schema"],
+                lakebase_instance_name=session["lakebase_instance_name"],
+                lakebase_database_name=session["lakebase_database_name"],
+                lakebase_schema=session["lakebase_schema"],
+                mode="auto",
+            )
+            run_id_text = f", run_id={trigger.run_id}" if trigger.run_id is not None else ""
+            messages.append((
+                f"Saved monitor {config.model_key}. Refresh job triggered asynchronously (job_id={trigger.job_id}{run_id_text}). Check Overview in a minute.",
+                "success",
+            ))
+        except Exception as error:
+            messages.append((
+                "Saved monitor "
+                f"{config.model_key}, but the refresh job could not be triggered automatically: {error}. "
+                "Run the refresh workflow manually after fixing the job configuration or permissions.",
+                "warning",
+            ))
         non_numeric = _non_numeric_features(feature_columns or [], scan_data)
         if non_numeric:
             messages.append((

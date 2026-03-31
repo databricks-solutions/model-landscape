@@ -61,7 +61,7 @@ Responsibilities:
 - let operators override inferred columns only when the draft is ambiguous
 - let operators choose either a rolling baseline window or a fixed known-good baseline date range
 - save monitor configs
-- trigger the initial refresh during monitor activation
+- trigger the initial refresh workflow asynchronously during monitor activation
 - render monitor summaries and incidents from Lakebase when configured
 - recommend the Lakebase-enabled target when running warehouse-only in a workspace that appears to have Lakebase available
 
@@ -120,6 +120,8 @@ The app uses Lakebase for hot UI reads when configured. If Lakebase is unavailab
 ### 5. Refresh Workflow
 
 The refresh workflow is a serverless Databricks job.
+
+The app does not run the heavy first refresh inline. During activation it saves the monitor config, resolves the workflow from `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`, and triggers the job asynchronously so the UI stays responsive.
 
 Responsibilities:
 

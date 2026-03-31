@@ -203,6 +203,13 @@ databricks apps get model-lens -o json
 
 Use the returned app identity to confirm `CAN_USE` on the SQL warehouse before opening the app.
 
+The app now triggers the first refresh asynchronously during activation. It resolves the workflow in this order:
+
+- `REFRESH_JOB_ID` if you set it explicitly
+- otherwise `REFRESH_JOB_NAME`, which defaults to `model-lens-refresh`
+
+If you deploy with a custom bundle `app_name`, set `REFRESH_JOB_NAME=<app-name>-refresh` or set `REFRESH_JOB_ID=<job-id>` before `databricks apps deploy`.
+
 Lakebase-enabled:
 
 ```bash
@@ -246,8 +253,9 @@ After deploy:
 8. In the `Confirm` step, review the inferred display name, model key, problem type, and feature set. Use `Advanced` only if the draft needs overrides.
 9. If the table contains more than one `model_id`, confirm or fill in `Monitored Model ID Value`.
 10. If external labels are not unique on the join key, confirm or fill in `External Labels Order Column`.
-11. Continue to `Activate`, then save the monitor and run the initial refresh.
-12. Open the overview and analysis pages to confirm the new monitor appears and the initial refresh populated historical readback immediately.
+11. Continue to `Activate`, then save the monitor and trigger the refresh workflow.
+12. Confirm the app immediately acknowledges that the monitor was saved and the refresh job was triggered.
+13. Open the overview and analysis pages after the workflow finishes to confirm the new monitor appears and the initial refresh populated historical readback immediately.
 
 ## Full Docs
 

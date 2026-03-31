@@ -33,6 +33,7 @@ On Databricks CLI `v0.260.0`, the bundle can bind the SQL warehouse to the app b
 - `warehouse_only` is fully automated
 - `dev` / `prod` automate the workflow-side Lakebase sync inputs
 - the app-side Lakebase read path is enabled either from the workspace setup fields in the UI or by pre-populating `LAKEBASE_INSTANCE_NAME` / `LAKEBASE_DATABASE_NAME` in `app.yaml` before `databricks apps deploy`
+- the app triggers onboarding refreshes asynchronously by resolving `REFRESH_JOB_ID` first, then falling back to `REFRESH_JOB_NAME` (default `model-lens-refresh`)
 
 ## Permission Matrix
 
@@ -199,6 +200,7 @@ Verify:
 
 - the title is `Model Lens`
 - `SQL_WAREHOUSE_ID` is populated
+- `REFRESH_JOB_ID` is populated or `REFRESH_JOB_NAME` matches the deployed workflow name
 - the `Control Plane Catalog` and `Control Plane Schema` fields point at the namespace you intend to use
 - by default, `USE_LAKEBASE_READ_MODEL` reflects the deployed app environment and will usually be `false`
 - if you want fast app reads, enter `Lakebase Instance Name` and `Lakebase Database Name` in the setup card before loading the dashboard
@@ -283,19 +285,21 @@ In the app:
    - `velocity_7d`
    - `device_score`
 7. Continue to `Activate`
-8. Click `Save Monitor And Run Initial Refresh`
+8. Click `Save Monitor And Trigger Refresh`
 
 Expected result:
 
 - the config is saved
-- the refresh runs
+- the app returns immediately instead of blocking on the refresh computation
+- the refresh job is triggered asynchronously
+- if the app cannot resolve the workflow from `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`, it warns that the monitor was saved but the workflow must be run manually
 - the monitor appears in the app
-- the new monitor appears on the overview page and the analysis pages can load it
-- the first refresh backfills historical daily comparison windows immediately instead of writing only a single latest snapshot
+- after the workflow finishes, the new monitor appears on the overview page and the analysis pages can load it
+- the first refresh still backfills historical daily comparison windows immediately instead of writing only a single latest snapshot
 
 ## 9. Verify Persisted State
 
-Verify the warehouse system of record:
+Verify the warehouse system of record after the triggered workflow finishes:
 
 ```sql
 SELECT model_key, display_name, source_table, status
@@ -347,7 +351,7 @@ Expected result:
 
 ## 10. Verify The Workflow
 
-Open the workflow `model-lens-refresh` and run it once manually.
+If the async trigger is not configured or fails, open the workflow `model-lens-refresh` and run it once manually.
 
 Then repeat the same warehouse checks and, if applicable, the Lakebase checks.
 
