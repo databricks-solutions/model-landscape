@@ -32,6 +32,10 @@ If you already have an app and want to keep its existing compute and app service
 
 - [Manual Setup With An Existing Databricks App](/Users/volo.vragov/Desktop/work/model-lens/docs/MANUAL_EXISTING_APP_SETUP.md)
 
+If the app already exists, do not use the generic `bundle deploy` path below with that same app name unless you first bind the bundle app resource to the existing app. Otherwise Databricks tries to create the app resource again and the deploy fails with an "App already exists" error.
+If the operator cannot manage the app's `sql_warehouse` resource, do not keep retrying that bind/deploy path. Use the generated manual existing-app source path from [prepare_existing_app_source.py](/Users/volo.vragov/Desktop/work/model-lens/scripts/prepare_existing_app_source.py) instead.
+The manual guide also now includes a detailed refresh-job creation and verification sequence for that path, including `jobs create`, `jobs reset`, `jobs get`, `jobs run-now`, and the `REFRESH_JOB_ID` hardening step.
+
 On Databricks CLI `v0.260.0`, the bundle can bind the SQL warehouse to the app but cannot automatically attach app-level `job` or `database` resources. That means:
 
 - `warehouse_only` is fully automated
@@ -136,6 +140,9 @@ Expected result:
 - the wheel build succeeds and the bundle can resolve `../dist/*.whl` for the serverless workflow environment
 
 ## 3. Deploy The Bundle
+
+This section assumes the bundle is managing creation of the Databricks App resource.
+If the app already exists and you want to preserve its current service principal, use [Manual Setup With An Existing Databricks App](/Users/volo.vragov/Desktop/work/model-lens/docs/MANUAL_EXISTING_APP_SETUP.md) instead of this section.
 
 Warehouse-only:
 

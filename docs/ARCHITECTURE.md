@@ -237,4 +237,7 @@ The product now follows this split:
 - The refresh workflow can also sync the Lakebase projection when it has the Lakebase instance/database inputs.
 - The scheduled job identity must be permitted to connect to the target Lakebase database if you want the projection kept fresh by the workflow rather than only by app-driven refreshes.
 - On Databricks CLI `v0.260.0`, the app resource can bind a SQL warehouse but not an app-level `database` or `job` resource. Model Lens therefore treats Lakebase app reads as session/app-env configuration instead of Terraform-managed app resource wiring.
+- Existing-app deployments have two supported wiring modes:
+  - bundle-managed app resource mode, where [app.yaml](/Users/volo.vragov/Desktop/work/model-lens/app.yaml) resolves `SQL_WAREHOUSE_ID` from `valueFrom: sql_warehouse`
+  - manual existing-app mode, where [prepare_existing_app_source.py](/Users/volo.vragov/Desktop/work/model-lens/scripts/prepare_existing_app_source.py) generates an alternate `app.yaml` with a literal `SQL_WAREHOUSE_ID` so constrained operators do not need permission to manage app resources
 - `databricks bundle deploy` creates the app resource, but `databricks apps deploy ... --source-code-path ...` is still required to deploy the app source onto compute.

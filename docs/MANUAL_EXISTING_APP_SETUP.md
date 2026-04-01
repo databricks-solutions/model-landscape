@@ -16,13 +16,14 @@ That means:
 - do not delete and recreate the app
 - deploy Model Lens into the same app name so the same app identity remains in use
 
-As of `2026-04-01T11:04:18-0600`, this matches the current Databricks app authorization model in the official Databricks docs:
+As of `2026-04-01T18:22Z`, this matches the current Databricks app authorization and resource model in the official Databricks docs:
 
 - [Configure authorization in a Databricks app](https://docs.databricks.com/gcp/en/dev-tools/databricks-apps/auth)
 - [Add resources to a Databricks app](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/resources)
 - [Add a SQL warehouse resource to a Databricks app](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/sql-warehouse)
 - [Configure permissions for a Databricks app](https://docs.databricks.com/gcp/en/dev-tools/databricks-apps/permissions)
 - [Trigger a single job run](https://docs.databricks.com/aws/en/jobs/run-now)
+- [Databricks CLI workspace commands](https://docs.databricks.com/aws/en/dev-tools/cli/reference/workspace-commands)
 
 ## When To Use This Path
 
@@ -31,71 +32,82 @@ Use this walkthrough if all of the following are true:
 - you already have a Databricks App
 - you want to preserve that app's URL, compute, and service principal
 - you want to deploy Model Lens source into that existing app
-- you are comfortable granting warehouse, job, and Unity Catalog permissions manually
+- you already know the SQL warehouse, control-plane catalog, and control-plane schema
 
 If you want Databricks to create a new app for Model Lens automatically, use [Deploy To A Workspace](/Users/volo.vragov/Desktop/work/model-lens/docs/DEPLOY_TO_WORKSPACE.md) instead.
 
-## Before You Start
+## The Two Existing-App Tracks
 
-The manual path works best when you treat it as a checklist rather than a loose recipe.
+There are two distinct existing-app paths.
+Choose the right one up front.
 
-The shortest safe summary is:
+### Track A: Bundle-Bound Existing App
 
-1. keep the existing app instance
-2. make sure the refresh workflow exists
-3. make sure the app has a SQL warehouse resource or a literal `SQL_WAREHOUSE_ID`
-4. set `CONTROL_PLANE_CATALOG`, `CONTROL_PLANE_SCHEMA`, and `REFRESH_JOB_ID`
-5. grant the app service principal and the job Run as identity the required permissions
-6. deploy Model Lens source into that same app
-7. verify runtime wiring in the app before onboarding
+Use this only if the human operator can manage app resources.
 
-The commands in this guide assume:
+You need:
 
-- repo path: `/Users/volo.vragov/Desktop/work/model-lens`
-- bundle name: `model-lens`
-- default app name: `model-lens`
+- `Can manage` on the existing app
+- `Can manage` on the SQL warehouse if the bundle or UI needs to add or update the `sql_warehouse` app resource
 
-If your existing app is named something else, keep using that real app name in every command.
-If you also deploy the refresh workflow from this bundle with `--var "app_name=<existing-app-name>"`, the workflow name becomes `<existing-app-name>-refresh`.
+This track lets you:
+
+- bind the bundle app resource to the existing app
+- let the bundle continue managing the refresh workflow
+- keep the repo root [app.yaml](/Users/volo.vragov/Desktop/work/model-lens/app.yaml) unchanged with `valueFrom: sql_warehouse`
+
+### Track B: Existing App Without App-Resource Management
+
+Use this if either of the following is true:
+
+- `bundle deploy` fails with `User does not have permission to grant permissions for added resource: sql_warehouse`
+- the Apps UI fails with `User does not have permission to add resource sql-warehouse ... User needs MANAGE permission on the resource`
+
+This track avoids the blocker entirely.
+
+It does not require the operator to add or update a `sql_warehouse` app resource.
+Instead, Model Lens now ships a helper script that:
+
+- prepares a deployable source tree for the existing app
+- writes an `app.yaml` with a literal `SQL_WAREHOUSE_ID`
+- copies the current wheel into the source tree
+- optionally writes a `refresh-job.json` payload for `databricks jobs create`
+
+That script is:
+
+- [prepare_existing_app_source.py](/Users/volo.vragov/Desktop/work/model-lens/scripts/prepare_existing_app_source.py)
+
+Track B is the recommended path when the app already exists and the operator cannot manage app resources.
 
 ## What You Need
 
 Collect these values first:
 
-- existing app name:
-  for example `geocomply-drift-monitor`
-- SQL warehouse ID for the app
-- control-plane catalog:
-  for example `model_observability`
-- control-plane schema:
-  for example `control_plane`
-- refresh job ID or refresh job name
-- source data catalog/schema/table names
+- existing app name
+  for example `ml-drift-monitor`
+- existing app resource ID
+  from `databricks apps get <existing-app-name> -o json`
+- SQL warehouse ID
+- control-plane catalog
+- control-plane schema
+- a workspace path where you will upload the prepared source tree
+  for example `/Workspace/Users/<your-email>/model-lens-existing-app`
 - if using Lakebase:
   - Lakebase instance name
   - Lakebase database name
   - Lakebase schema
 
-## Overview
-
-The manual path has four separate concerns:
-
-1. keep the existing app and its service principal
-2. make sure the refresh workflow exists
-3. make sure the app runtime has the right environment variables and app resources
-4. grant the app identity and job identity the required permissions
-
-Treat those as separate checks.
-The app can start successfully and still fail later if any one of the four is missing.
-
-## Operator Permissions Needed For The Manual Path
+## Operator Permissions Needed
 
 Before you start, the human operator performing the manual steps should have:
 
 - `Can manage` on the existing Databricks App
-- `Can manage` on the SQL warehouse if you plan to add or edit the `sql_warehouse` app resource in the Databricks Apps UI
-- permissions to deploy or update the refresh workflow if you are using the bundle for job deployment
+- permissions to deploy or update the refresh workflow
 - permissions to grant the app and workflow identities the required warehouse, Unity Catalog, and job ACLs
+
+Only if you plan to use Track A:
+
+- `Can manage` on the SQL warehouse if the bundle or Apps UI will add or edit the `sql_warehouse` app resource
 
 ## Step 1: Verify The Existing App Identity
 
@@ -109,7 +121,7 @@ Confirm all of the following:
 
 - the app exists
 - you intend to keep this exact app name
-- the app can be started
+- you can identify the app object's unique ID
 - the app has not been deleted and recreated recently
 
 If you delete the app, Databricks deletes the app service principal too.
@@ -124,14 +136,12 @@ databricks apps start <existing-app-name>
 databricks apps get <existing-app-name>
 ```
 
-Do this before deploying source code.
-
 Expected result:
 
 - the app reports `ACTIVE`
 - the app can accept a new `apps deploy`
 
-## Step 3: Build The Model Lens Package
+## Step 3: Build And Validate Locally
 
 From the repo root:
 
@@ -144,35 +154,38 @@ python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
 Expected result:
 
 - tests pass
-- the wheel is built into `dist/`
+- a wheel exists in `dist/`
 
-## Step 4: Make Sure The Refresh Workflow Exists
+The manual helper uses that wheel both for the refresh job payload and for a ready-to-import workspace source tree.
 
-Model Lens now triggers the initial refresh asynchronously.
-That means the app must know which job to call.
+## Step 4: Choose The Workflow Creation Path
 
-You have two supported options:
+At this point, choose one of the following.
 
-- set `REFRESH_JOB_ID` directly
-- or set `REFRESH_JOB_NAME` and let the app resolve the job by name
+### Track A: Bind The Existing App, Then Deploy The Bundle
 
-`REFRESH_JOB_ID` is the safest option.
-If you rely on `REFRESH_JOB_NAME`, Model Lens now handles Databricks Asset Bundles development prefixes such as `[dev volo_vragov] model-lens-refresh` by matching the configured name as a suffix, but explicit IDs still avoid ambiguity when several similar jobs exist.
+Use this only if the operator can manage app resources.
 
-### Option A: Reuse An Existing Refresh Job
+The bundle app resource key is `control_plane`.
+The existing app resource ID is the app object's ID from:
 
-If you already have the refresh workflow:
+```bash
+databricks apps get <existing-app-name> -o json
+```
 
-- record the job ID
-- confirm the job still runs with the intended Run as identity
-
-### Option B: Deploy The Refresh Job With The Bundle
-
-If you want the repo to create or update the workflow, deploy the bundle first.
+`bundle deployment bind` still needs the same required vars as `bundle deploy`, because the CLI parses the full bundle before binding resources.
 
 Warehouse-only example:
 
 ```bash
+databricks bundle deployment bind \
+  -t warehouse_only \
+  --var "app_name=<existing-app-name>" \
+  --var "sql_warehouse_id=<sql-warehouse-id>" \
+  --var "control_plane_catalog=<control-plane-catalog>" \
+  --var "control_plane_schema=<control-plane-schema>" \
+  control_plane <existing-app-resource-id>
+
 databricks bundle deploy \
   -t warehouse_only \
   --var "app_name=<existing-app-name>" \
@@ -181,151 +194,335 @@ databricks bundle deploy \
   --var "control_plane_schema=<control-plane-schema>"
 ```
 
-This is still compatible with the manual app path.
-The important part is that you do not delete the existing app instance.
+After deploy:
 
-If your existing app name is not `model-lens`, using `app_name=<existing-app-name>` keeps the workflow naming aligned with the app.
-After deploy, record the actual job ID and prefer `REFRESH_JOB_ID` over name-based lookup whenever possible.
+- the workflow name is `<existing-app-name>-refresh`
+- the staged app source is available under the bundle workspace path
+- you can skip directly to Step 7 if the app already has a working `sql_warehouse` resource
 
-## Step 5: Decide How The App Gets `SQL_WAREHOUSE_ID`
+If this deploy fails with a warehouse-resource permission error, stop using Track A and switch to Track B.
 
-The current [app.yaml](/Users/volo.vragov/Desktop/work/model-lens/app.yaml) expects:
+### Track B: Create The Workflow And App Source Without App-Resource Management
 
-```yaml
-- name: SQL_WAREHOUSE_ID
-  valueFrom: sql_warehouse
+Use this when the operator cannot manage the app's `sql_warehouse` resource.
+
+Generate a ready-to-import source tree and a refresh job payload:
+
+```bash
+python3 /Users/volo.vragov/Desktop/work/model-lens/scripts/prepare_existing_app_source.py \
+  --app-name <existing-app-name> \
+  --sql-warehouse-id <sql-warehouse-id> \
+  --control-plane-catalog <control-plane-catalog> \
+  --control-plane-schema <control-plane-schema> \
+  --output-dir /tmp/model-lens-existing-app \
+  --workspace-source-path /Workspace/Users/<your-email>/model-lens-existing-app
 ```
 
-That means the existing app must expose a SQL warehouse app resource keyed as `sql_warehouse`.
+What this creates under `/tmp/model-lens-existing-app`:
 
-### Preferred Manual Setup
+- `app.yaml` with a literal `SQL_WAREHOUSE_ID`
+- `src/`
+- `requirements.txt`
+- `pyproject.toml`
+- `dist/<built-wheel>.whl`
+- `refresh-job.json`
 
-In the Databricks Apps UI for the existing app:
+At this point, the generated `app.yaml` uses:
 
-1. open the app
-2. go to `Configure`
-3. add a `SQL warehouse` resource
-4. choose the target warehouse
-5. set permission to `CAN USE`
-6. set the resource key to exactly `sql_warehouse`
+- `SQL_WAREHOUSE_ID=<literal warehouse id>`
+- `REFRESH_JOB_NAME=<existing-app-name>-refresh`
 
-If you do this, the current `app.yaml` can stay as-is.
-The user performing this step needs `Can manage` on both the existing app and the target warehouse.
+That means you can create the refresh workflow first and then later switch the app to `REFRESH_JOB_ID` if you want stricter wiring.
 
-### Fallback Manual Setup
+## Step 5: Upload The Prepared Source Tree To Workspace
 
-If you do not want to use an app resource for the warehouse, change [app.yaml](/Users/volo.vragov/Desktop/work/model-lens/app.yaml) before deployment:
+This step is required for Track B.
 
-```yaml
-- name: SQL_WAREHOUSE_ID
-  value: "<sql-warehouse-id>"
+Create the workspace directory:
+
+```bash
+databricks workspace mkdirs /Workspace/Users/<your-email>/model-lens-existing-app
 ```
 
-Use this only if you are intentionally hardcoding the warehouse ID.
-The resource-based path is cleaner and more portable.
+Import the prepared local tree:
 
-## Step 6: Set The Required App Environment Variables
-
-The existing app must provide these values to Model Lens:
-
-- `CONTROL_PLANE_CATALOG`
-- `CONTROL_PLANE_SCHEMA`
-- `SQL_WAREHOUSE_ID`
-- `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`
-
-Optional but commonly useful:
-
-- `LAKEBASE_INSTANCE_NAME`
-- `LAKEBASE_DATABASE_NAME`
-- `LAKEBASE_SCHEMA`
-- `GENIE_SPACE_ID`
-
-The repo default [app.yaml](/Users/volo.vragov/Desktop/work/model-lens/app.yaml) already contains these environment variables.
-For a manual existing-app deployment, update the values before source deploy if needed.
-For the manual path, prefer `REFRESH_JOB_ID` over `REFRESH_JOB_NAME` so you are not depending on bundle naming conventions or suffix matching.
-
-### Recommended Manual Values
-
-For a warehouse-only manual setup:
-
-```yaml
-env:
-  - name: CONTROL_PLANE_CATALOG
-    value: <control-plane-catalog>
-  - name: CONTROL_PLANE_SCHEMA
-    value: <control-plane-schema>
-  - name: SQL_WAREHOUSE_ID
-    valueFrom: sql_warehouse
-  - name: REFRESH_JOB_ID
-    value: "<existing-refresh-job-id>"
-  - name: REFRESH_JOB_NAME
-    value: ""
+```bash
+databricks workspace import-dir \
+  /tmp/model-lens-existing-app \
+  /Workspace/Users/<your-email>/model-lens-existing-app \
+  --overwrite
 ```
 
-If you prefer job-name resolution:
+Verify the workspace path exists:
 
-```yaml
-env:
-  - name: REFRESH_JOB_ID
-    value: ""
-  - name: REFRESH_JOB_NAME
-    value: "<existing-refresh-job-name>"
+```bash
+databricks workspace get-status /Workspace/Users/<your-email>/model-lens-existing-app
 ```
 
-Using `REFRESH_JOB_ID` is safer when multiple jobs have similar names.
+## Step 6: Create Or Update The Refresh Workflow
 
-If you must use `REFRESH_JOB_NAME`:
+### Track A
 
-- use the exact deployed workflow name when you know it
-- if the job came from a development bundle deploy, names like `[dev your_name] <existing-app-name>-refresh` are still supported by suffix matching
-- if more than one workflow ends with that same base name, the app will refuse to trigger and will tell you to set `REFRESH_JOB_ID`
+If Track A already deployed the bundle successfully, you should already have the refresh workflow.
 
-## Step 7: Stage Source Code For Manual App Deploy
+Record the job ID:
 
-You need a workspace path that contains the Model Lens source code.
+```bash
+databricks jobs list
+```
 
-The simplest path is to use the bundle output path after `databricks bundle deploy`:
+Find `<existing-app-name>-refresh` and copy its numeric `job_id`.
+
+### Track B
+
+Create the workflow from the generated JSON payload:
+
+```bash
+databricks jobs create --json @/tmp/model-lens-existing-app/refresh-job.json
+```
+
+Expected result:
+
+- a workflow named `<existing-app-name>-refresh` is created
+- the environment dependencies point at the wheel under `/Workspace/Users/<your-email>/model-lens-existing-app/dist/...`
+
+Then fetch the job ID:
+
+```bash
+databricks jobs list
+```
+
+Find `<existing-app-name>-refresh` and copy its numeric `job_id`.
+
+#### Detailed Track B Refresh-Job Creation Walkthrough
+
+If you want the exact sequence instead of the short form above, use this checklist.
+
+1. Confirm the generated payload exists locally:
+
+```bash
+ls -l /tmp/model-lens-existing-app/refresh-job.json
+```
+
+2. Inspect the payload before creating anything:
+
+```bash
+cat /tmp/model-lens-existing-app/refresh-job.json
+```
+
+Verify all of the following in that JSON:
+
+- `"name"` is `<existing-app-name>-refresh`
+- `"package_name"` is `model_lens`
+- `"entry_point"` is `model-lens-refresh`
+- `"--warehouse-id"` points at the correct SQL warehouse
+- `"--catalog"` points at the correct control-plane catalog
+- `"--schema"` points at the correct control-plane schema
+- the first environment dependency points at the wheel in your workspace source tree, for example:
+  `/Workspace/Users/<your-email>/model-lens-existing-app/dist/model_lens-0.1.0-py3-none-any.whl`
+
+3. Create the job:
+
+```bash
+databricks jobs create --json @/tmp/model-lens-existing-app/refresh-job.json
+```
+
+The command returns JSON.
+Record the numeric `job_id` from that output immediately.
+
+4. Confirm the job now exists:
+
+```bash
+databricks jobs list
+```
+
+Find `<existing-app-name>-refresh` and verify the displayed `job_id` matches the one from `jobs create`.
+
+5. Inspect the created job in full:
+
+```bash
+databricks jobs get <job-id> -o json
+```
+
+Verify:
+
+- the task key is `refresh_control_plane`
+- the task type is a Python wheel task
+- the task parameters still contain the intended warehouse/catalog/schema values
+- the environment dependency still points at the expected wheel in workspace storage
+- the configured Run as identity is the one you intend to grant data access to
+
+6. If the job already existed and you want to replace its settings instead of creating a second one, do not run `jobs create` again.
+Wrap the generated settings into a reset request body:
+
+```json
+{
+  "job_id": <job-id>,
+  "new_settings": {
+    ...contents of refresh-job.json...
+  }
+}
+```
+
+Save that as `/tmp/model-lens-existing-app/refresh-job-reset.json`, then run:
+
+```bash
+databricks jobs reset --json @/tmp/model-lens-existing-app/refresh-job-reset.json
+```
+
+If you want a concrete way to generate that wrapper file from the existing payload, use:
+
+```bash
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+job_id = <job-id>
+settings = json.loads(Path("/tmp/model-lens-existing-app/refresh-job.json").read_text())
+payload = {"job_id": job_id, "new_settings": settings}
+Path("/tmp/model-lens-existing-app/refresh-job-reset.json").write_text(json.dumps(payload, indent=2) + "\n")
+PY
+```
+
+Then verify again:
+
+```bash
+databricks jobs get <job-id> -o json
+```
+
+7. Grant the job Run as identity access before testing a run:
+
+- `CAN USE` on the SQL warehouse
+- source data `USE CATALOG`, `USE SCHEMA`, `SELECT`
+- control-plane `USE CATALOG`, `USE SCHEMA`, `SELECT`, `MODIFY`
+- if Lakebase sync is enabled, the required Lakebase connection and write privileges
+
+8. Trigger one manual test run before wiring the app to it:
+
+```bash
+databricks jobs run-now <job-id> --no-wait
+```
+
+Then inspect the run in the Jobs UI or with:
+
+```bash
+databricks jobs get-run <run-id> -o json
+```
+
+Expected result:
+
+- the wheel environment resolves successfully
+- the task reaches your code instead of failing during environment setup
+- if no monitors exist yet, the run should still complete cleanly or skip without a packaging/configuration error
+
+9. Once the job is confirmed healthy, rerun the helper so the app uses the numeric job ID:
+
+```bash
+python3 /Users/volo.vragov/Desktop/work/model-lens/scripts/prepare_existing_app_source.py \
+  --app-name <existing-app-name> \
+  --sql-warehouse-id <sql-warehouse-id> \
+  --control-plane-catalog <control-plane-catalog> \
+  --control-plane-schema <control-plane-schema> \
+  --refresh-job-id <job-id> \
+  --output-dir /tmp/model-lens-existing-app \
+  --workspace-source-path /Workspace/Users/<your-email>/model-lens-existing-app
+```
+
+10. Re-import the generated source tree so the deployed app will use `REFRESH_JOB_ID`:
+
+```bash
+databricks workspace import-dir \
+  /tmp/model-lens-existing-app \
+  /Workspace/Users/<your-email>/model-lens-existing-app \
+  --overwrite
+```
+
+At that point, the app no longer depends on workflow name lookup.
+
+#### UI Equivalent For Track B
+
+If you prefer creating the job in the Databricks UI instead of `jobs create --json`, mirror the generated payload exactly:
+
+1. Open `Workflows`.
+2. Click `Create job`.
+3. Set the job name to `<existing-app-name>-refresh`.
+4. Add one task with:
+   - task key: `refresh_control_plane`
+   - task type: `Python wheel`
+   - package name: `model_lens`
+   - entry point: `model-lens-refresh`
+5. Set task parameters exactly as pairs:
+   - `--warehouse-id`, `<sql-warehouse-id>`
+   - `--catalog`, `<control-plane-catalog>`
+   - `--schema`, `<control-plane-schema>`
+6. Add a serverless environment with dependencies matching `refresh-job.json`:
+   - the wheel path under your workspace source tree
+   - `dash>=2.18,<3.0`
+   - `dash-bootstrap-components>=1.6,<2.0`
+   - `databricks-sdk>=0.81,<1.0`
+   - `databricks-sql-connector>=3.0,<4.0`
+   - `numpy>=1.26,<3.0`
+   - `pandas>=2.2,<3.0`
+   - `plotly>=5.24,<6.0`
+   - `psycopg[binary]>=3.2,<4.0`
+   - `scikit-learn>=1.5,<2.0`
+7. Set retries to:
+   - max retries: `2`
+   - min retry interval millis: `60000`
+   - timeout seconds: `3600`
+8. Save the job.
+9. Record the numeric job ID from the UI.
+10. Trigger one manual run from the UI and verify that the wheel environment resolves and the task reaches your code.
+11. Continue with the `--refresh-job-id <job-id>` regeneration step above so the app points at the exact workflow ID.
+
+### Optional Hardening Step For Both Tracks
+
+Once you know the job ID, regenerate the prepared source tree so the app uses `REFRESH_JOB_ID` explicitly instead of name lookup:
+
+```bash
+python3 /Users/volo.vragov/Desktop/work/model-lens/scripts/prepare_existing_app_source.py \
+  --app-name <existing-app-name> \
+  --sql-warehouse-id <sql-warehouse-id> \
+  --control-plane-catalog <control-plane-catalog> \
+  --control-plane-schema <control-plane-schema> \
+  --refresh-job-id <job-id> \
+  --output-dir /tmp/model-lens-existing-app \
+  --workspace-source-path /Workspace/Users/<your-email>/model-lens-existing-app
+
+databricks workspace import-dir \
+  /tmp/model-lens-existing-app \
+  /Workspace/Users/<your-email>/model-lens-existing-app \
+  --overwrite
+```
+
+This rewrites `app.yaml` so the onboarding flow triggers the exact workflow ID.
+
+## Step 7: Deploy Model Lens Into The Existing App
+
+### Track A
+
+If you used the bundle, the app source is already staged under the bundle workspace directory:
 
 - warehouse-only:
   `/Workspace/Users/<your-email>/.bundle/model-lens/warehouse_only/files`
 - dev:
   `/Workspace/Users/<your-email>/.bundle/model-lens/dev/files`
 
-If you are not using the bundle to stage files, you can upload the repo manually to a workspace path, but the path must contain:
-
-- `app.yaml`
-- `src/model_lens/...`
-- the built wheel in `dist/` if your workflow deployment path still depends on it
-
-The bundle-staged workspace path is usually the least error-prone option.
-
-Before you deploy the app source, verify the path actually exists in the workspace:
-
-```bash
-databricks workspace get-status /Workspace/Users/<your-email>/.bundle/model-lens/warehouse_only/files
-```
-
-If you are using a different source path, verify that exact path instead.
-Do not guess the workspace path.
-
-## Step 8: Deploy Model Lens Into The Existing App
-
-Deploy source into the existing app instance:
+Deploy from that staged path:
 
 ```bash
 databricks apps deploy <existing-app-name> \
   --source-code-path /Workspace/Users/<your-email>/.bundle/model-lens/warehouse_only/files
 ```
 
-Or, if using the `dev` target:
+### Track B
+
+Deploy from the prepared workspace source tree:
 
 ```bash
 databricks apps deploy <existing-app-name> \
-  --source-code-path /Workspace/Users/<your-email>/.bundle/model-lens/dev/files
+  --source-code-path /Workspace/Users/<your-email>/model-lens-existing-app
 ```
-
-This updates the existing app compute.
-It does not create a new app identity as long as you keep the same app.
 
 After deployment:
 
@@ -333,16 +530,13 @@ After deployment:
 databricks apps get <existing-app-name> -o json
 ```
 
-Confirm the app still points to the same app instance and is not stuck in a failed deployment state.
-
-At this point, you should have all of these true:
+Confirm:
 
 - the existing app is still the same app instance
-- `SQL_WAREHOUSE_ID` will resolve from the `sql_warehouse` resource or a literal env value
-- `REFRESH_JOB_ID` or `REFRESH_JOB_NAME` points at the intended workflow
-- the source path you deployed from is the exact one you verified in Step 7
+- the deployment is not stuck in a failed state
+- the same app service principal is still attached
 
-## Step 9: Grant Permissions To The Existing App Service Principal
+## Step 8: Grant Permissions To The Existing App Service Principal
 
 Get the app identity from:
 
@@ -371,12 +565,11 @@ If Setup should create missing objects from the UI, also grant:
 
 Important:
 
-- `CAN MANAGE RUN` is required because the onboarding flow now triggers the initial refresh asynchronously
+- `CAN MANAGE RUN` is required because onboarding triggers the initial refresh asynchronously
 - the app identity triggers the job
 - the job's Run as identity performs the actual refresh work
-- do not rely on the bundle `sql_warehouse: CAN_USE` binding as the only warehouse grant; explicitly verify the app identity still has `CAN USE` after source deploys and restarts
 
-## Step 10: Grant Permissions To The Refresh Job Identity
+## Step 9: Grant Permissions To The Refresh Job Identity
 
 The refresh workflow must also have data-plane access.
 
@@ -399,16 +592,9 @@ If Lakebase sync is enabled, also grant the workflow identity:
 - permission to connect to the Lakebase database
 - write access to the target Lakebase schema used for the read model
 
-## Step 11: Open The Existing App And Verify Runtime Wiring
+## Step 10: Open The Existing App And Verify Runtime Wiring
 
 Open the app in the browser.
-
-In the `Setup` step, verify:
-
-- `Control Plane Catalog` matches the value you set
-- `Control Plane Schema` matches the value you set
-- if Lakebase is in use, the Lakebase fields are correct
-- the permission checklist matches what you actually granted
 
 In the `Reference` page, verify:
 
@@ -417,18 +603,15 @@ In the `Reference` page, verify:
 - the control-plane namespace matches your intended destination
 - if you are using `REFRESH_JOB_NAME`, it matches the real workflow you intend to trigger
 
-If `SQL_WAREHOUSE_ID` is blank, the usual cause is:
+In the `Setup` step, verify:
 
-- the existing app is missing a SQL warehouse resource keyed `sql_warehouse`
-- or `app.yaml` was not updated to a literal `value`
+- `Control Plane Catalog` matches the value you set
+- `Control Plane Schema` matches the value you set
+- the permission checklist matches what you actually granted
 
-If the initial refresh cannot be triggered, the usual cause is:
+If `SQL_WAREHOUSE_ID` is blank in Track B, the most common cause is that you deployed from the wrong workspace source path instead of the generated manual tree.
 
-- missing `CAN MANAGE RUN` on the refresh job
-- or missing `REFRESH_JOB_ID` / `REFRESH_JOB_NAME`
-- or `REFRESH_JOB_NAME` points at the wrong workflow name for this app
-
-## Step 12: Run Setup And Create The First Monitor
+## Step 11: Run Setup And Create The First Monitor
 
 From the app:
 
@@ -447,16 +630,21 @@ Expected result:
 
 ## Troubleshooting
 
-### The Existing App Started But The UI Cannot Query The Warehouse
+### `bundle deploy` Fails With `User does not have permission to grant permissions for added resource: sql_warehouse`
 
-Check:
+You are on the wrong track.
 
-- the existing app still has the SQL warehouse resource
-- the resource key is `sql_warehouse`
-- the app service principal still has `CAN USE`
-- the operator who configured the resource had `Can manage` on both the app and the warehouse
+Switch from Track A to Track B.
+Do not keep retrying `bundle deploy` for the existing app unless an admin can manage that app resource.
 
-### The App Opens But `Save Monitor And Trigger Refresh` Only Saves The Config
+### The Apps UI Says `User does not have permission to add resource sql-warehouse ...`
+
+This is the same blocker as above.
+
+Do not rely on adding the `sql_warehouse` app resource through the UI.
+Use Track B and generate a source tree with a literal `SQL_WAREHOUSE_ID`.
+
+### `Save Monitor And Trigger Refresh` Only Saves The Config
 
 Check:
 
@@ -464,45 +652,46 @@ Check:
 - the app service principal has `CAN MANAGE RUN` on the refresh job
 - if using `REFRESH_JOB_NAME`, the configured value matches the real deployed workflow name for this app
 
-### `apps deploy` Fails Or The Wrong Source Tree Is Deployed
+### The App Opens But Cannot Query The Warehouse
 
 Check:
 
-- the workspace path from Step 7 actually exists
-- you deployed from the intended target: `warehouse_only` vs `dev`
-- if you changed `app.yaml`, those changes are present in the staged workspace path you deployed from
+- the app service principal still has `CAN USE` on the warehouse
+- in Track B, the deployed app source path came from the generated manual tree
+- the `Reference` page shows the expected `SQL_WAREHOUSE_ID`
 
-### The App Cannot See Control-Plane Tables
+### `apps deploy` Succeeds But The Wrong Source Tree Is Running
 
 Check:
 
-- `CONTROL_PLANE_CATALOG`
-- `CONTROL_PLANE_SCHEMA`
-- `USE CATALOG`, `USE SCHEMA`, `SELECT`, and `MODIFY` on the control-plane namespace
+- the workspace path from Step 5 or Step 7 actually exists
+- you deployed from the intended path:
+  - bundle-staged path for Track A
+  - generated manual workspace path for Track B
+- if you regenerated the manual source tree with `--refresh-job-id`, you re-imported it before `apps deploy`
 
-### The App Service Principal Changed Unexpectedly
+## Recommended Minimal Path When You Cannot Manage App Resources
 
-That usually means the app was deleted and recreated.
-If that happened:
-
-- treat it as a new app identity
-- regrant warehouse, job, and Unity Catalog permissions
-- recheck the SQL warehouse app resource binding
-
-## Recommended Minimal Manual Pattern
-
-If you want the shortest robust manual path:
+If you want the shortest robust path for the exact constrained-user case:
 
 1. keep the existing app
-2. add a SQL warehouse app resource keyed `sql_warehouse`
-3. deploy or identify the refresh job
-4. set `REFRESH_JOB_ID`
-5. deploy Model Lens source into the existing app
-6. grant the existing app service principal:
+2. build the wheel locally
+3. run [prepare_existing_app_source.py](/Users/volo.vragov/Desktop/work/model-lens/scripts/prepare_existing_app_source.py) with:
+   - `--app-name`
+   - `--sql-warehouse-id`
+   - `--control-plane-catalog`
+   - `--control-plane-schema`
+   - `--output-dir`
+   - `--workspace-source-path`
+4. upload that directory with `databricks workspace import-dir`
+5. create the refresh job from `refresh-job.json`
+6. rerun the helper with `--refresh-job-id <job-id>` and re-import the directory
+7. deploy the app from that workspace path with `databricks apps deploy`
+8. grant the existing app service principal:
    - `CAN USE` on the warehouse
    - `CAN MANAGE RUN` on the job
    - source-data `SELECT`
    - control-plane `SELECT` and `MODIFY`
-7. grant the refresh job identity the actual data/control-plane privileges
+9. grant the refresh job identity the actual data/control-plane privileges
 
-That gives you the existing app compute, the existing app identity, and the current non-blocking Model Lens onboarding flow without introducing any extra tooling.
+That keeps the existing app identity, avoids app-resource management entirely, and still gives you the current non-blocking Model Lens onboarding flow.

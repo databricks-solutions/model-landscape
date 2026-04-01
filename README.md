@@ -184,6 +184,12 @@ If you already have a Databricks App and want to keep its existing app compute a
 
 - [Manual Setup With An Existing Databricks App](/Users/volo.vragov/Desktop/work/model-lens/docs/MANUAL_EXISTING_APP_SETUP.md)
 
+Important:
+
+- if the app already exists, do not run a plain `databricks bundle deploy` against that same `app_name` unless the bundle app resource has first been bound to the existing app
+- otherwise the deploy will try to create a second app and fail with an "App already exists" error
+- if the operator cannot manage the app's SQL warehouse resource, do not keep retrying the bundle path; use the generated manual existing-app source path instead
+
 ## Quick Deploy
 
 The commands below assume the default bundle variable `app_name=model-lens`.
@@ -191,6 +197,14 @@ If you override `app_name`, replace the app name in every `databricks apps ...` 
 
 - set `REFRESH_JOB_ID=<job-id>` before `databricks apps deploy`, or
 - set `REFRESH_JOB_NAME=<app-name>-refresh`
+
+If you are reusing an existing Databricks App instead of letting the bundle create one, stop here and use [Manual Setup With An Existing Databricks App](/Users/volo.vragov/Desktop/work/model-lens/docs/MANUAL_EXISTING_APP_SETUP.md). That guide now covers both:
+
+- the bind-first bundle path when the operator can manage app resources
+- the no-app-resource path that uses [prepare_existing_app_source.py](/Users/volo.vragov/Desktop/work/model-lens/scripts/prepare_existing_app_source.py) to generate a deployable source tree with a literal `SQL_WAREHOUSE_ID`
+- a detailed refresh-job creation sequence, including `jobs create`, `jobs reset`, `jobs run-now`, and how to switch the app from name-based lookup to `REFRESH_JOB_ID`
+
+The quick deploy below is for bundle-managed app creation only.
 
 Warehouse-only:
 

@@ -166,6 +166,8 @@ Expected result:
 - the app service principal shown in `databricks apps get model-lens -o json` still has `CAN_USE` on the SQL warehouse
 - the same app identity has `CAN MANAGE RUN` on the refresh workflow
 
+If you are reusing an existing app and cannot manage its SQL warehouse app resource, do not use this smoke-test deploy path. Use the generated manual existing-app path in [Manual Setup With An Existing Databricks App](/Users/volo.vragov/Desktop/work/model-lens/docs/MANUAL_EXISTING_APP_SETUP.md) instead.
+
 ## Step 4: Open The App
 
 Open the `model-lens` Databricks App.
