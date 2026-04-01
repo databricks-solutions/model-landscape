@@ -40,12 +40,20 @@ On Databricks CLI `v0.260.0`, the bundle can bind the SQL warehouse to the app b
 - the app triggers onboarding refreshes asynchronously by resolving `REFRESH_JOB_ID` first, then falling back to `REFRESH_JOB_NAME` (default `model-lens-refresh`)
 - when `REFRESH_JOB_NAME` is used, the resolver now also accepts Databricks Asset Bundles development job names that end with the configured base name, such as `[dev user] model-lens-refresh`
 
+The commands below assume the default bundle variable `app_name=model-lens`.
+If you override `app_name`, replace the app name in every `databricks apps ...` command and either:
+
+- set `REFRESH_JOB_ID=<job-id>` before `databricks apps deploy`, or
+- set `REFRESH_JOB_NAME=<app-name>-refresh`
+
 ## Permission Matrix
 
 Treat permissions as identity-specific:
 
 - Deployer or platform operator:
   deploy apps and workflows, select the SQL warehouse, and provision or approve the control-plane namespace.
+- Deployer or platform operator, when adding app resources manually in the Databricks Apps UI:
+  `Can manage` on the app and `Can manage` on the resource being attached, such as the SQL warehouse.
 - App service principal:
   `CAN_USE` on the SQL warehouse; `CAN MANAGE RUN` on the refresh workflow; source data `USE CATALOG`, `USE SCHEMA`, `SELECT`; control plane `USE CATALOG`, `USE SCHEMA`, `SELECT`, `MODIFY`.
 - App service principal, if Setup should create missing objects:
@@ -64,6 +72,10 @@ For `warehouse_only`, Model Lens expects:
 - `sql_warehouse_id`
 - `control_plane_catalog`
 - `control_plane_schema`
+
+Optional but important when you do not want the default names:
+
+- `app_name`
 
 For `dev` or `prod`, Model Lens expects:
 
@@ -165,7 +177,7 @@ databricks apps get model-lens
 Expected result:
 
 - the app `model-lens` is created
-- the workflow `model-lens-refresh` is created
+- the workflow `<app-name>-refresh` is created, where `<app-name>` is `model-lens` unless you overrode `app_name`
 - `databricks apps start model-lens` brings the app compute into `ACTIVE`
 - after `databricks apps deploy`, the app source is deployed to compute
 - on CLI `v0.260.0`, the app resource only binds the SQL warehouse; Lakebase app reads are configured from the app session fields or app env overrides
@@ -174,6 +186,7 @@ Expected result:
 
 Model Lens creates an app service principal automatically, but it does not receive warehouse or Unity Catalog access by default.
 Also do not assume the bundle's `sql_warehouse: CAN_USE` binding is sufficient forever. If the app is started, source-deployed, restarted, or otherwise managed outside the bundle lifecycle, explicitly verify the warehouse grant after deployment.
+If you add or edit the `sql_warehouse` app resource manually in the Databricks Apps UI, the operator doing that must have `Can manage` on both the app and the warehouse.
 
 Find the app identity:
 
@@ -366,7 +379,7 @@ Expected result:
 
 ## 10. Verify The Workflow
 
-If the async trigger is not configured or fails, open the workflow `model-lens-refresh` and run it once manually.
+If the async trigger is not configured or fails, open the workflow `<app-name>-refresh` and run it once manually.
 
 Then repeat the same warehouse checks and, if applicable, the Lakebase checks.
 

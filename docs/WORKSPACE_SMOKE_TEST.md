@@ -74,6 +74,9 @@ If you manually deleted the app in this workspace before redeploying, clear stal
 databricks workspace delete /Workspace/Users/<your-email>/.bundle/model-lens --recursive
 ```
 
+The commands below assume the default bundle variable `app_name=model-lens`.
+If you override `app_name`, replace the app name in every `databricks apps ...` command and expect the workflow name to become `<app-name>-refresh`.
+
 ## Step 1: Local Validation
 
 Run this from the repo root:
@@ -159,7 +162,7 @@ Expected result:
 - bundle deploy succeeds
 - the Databricks app `model-lens` exists
 - `databricks apps start model-lens` reaches `ACTIVE`
-- the workflow `model-lens-refresh` exists
+- the workflow `<app-name>-refresh` exists, where `<app-name>` is `model-lens` unless you overrode `app_name`
 - the app service principal shown in `databricks apps get model-lens -o json` still has `CAN_USE` on the SQL warehouse
 - the same app identity has `CAN MANAGE RUN` on the refresh workflow
 
@@ -447,7 +450,7 @@ Back in the app, verify:
 
 ## Step 9: Verify Workflow Refresh
 
-If the async trigger is not configured or fails, open the Databricks workflow `model-lens-refresh` and run it manually once.
+If the async trigger is not configured or fails, open the Databricks workflow `<app-name>-refresh` and run it manually once.
 
 Expected:
 
@@ -483,15 +486,6 @@ Expected:
 - warning banner
 - config not saved
 
-### Targeted refresh without selection
-
-- clear the selected monitor in the refresh dropdown
-- click `Refresh Selected Monitor`
-
-Expected:
-
-- warning banner
-
 ### Non-numeric feature warning
 
 Edit the monitor and include:
@@ -521,6 +515,17 @@ Expected:
 Expected:
 
 - save fails with a validation error explaining that repeated label keys require an order column
+
+### Zero-match label join review
+
+- keep the external labels table enabled
+- intentionally choose the wrong `External Labels Join Column`
+- click `Discover` again
+
+Expected:
+
+- the join validation shows `matched=0`
+- the app shows a red warning telling you to correct the join column before continuing
 
 ### Short-history dataset
 

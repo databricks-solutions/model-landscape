@@ -161,6 +161,8 @@ Permission matrix by identity:
 
 - Deployer or platform operator:
   deploy apps and workflows, use the chosen SQL warehouse, and provision or approve the control-plane namespace.
+- Deployer or platform operator, when adding app resources manually in the Databricks Apps UI:
+  `Can manage` on the app and `Can manage` on the resource being attached, such as the SQL warehouse. This is required to add or update a `sql_warehouse` app resource manually.
 - App service principal:
   `CAN_USE` on the SQL warehouse; `CAN MANAGE RUN` on the refresh workflow; source data `USE CATALOG`, `USE SCHEMA`, `SELECT`; control plane `USE CATALOG`, `USE SCHEMA`, `SELECT`, `MODIFY`.
 - App service principal, if Setup should create missing objects:
@@ -183,6 +185,12 @@ If you already have a Databricks App and want to keep its existing app compute a
 - [Manual Setup With An Existing Databricks App](/Users/volo.vragov/Desktop/work/model-lens/docs/MANUAL_EXISTING_APP_SETUP.md)
 
 ## Quick Deploy
+
+The commands below assume the default bundle variable `app_name=model-lens`.
+If you override `app_name`, replace the app name in every `databricks apps ...` command and either:
+
+- set `REFRESH_JOB_ID=<job-id>` before `databricks apps deploy`, or
+- set `REFRESH_JOB_NAME=<app-name>-refresh`
 
 Warehouse-only:
 
