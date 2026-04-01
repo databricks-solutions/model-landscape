@@ -38,6 +38,7 @@ On Databricks CLI `v0.260.0`, the bundle can bind the SQL warehouse to the app b
 - `dev` / `prod` automate the workflow-side Lakebase sync inputs
 - the app-side Lakebase read path is enabled either from the workspace setup fields in the UI or by pre-populating `LAKEBASE_INSTANCE_NAME` / `LAKEBASE_DATABASE_NAME` in `app.yaml` before `databricks apps deploy`
 - the app triggers onboarding refreshes asynchronously by resolving `REFRESH_JOB_ID` first, then falling back to `REFRESH_JOB_NAME` (default `model-lens-refresh`)
+- when `REFRESH_JOB_NAME` is used, the resolver now also accepts Databricks Asset Bundles development job names that end with the configured base name, such as `[dev user] model-lens-refresh`
 
 ## Permission Matrix
 

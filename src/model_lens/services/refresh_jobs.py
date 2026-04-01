@@ -13,6 +13,32 @@ def _clean(value: object) -> str:
     return str(value).strip()
 
 
+def _normalized_job_name(value: object) -> str:
+    return " ".join(_clean(value).split()).casefold()
+
+
+def _job_name(job: object) -> str:
+    return _clean(getattr(getattr(job, "settings", None), "name", None))
+
+
+def _jobs_with_exact_name(jobs: list[object], refresh_job_name: str) -> list[object]:
+    normalized_target = _normalized_job_name(refresh_job_name)
+    return [
+        job
+        for job in jobs
+        if getattr(job, "job_id", None) and _normalized_job_name(_job_name(job)) == normalized_target
+    ]
+
+
+def _jobs_with_suffix_name(jobs: list[object], refresh_job_name: str) -> list[object]:
+    normalized_target = _normalized_job_name(refresh_job_name)
+    return [
+        job
+        for job in jobs
+        if getattr(job, "job_id", None) and _normalized_job_name(_job_name(job)).endswith(normalized_target)
+    ]
+
+
 def build_refresh_job_params(
     *,
     model_key: str,
@@ -78,13 +104,16 @@ def resolve_refresh_job_id(workspace_client=None) -> int:
         raise RuntimeError("Neither REFRESH_JOB_ID nor REFRESH_JOB_NAME is configured.")
 
     client = workspace_client or _workspace_client()
-    matches = list(client.jobs.list(name=refresh_job_name, limit=25))
-    exact_matches = [
-        job
-        for job in matches
-        if _clean(getattr(getattr(job, "settings", None), "name", None)) == refresh_job_name and getattr(job, "job_id", None)
-    ]
+    exact_matches = _jobs_with_exact_name(list(client.jobs.list(name=refresh_job_name, limit=25)), refresh_job_name)
     if not exact_matches:
+        suffix_matches = _jobs_with_suffix_name(list(client.jobs.list(limit=100)), refresh_job_name)
+        if len(suffix_matches) == 1:
+            return int(suffix_matches[0].job_id)
+        if len(suffix_matches) > 1:
+            raise RuntimeError(
+                f"Multiple refresh jobs end with {refresh_job_name!r}. "
+                "Set REFRESH_JOB_ID explicitly so the app triggers the correct workflow."
+            )
         raise RuntimeError(
             f"Could not find a refresh job named {refresh_job_name!r}. "
             "Set REFRESH_JOB_ID or REFRESH_JOB_NAME to the deployed workflow."

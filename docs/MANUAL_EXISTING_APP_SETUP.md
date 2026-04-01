@@ -124,6 +124,9 @@ You have two supported options:
 - set `REFRESH_JOB_ID` directly
 - or set `REFRESH_JOB_NAME` and let the app resolve the job by name
 
+`REFRESH_JOB_ID` is the safest option.
+If you rely on `REFRESH_JOB_NAME`, Model Lens now handles Databricks Asset Bundles development prefixes such as `[dev volo_vragov] model-lens-refresh` by matching the configured name as a suffix, but explicit IDs still avoid ambiguity when several similar jobs exist.
+
 ### Option A: Reuse An Existing Refresh Job
 
 If you already have the refresh workflow:

@@ -226,6 +226,7 @@ The app now triggers the first refresh asynchronously during activation. It reso
 - otherwise `REFRESH_JOB_NAME`, which defaults to `model-lens-refresh`
 
 If you deploy with a custom bundle `app_name`, set `REFRESH_JOB_NAME=<app-name>-refresh` or set `REFRESH_JOB_ID=<job-id>` before `databricks apps deploy`.
+The current resolver also handles Databricks Asset Bundles development prefixes such as `[dev volo_vragov] model-lens-refresh` by falling back to a suffix match, but `REFRESH_JOB_ID` is still the safest option when multiple similarly named jobs exist.
 
 Lakebase-enabled:
 
