@@ -28,6 +28,10 @@ You need a workspace with:
 
 If you use Lakebase mode, you also need a Lakebase database user for the refresh workflow. In many workspaces this is the user or service principal that will run the job.
 
+If you already have an app and want to keep its existing compute and app service principal, use the dedicated manual walkthrough:
+
+- [Manual Setup With An Existing Databricks App](/Users/volo.vragov/Desktop/work/model-lens/docs/MANUAL_EXISTING_APP_SETUP.md)
+
 On Databricks CLI `v0.260.0`, the bundle can bind the SQL warehouse to the app but cannot automatically attach app-level `job` or `database` resources. That means:
 
 - `warehouse_only` is fully automated
@@ -42,7 +46,7 @@ Treat permissions as identity-specific:
 - Deployer or platform operator:
   deploy apps and workflows, select the SQL warehouse, and provision or approve the control-plane namespace.
 - App service principal:
-  `CAN_USE` on the SQL warehouse; source data `USE CATALOG`, `USE SCHEMA`, `SELECT`; control plane `USE CATALOG`, `USE SCHEMA`, `SELECT`, `MODIFY`.
+  `CAN_USE` on the SQL warehouse; `CAN MANAGE RUN` on the refresh workflow; source data `USE CATALOG`, `USE SCHEMA`, `SELECT`; control plane `USE CATALOG`, `USE SCHEMA`, `SELECT`, `MODIFY`.
 - App service principal, if Setup should create missing objects:
   `CREATE TABLE` in the control-plane schema; `CREATE SCHEMA` if the schema may not exist yet; `CREATE CATALOG` only if you intend to use the `Create catalog if missing` toggle.
 - Refresh workflow identity:
@@ -179,16 +183,23 @@ databricks apps get model-lens -o json
 Then grant the app identity all of the following:
 
 - `CAN_USE` on the SQL warehouse used by Model Lens
+- `CAN MANAGE RUN` on the refresh workflow used by Model Lens
 - read access to the source data catalog/schema/tables
 - read/write access to the control-plane catalog/schema/tables
 - if Model Lens should create the control-plane tables itself, `CREATE TABLE` in the control-plane schema
 
 Treat the warehouse grant as a post-deploy check, not a one-time assumption. After every `databricks apps start model-lens` + `databricks apps deploy model-lens ...` cycle, verify the same app identity still has `CAN_USE` on the configured SQL warehouse and regrant it if the app shows warehouse-access errors.
+Do the same for `CAN MANAGE RUN` on the refresh workflow if the app is expected to trigger onboarding refreshes asynchronously.
 
 At a minimum, the app identity and the scheduled refresh job identity must be able to do this:
 
 - source data: `USE CATALOG`, `USE SCHEMA`, `SELECT`
 - control plane: `USE CATALOG`, `USE SCHEMA`, `SELECT`, `MODIFY`
+
+Additionally:
+
+- app identity: `CAN MANAGE RUN` on the refresh job
+- refresh job Run as identity: the data and control-plane privileges above, because `Run now` uses the job owner's or Run as identity's privileges for the actual compute
 
 If you want Model Lens to initialize the control plane from the UI, the identity running setup also needs create privileges in that namespace.
 
@@ -263,6 +274,8 @@ In the app:
    - labels table columns and sample rows
    - detected `Join Column`, `Label Column`, and `Order Column`
    - join validation with matched rows, unmatched rows, and duplicate label keys
+   Discovery should prefer the shared string key if both tables expose one, accept ISO timestamp strings as timestamp/order candidates, and keep all detected numeric features selected by default.
+   If the labels join shows `matched=0`, treat that as an error and fix the join column before continuing.
 4. Continue to the `Confirm` step. The core fields should already be inferred. Use:
    - `Display Name`: `Fraud Model Demo`
    - `Model Key`: `fraud_model_demo`
@@ -284,6 +297,7 @@ In the app:
    - `amount`
    - `velocity_7d`
    - `device_score`
+   Model Lens now keeps the full detected numeric feature set on by default. If your real table has dozens of numeric features, the first refresh may still take longer, but the app should not silently trim the contract.
 7. Continue to `Activate`
 8. Click `Save Monitor And Trigger Refresh`
 

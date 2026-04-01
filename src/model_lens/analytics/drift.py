@@ -47,13 +47,26 @@ def compute_js(reference: np.ndarray, current: np.ndarray, n_bins: int = 20) -> 
     )
 
 
-def compute_feature_drift(reference_df: pd.DataFrame, current_df: pd.DataFrame, features: list[str]) -> pd.DataFrame:
-    rows: list[dict] = []
-    for feature in features:
-        if feature not in reference_df.columns or feature not in current_df.columns:
+def _numeric_feature_frame(df: pd.DataFrame, features: list[str]) -> pd.DataFrame:
+    available_features = [feature for feature in features if feature in df.columns]
+    if not available_features:
+        return pd.DataFrame()
+    frame = df.loc[:, available_features].copy()
+    for feature in available_features:
+        if pd.api.types.is_numeric_dtype(frame[feature]):
             continue
-        ref_values = pd.to_numeric(reference_df[feature], errors="coerce").to_numpy()
-        cur_values = pd.to_numeric(current_df[feature], errors="coerce").to_numpy()
+        frame[feature] = pd.to_numeric(frame[feature], errors="coerce")
+    return frame
+
+
+def compute_feature_drift(reference_df: pd.DataFrame, current_df: pd.DataFrame, features: list[str]) -> pd.DataFrame:
+    ref_numeric = _numeric_feature_frame(reference_df, features)
+    cur_numeric = _numeric_feature_frame(current_df, features)
+    shared_features = [feature for feature in features if feature in ref_numeric.columns and feature in cur_numeric.columns]
+    rows: list[dict] = []
+    for feature in shared_features:
+        ref_values = ref_numeric[feature].to_numpy(dtype=float, copy=False)
+        cur_values = cur_numeric[feature].to_numpy(dtype=float, copy=False)
         if (~np.isnan(ref_values)).sum() < 2 or (~np.isnan(cur_values)).sum() < 2:
             continue
         rows.append({
@@ -71,4 +84,3 @@ def compute_feature_drift(reference_df: pd.DataFrame, current_df: pd.DataFrame, 
             "cur_count": int((~np.isnan(cur_values)).sum()),
         })
     return pd.DataFrame(rows)
-

@@ -70,8 +70,13 @@ Current engine behavior:
 - numeric features participate in drift calculations
 - non-numeric selected features are kept in the contract and projected into the UI
 - labels can come from the source table or an external labels table
-- when you provide an external labels table, Model Lens scans it during discovery, shows schema/sample rows, infers join/label/order columns, and reports matched vs unmatched inference rows before activation
+- when you provide an external labels table, Model Lens scans it during discovery, shows schema/sample rows, prioritizes shared-name shared-type join keys, infers join/label/order columns, and reports matched vs unmatched inference rows before activation
+- a 0-row join match is treated as a real review failure, not a soft hint; the UI raises a red warning so the operator can correct the join column before activation
+- timestamp discovery handles both warehouse `TIMESTAMP` columns and ISO-like timestamps stored as `STRING`
+- if a source table has no explicit `model_id` field but `model_version` carries identifier-like values, discovery can use that column as the monitored model scope
 - an optional MLflow experiment or registered model can contribute feature ordering, model/version hints, and lineage metadata during onboarding
+- discovery keeps the full numeric feature set by default; Model Lens does not silently trim the first run to a top-N subset
+- the drift/performance path now avoids redundant per-feature numeric coercion during backfills so wide numeric schemas are cheaper to process than the earlier implementation
 - onboarding supports two baseline policies:
   - `rolling`: compare the latest `n` days with the preceding `n` days
   - `fixed`: compare a user-selected known-good baseline range with the latest window of the same length
@@ -79,6 +84,13 @@ Current engine behavior:
 - later refreshes run in `auto` mode by default: they append new windows when history already exists and fall back to full backfill when the stored history no longer matches the current baseline configuration
 - if an external labels table is not unique on the join key, you must provide an `External Labels Order Column`
 - if a source table contains multiple `model_id` values, you must provide `Monitored Model ID Value`
+
+Discovery priorities:
+
+- join keys: prefer shared columns that exist in both tables with the same name and compatible types, especially shared string identifiers such as `unique_hash`
+- timestamps: prefer typed timestamp/date columns first, then string columns whose preview values parse like ISO timestamps
+- model scope: prefer explicit `model_id`; if none exists, fall back to identifier-like `model_version` values
+- labels: prefer columns named like `label`, `target`, `actual`, or `ground_truth`, with binary/categorical previews preferred for classification
 
 ## Deployment Modes
 
@@ -150,7 +162,7 @@ Permission matrix by identity:
 - Deployer or platform operator:
   deploy apps and workflows, use the chosen SQL warehouse, and provision or approve the control-plane namespace.
 - App service principal:
-  `CAN_USE` on the SQL warehouse; source data `USE CATALOG`, `USE SCHEMA`, `SELECT`; control plane `USE CATALOG`, `USE SCHEMA`, `SELECT`, `MODIFY`.
+  `CAN_USE` on the SQL warehouse; `CAN MANAGE RUN` on the refresh workflow; source data `USE CATALOG`, `USE SCHEMA`, `SELECT`; control plane `USE CATALOG`, `USE SCHEMA`, `SELECT`, `MODIFY`.
 - App service principal, if Setup should create missing objects:
   `CREATE TABLE` in the control-plane schema; `CREATE SCHEMA` if the schema may not exist yet; `CREATE CATALOG` only if you want the `Create catalog if missing` toggle to work.
 - Refresh workflow identity:
@@ -165,6 +177,10 @@ If you delete and recreate the app while reusing the same workspace, clean up st
 ```bash
 databricks workspace delete /Workspace/Users/<your-email>/.bundle/model-lens --recursive
 ```
+
+If you already have a Databricks App and want to keep its existing app compute and app service principal, use the dedicated manual walkthrough:
+
+- [Manual Setup With An Existing Databricks App](/Users/volo.vragov/Desktop/work/model-lens/docs/MANUAL_EXISTING_APP_SETUP.md)
 
 ## Quick Deploy
 
@@ -202,6 +218,7 @@ databricks apps get model-lens -o json
 ```
 
 Use the returned app identity to confirm `CAN_USE` on the SQL warehouse before opening the app.
+Also verify that the same app identity has `CAN MANAGE RUN` on the refresh workflow so onboarding can trigger the first refresh asynchronously.
 
 The app now triggers the first refresh asynchronously during activation. It resolves the workflow in this order:
 

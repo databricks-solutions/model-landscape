@@ -105,6 +105,7 @@ def test_app_layout_exposes_slimmed_onboarding_flow() -> None:
     layout_text = str(app.validation_layout)
     assert "Permission checklist" in layout_text
     assert "CAN_USE on the SQL warehouse" in layout_text
+    assert "CAN MANAGE RUN on the refresh workflow" in layout_text
     assert "Save Monitor And Trigger Refresh" in layout_text
 
 
@@ -410,3 +411,25 @@ def test_render_quality_callback_surfaces_history_and_latest_snapshot(monkeypatc
     assert "Rows Per Comparison Window" in str(result[1])
     assert "Null Rate Trends" in str(result[2])
     assert "Prediction Mean Over Time" in str(result[3])
+
+
+def test_labels_discovery_surfaces_zero_match_warning() -> None:
+    component = callbacks_module._render_labels_discovery(
+        labels_table="main.demo.labels",
+        label_schema=pd.DataFrame([{"col_name": "unique_hash", "data_type": "string"}]),
+        label_preview=pd.DataFrame([{"unique_hash": "hash-1", "label": "1"}]),
+        label_validation={
+            "inference_rows": 10,
+            "matched_rows": 0,
+            "unmatched_rows": 10,
+            "duplicate_join_keys": 0,
+            "match_rate_pct": 0.0,
+            "distinct_label_values": ("0", "1"),
+            "binary_compatible": True,
+        },
+        join_col="unique_hash",
+        label_col="label",
+        order_col="label_timestamp",
+    )
+
+    assert "No rows matched between inference and labels tables on this join column" in str(component)

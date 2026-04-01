@@ -121,7 +121,7 @@ The app uses Lakebase for hot UI reads when configured. If Lakebase is unavailab
 
 The refresh workflow is a serverless Databricks job.
 
-The app does not run the heavy first refresh inline. During activation it saves the monitor config, resolves the workflow from `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`, and triggers the job asynchronously so the UI stays responsive.
+The app does not run the heavy first refresh inline. During activation it saves the monitor config, resolves the workflow from `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`, and triggers the job asynchronously so the UI stays responsive. That means the app service principal also needs `CAN MANAGE RUN` on the refresh job, while the job's Run as identity still needs the source-data and control-plane privileges required for the actual computation.
 
 Responsibilities:
 
@@ -158,7 +158,8 @@ Primary code:
 
 1. The operator enters a source inference table and can optionally add a labels table plus an MLflow experiment or registered model.
 2. The app loads schema metadata and sample rows through the SQL warehouse.
-3. The discovery service infers the monitoring contract, feature set, slices, model scope candidates, and optional MLflow lineage.
+3. The discovery service infers the monitoring contract, feature set, slices, model scope candidates, and optional MLflow lineage. It accepts timestamp-like ISO strings, prioritizes shared-name shared-type join keys for external labels, and can fall back to identifier-like `model_version` values when a dedicated `model_id` column is absent.
+   It also treats a 0-row labels join as a review-blocking warning and keeps the full numeric feature set selected by default rather than silently shrinking the first refresh to a small subset.
 4. In the contract step, the operator reviews the inferred draft and only opens `Advanced` when overrides are needed.
 5. If the source table contains multiple model IDs, the operator confirms or pins one `model_id_value`.
 6. If the labels table is not unique on the join key, the operator confirms or provides a label ordering column.

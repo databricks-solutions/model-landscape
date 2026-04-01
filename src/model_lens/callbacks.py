@@ -374,6 +374,35 @@ def _render_labels_discovery(
     order_col: str,
 ) -> html.Div:
     validation = label_validation or {}
+    matched_rows = int(validation.get("matched_rows", 0) or 0)
+    inference_rows = int(validation.get("inference_rows", 0) or 0)
+    unmatched_rows = int(validation.get("unmatched_rows", 0) or 0)
+    duplicate_join_keys = int(validation.get("duplicate_join_keys", 0) or 0)
+    alerts: list[dbc.Alert] = []
+    if inference_rows > 0 and matched_rows == 0:
+        alerts.append(
+            dbc.Alert(
+                "No rows matched between inference and labels tables on this join column. Check the join column selection.",
+                color="danger",
+                className="mb-3",
+            )
+        )
+    elif unmatched_rows > 0:
+        alerts.append(
+            dbc.Alert(
+                f"Labels matched {matched_rows} of {inference_rows} inference rows; {unmatched_rows} remain unmatched.",
+                color="warning",
+                className="mb-3",
+            )
+        )
+    if duplicate_join_keys > 0 and not order_col:
+        alerts.append(
+            dbc.Alert(
+                "Labels table contains duplicate join keys without an order column. Add an order column so Model Lens can choose the latest label per entity.",
+                color="warning",
+                className="mb-3",
+            )
+        )
     mapping_frame = pd.DataFrame(
         [
             {"field": "join_column", "value": join_col or "Not detected"},
@@ -405,6 +434,7 @@ def _render_labels_discovery(
                 "Model Lens scanned the labels table, inferred the join and label columns, and validated the join against the source table.",
                 className="text-muted",
             ),
+            *alerts,
             html.H6("Detected Label Mapping", className="mb-2"),
             _render_frame(mapping_frame, "No label mapping detected."),
             html.Hr(),
@@ -586,7 +616,7 @@ def register_callbacks(app) -> None:
         }.get(step, False)
         guidance = {
             1: (
-                "Confirm the control-plane namespace, verify the warehouse and Unity Catalog grants in the setup checklist, and run setup. If setup fails, fix the issue and click Setup Control Plane again to retry. If you change the catalog or schema later, run setup again before saving the monitor.",
+                "Confirm the control-plane namespace, verify the warehouse, job-run, and Unity Catalog grants in the setup checklist, and run setup. If setup fails, fix the issue and click Setup Control Plane again to retry. If you change the catalog or schema later, run setup again before saving the monitor.",
                 "info" if workspace_ready else "secondary",
             ),
             2: (
@@ -822,12 +852,15 @@ def register_callbacks(app) -> None:
                 )
             )
             if label_validation:
+                matched_rows = int(label_validation.get("matched_rows", 0) or 0)
+                inference_rows = int(label_validation.get("inference_rows", 0) or 0)
+                unmatched_rows = int(label_validation.get("unmatched_rows", 0) or 0)
                 status_items.append(
                     (
-                        f"Join validation: matched={int(label_validation.get('matched_rows', 0) or 0)}, "
-                        f"unmatched={int(label_validation.get('unmatched_rows', 0) or 0)}, "
+                        f"Join validation: matched={matched_rows}, "
+                        f"unmatched={unmatched_rows}, "
                         f"duplicate_keys={int(label_validation.get('duplicate_join_keys', 0) or 0)}.",
-                        "info",
+                        "danger" if inference_rows > 0 and matched_rows == 0 else "info",
                     )
                 )
         if discovery.config.mlflow.connected:

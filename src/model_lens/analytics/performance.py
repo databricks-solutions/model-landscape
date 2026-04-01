@@ -27,6 +27,12 @@ def compute_classification_metrics(df: pd.DataFrame, prediction_col: str, label_
     }
 
 
+def _numeric_array(series: pd.Series) -> np.ndarray:
+    if pd.api.types.is_numeric_dtype(series):
+        return series.to_numpy(dtype=float, copy=False)
+    return pd.to_numeric(series, errors="coerce").to_numpy()
+
+
 def rank_degradation_contributors(
     baseline_df: pd.DataFrame,
     current_df: pd.DataFrame,
@@ -39,8 +45,8 @@ def rank_degradation_contributors(
     for feature in feature_columns:
         if feature not in baseline_df.columns or feature not in current_df.columns:
             continue
-        base_values = pd.to_numeric(baseline_df[feature], errors="coerce").to_numpy()
-        cur_values = pd.to_numeric(current_df[feature], errors="coerce").to_numpy()
+        base_values = _numeric_array(baseline_df[feature])
+        cur_values = _numeric_array(current_df[feature])
         clean = base_values[~np.isnan(base_values)]
         if len(clean) < n_bins:
             continue
@@ -72,4 +78,3 @@ def rank_degradation_contributors(
     if frame.empty:
         return frame
     return frame.sort_values("contribution")
-

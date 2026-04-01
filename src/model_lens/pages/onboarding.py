@@ -46,17 +46,21 @@ def _workspace_step(form_style: dict) -> dbc.Row:
                             html.Details(
                                 [
                                     html.Summary("Permission checklist", className="fw-semibold"),
-                                    html.Ul(
-                                        [
-                                            html.Li(
-                                                "App service principal: CAN_USE on the SQL warehouse, "
-                                                "source-data USE CATALOG / USE SCHEMA / SELECT, and "
-                                                "control-plane USE CATALOG / USE SCHEMA / SELECT / MODIFY."
-                                            ),
-                                            html.Li(
-                                                "If setup should create objects: CREATE TABLE in the control-plane schema, "
-                                                "CREATE SCHEMA if the schema is missing, and CREATE CATALOG only when you enable the toggle."
-                                            ),
+                                            html.Ul(
+                                                [
+                                                    html.Li(
+                                                        "App service principal: CAN_USE on the SQL warehouse, "
+                                                        "source-data USE CATALOG / USE SCHEMA / SELECT, and "
+                                                        "control-plane USE CATALOG / USE SCHEMA / SELECT / MODIFY."
+                                                    ),
+                                                    html.Li(
+                                                        "App service principal: CAN MANAGE RUN on the refresh workflow "
+                                                        "so activation can trigger the first refresh asynchronously."
+                                                    ),
+                                                    html.Li(
+                                                        "If setup should create objects: CREATE TABLE in the control-plane schema, "
+                                                        "CREATE SCHEMA if the schema is missing, and CREATE CATALOG only when you enable the toggle."
+                                                    ),
                                             html.Li(
                                                 "Refresh workflow identity: the same warehouse, source-data, and control-plane access as the app."
                                             ),

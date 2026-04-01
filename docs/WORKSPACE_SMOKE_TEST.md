@@ -58,7 +58,7 @@ Identity checklist for this smoke test:
 - deployer or platform operator:
   can deploy the bundle/app and has approved the control-plane namespace
 - app service principal:
-  `CAN_USE` on the SQL warehouse; source data `USE CATALOG`, `USE SCHEMA`, `SELECT`; control plane `USE CATALOG`, `USE SCHEMA`, `SELECT`, `MODIFY`
+  `CAN_USE` on the SQL warehouse; `CAN MANAGE RUN` on the refresh workflow; source data `USE CATALOG`, `USE SCHEMA`, `SELECT`; control plane `USE CATALOG`, `USE SCHEMA`, `SELECT`, `MODIFY`
 - app service principal, if Setup should create missing objects:
   `CREATE TABLE` in the control-plane schema; `CREATE SCHEMA` if the schema is missing; `CREATE CATALOG` only if you plan to use the toggle
 - refresh workflow identity:
@@ -161,6 +161,7 @@ Expected result:
 - `databricks apps start model-lens` reaches `ACTIVE`
 - the workflow `model-lens-refresh` exists
 - the app service principal shown in `databricks apps get model-lens -o json` still has `CAN_USE` on the SQL warehouse
+- the same app identity has `CAN MANAGE RUN` on the refresh workflow
 
 ## Step 4: Open The App
 
@@ -244,6 +245,8 @@ In the app:
    - sample label rows
    - inferred `Join Column=entity_id`, `Label Column=label`, `Order Column=label_timestamp`
    - join validation with matched rows, unmatched rows, and duplicate label-key counts
+   If your tables use ISO timestamps stored as strings or a shared string key such as `unique_hash`, discovery should still detect those correctly without requiring manual overrides.
+   If you ever see `matched=0`, stop there and correct the join column before you continue; the current build surfaces that as a red warning instead of a quiet table row.
 4. Review the schema and sample rows, then continue to the `Confirm` step.
 5. Confirm the inferred contract:
    - `Display Name`: `Fraud Model Demo`
@@ -268,6 +271,7 @@ In the app:
    - `amount`
    - `velocity_7d`
    - `device_score`
+   For wider real-world tables, expect all numeric features to remain selected by default unless you intentionally narrow them.
 8. Optional slice check after the happy path:
    - confirm `region`
    - confirm `merchant_segment` if you added it to the dataset

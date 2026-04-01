@@ -179,3 +179,132 @@ def test_discovery_marks_multi_model_tables_for_review_without_mlflow_scope_hint
     assert result.config.model_id_value is None
     assert result.requires_review is True
     assert any("model_id" in warning for warning in result.warnings)
+
+
+def test_discovery_prefers_shared_string_join_key_and_string_timestamps() -> None:
+    class _GeoComplyRepository(FakeRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.source_schema = pd.DataFrame(
+                [
+                    {"col_name": "event_time", "data_type": "string"},
+                    {"col_name": "model_version", "data_type": "string"},
+                    {"col_name": "prediction", "data_type": "double"},
+                    {"col_name": "unique_hash", "data_type": "string"},
+                    {"col_name": "anti_spoof_debug_process_id", "data_type": "bigint"},
+                    {"col_name": "velocity_7d", "data_type": "double"},
+                    {"col_name": "amount", "data_type": "double"},
+                ]
+            )
+            self.source_preview = pd.DataFrame(
+                [
+                    {
+                        "event_time": "2026-01-17T19:47:22.366Z",
+                        "model_version": "gc_prod_aiguardian.ios.ali_ios@5",
+                        "prediction": 0.91,
+                        "unique_hash": "hash-1",
+                        "anti_spoof_debug_process_id": 101,
+                        "velocity_7d": 2.4,
+                        "amount": 120.0,
+                    },
+                    {
+                        "event_time": "2026-01-17T19:48:22.366Z",
+                        "model_version": "gc_prod_aiguardian.ios.ali_ios@5",
+                        "prediction": 0.13,
+                        "unique_hash": "hash-2",
+                        "anti_spoof_debug_process_id": 202,
+                        "velocity_7d": 1.1,
+                        "amount": 83.0,
+                    },
+                ]
+            )
+            self.labels_schema = pd.DataFrame(
+                [
+                    {"col_name": "unique_hash", "data_type": "string"},
+                    {"col_name": "anti_spoof_debug_process_id", "data_type": "bigint"},
+                    {"col_name": "label", "data_type": "int"},
+                    {"col_name": "label_timestamp", "data_type": "string"},
+                ]
+            )
+            self.labels_preview = pd.DataFrame(
+                [
+                    {
+                        "unique_hash": "hash-9",
+                        "anti_spoof_debug_process_id": 101,
+                        "label": 1,
+                        "label_timestamp": "2026-01-17T20:00:00.000Z",
+                    }
+                ]
+            )
+            self.distinct_values = {
+                ("main.demo.inference_logs", "model_version"): ["gc_prod_aiguardian.ios.ali_ios@5"],
+            }
+            self.labels_validation = {
+                "inference_rows": 2,
+                "matched_rows": 0,
+                "unmatched_rows": 2,
+                "duplicate_join_keys": 0,
+                "match_rate_pct": 0.0,
+                "distinct_label_values": ("0", "1"),
+                "binary_compatible": True,
+            }
+
+        def profile_labels_mapping(self, **kwargs) -> dict:
+            assert kwargs["source_join_col"] == "unique_hash"
+            assert kwargs["labels_join_col"] == "unique_hash"
+            assert kwargs["labels_order_col"] == "label_timestamp"
+            return dict(self.labels_validation)
+
+    repository = _GeoComplyRepository()
+    service = MonitorDiscoveryService(repository, mlflow=FakeMLflow(MLflowDiscovery()))
+
+    result = service.discover(
+        source_table="main.demo.inference_logs",
+        labels_table="main.demo.labels",
+    )
+
+    assert result.config.contract.timestamp_col == "event_time"
+    assert result.config.contract.model_id_col == "model_version"
+    assert result.config.contract.model_version_col is None
+    assert result.config.model_id_value == "gc_prod_aiguardian.ios.ali_ios@5"
+    assert result.config.labels_join_col == "unique_hash"
+    assert result.config.labels_order_col == "label_timestamp"
+    assert result.label_validation["matched_rows"] == 0
+    assert result.requires_review is True
+    assert any("No rows matched between inference and labels tables" in warning for warning in result.warnings)
+
+
+def test_discovery_keeps_all_numeric_features_for_wide_schemas() -> None:
+    class _WideRepository(FakeRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            feature_schema = [{"col_name": f"feature_{index}", "data_type": "double"} for index in range(75)]
+            self.source_schema = pd.DataFrame(
+                [
+                    {"col_name": "event_ts", "data_type": "timestamp"},
+                    {"col_name": "model_id", "data_type": "string"},
+                    {"col_name": "prediction", "data_type": "double"},
+                    *feature_schema,
+                ]
+            )
+            self.source_preview = pd.DataFrame(
+                [
+                    {
+                        "event_ts": "2026-01-01T00:00:00",
+                        "model_id": "fraud_model_demo",
+                        "prediction": 0.91,
+                        **{f"feature_{index}": float(index) for index in range(75)},
+                    }
+                ]
+            )
+            self.distinct_values = {
+                ("main.demo.inference_logs", "model_id"): ["fraud_model_demo"],
+            }
+
+    repository = _WideRepository()
+    service = MonitorDiscoveryService(repository, mlflow=FakeMLflow(MLflowDiscovery()))
+
+    result = service.discover(source_table="main.demo.inference_logs")
+
+    assert len(result.config.contract.feature_columns) == 75
+    assert result.requires_review is False
