@@ -5,15 +5,17 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
-REQUIRED_INFERENCE_COLUMNS = ("event_ts", "model_id", "prediction")
+REQUIRED_INFERENCE_COLUMNS = ("event_ts", "prediction")
 OPTIONAL_INFERENCE_COLUMNS = ("model_version", "prediction_proba", "label", "entity_id")
+DRIFT_CADENCE_PRESETS = ("hourly", "6h", "daily", "manual")
+PERFORMANCE_CADENCE_PRESETS = ("disabled", "6h_3d_repair", "daily_7d_repair", "daily_14d_repair", "manual")
 
 
 @dataclass(frozen=True)
 class InferenceContract:
     timestamp_col: str
-    model_id_col: str
     prediction_col: str
+    model_id_col: str | None = None
     model_version_col: str | None = None
     prediction_score_col: str | None = None
     label_col: str | None = None
@@ -115,8 +117,32 @@ class MonitorConfig:
     labels_table: str | None = None
     labels_join_col: str | None = None
     labels_order_col: str | None = None
+    drift_cadence_preset: str = "6h"
+    performance_cadence_preset: str = "disabled"
+    schedule_enabled: bool = True
     mlflow: MLflowLineage = field(default_factory=MLflowLineage)
     created_by: str = "app"
+    status: str = "active"
+
+    def __post_init__(self) -> None:
+        drift = (self.drift_cadence_preset or "6h").strip().lower()
+        performance = (self.performance_cadence_preset or "disabled").strip().lower()
+        status = (self.status or "active").strip().lower()
+        if drift not in DRIFT_CADENCE_PRESETS:
+            raise ValueError(f"Unsupported drift cadence preset: {self.drift_cadence_preset!r}")
+        if performance not in PERFORMANCE_CADENCE_PRESETS:
+            raise ValueError(f"Unsupported performance cadence preset: {self.performance_cadence_preset!r}")
+        if status not in {"active", "inactive"}:
+            raise ValueError(f"Unsupported monitor status: {self.status!r}")
+        if self.model_id_value and not self.contract.model_id_col:
+            raise ValueError("Monitored Model ID Value requires a mapped Model ID Column.")
+        object.__setattr__(self, "drift_cadence_preset", drift)
+        object.__setattr__(self, "performance_cadence_preset", performance)
+        object.__setattr__(self, "status", status)
+
+    @property
+    def has_labels(self) -> bool:
+        return bool(self.contract.label_col)
 
 
 @dataclass(frozen=True)
@@ -159,6 +185,23 @@ class IncidentRecord:
 
 
 @dataclass(frozen=True)
+class MonitorRuntimeState:
+    model_key: str
+    bootstrap_status: str = "pending"
+    last_drift_refresh_at: str | None = None
+    last_performance_refresh_at: str | None = None
+    next_drift_due_at: str | None = None
+    next_performance_due_at: str | None = None
+    last_label_watermark: str | None = None
+    last_run_status: str | None = None
+    last_run_error: str | None = None
+    last_run_started_at: str | None = None
+    last_run_completed_at: str | None = None
+    backoff_until: str | None = None
+    consecutive_failures: int = 0
+
+
+@dataclass(frozen=True)
 class RefreshResult:
     drift_rows: list[dict[str, Any]]
     quality_rows: list[dict[str, Any]]
@@ -167,3 +210,6 @@ class RefreshResult:
     incident_history_rows: list[dict[str, Any]] = field(default_factory=list)
     quality_history_rows: list[dict[str, Any]] = field(default_factory=list)
     window_rows: list[dict[str, Any]] = field(default_factory=list)
+    daily_quality_profile_rows: list[dict[str, Any]] = field(default_factory=list)
+    daily_feature_profile_rows: list[dict[str, Any]] = field(default_factory=list)
+    daily_performance_profile_rows: list[dict[str, Any]] = field(default_factory=list)

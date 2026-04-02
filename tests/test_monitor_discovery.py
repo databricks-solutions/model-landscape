@@ -125,6 +125,51 @@ def test_source_only_discovery_builds_numeric_feature_contract() -> None:
     assert result.confidence == "high"
 
 
+def test_discovery_prefers_source_label_when_present_in_inference_table() -> None:
+    class _SourceLabelRepository(FakeRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.source_schema = pd.DataFrame(
+                [
+                    {"col_name": "event_ts", "data_type": "timestamp"},
+                    {"col_name": "model_id", "data_type": "string"},
+                    {"col_name": "prediction", "data_type": "double"},
+                    {"col_name": "label", "data_type": "int"},
+                    {"col_name": "amount", "data_type": "double"},
+                    {"col_name": "velocity_7d", "data_type": "double"},
+                ]
+            )
+            self.source_preview = pd.DataFrame(
+                [
+                    {
+                        "event_ts": "2026-01-01T00:00:00",
+                        "model_id": "fraud_model_demo",
+                        "prediction": 0.91,
+                        "label": 1,
+                        "amount": 120.0,
+                        "velocity_7d": 2.4,
+                    },
+                    {
+                        "event_ts": "2026-01-02T00:00:00",
+                        "model_id": "fraud_model_demo",
+                        "prediction": 0.13,
+                        "label": 0,
+                        "amount": 83.0,
+                        "velocity_7d": 1.1,
+                    },
+                ]
+            )
+
+    repository = _SourceLabelRepository()
+    service = MonitorDiscoveryService(repository, mlflow=FakeMLflow(MLflowDiscovery()))
+
+    result = service.discover(source_table="main.demo.inference_logs")
+
+    assert result.config.labels_table is None
+    assert result.config.contract.label_col == "label"
+    assert result.requires_review is False
+
+
 def test_discovery_uses_mlflow_and_labels_to_fill_scope_and_lineage() -> None:
     repository = FakeRepository()
     repository.distinct_values[("main.demo.inference_logs", "model_id")] = ["fraud_model_demo", "other_model"]
@@ -307,4 +352,63 @@ def test_discovery_keeps_all_numeric_features_for_wide_schemas() -> None:
     result = service.discover(source_table="main.demo.inference_logs")
 
     assert len(result.config.contract.feature_columns) == 75
+    assert result.requires_review is False
+
+
+def test_discovery_uses_shared_labels_join_when_entity_id_is_absent() -> None:
+    class _SharedJoinRepository(FakeRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.source_schema = pd.DataFrame(
+                [
+                    {"col_name": "event_ts", "data_type": "timestamp"},
+                    {"col_name": "model_id", "data_type": "string"},
+                    {"col_name": "prediction", "data_type": "double"},
+                    {"col_name": "gc_transaction", "data_type": "string"},
+                    {"col_name": "amount", "data_type": "double"},
+                ]
+            )
+            self.source_preview = pd.DataFrame(
+                [
+                    {
+                        "event_ts": "2026-01-01T00:00:00",
+                        "model_id": "fraud_model_demo",
+                        "prediction": 0.91,
+                        "gc_transaction": "tx-1",
+                        "amount": 120.0,
+                    }
+                ]
+            )
+            self.labels_schema = pd.DataFrame(
+                [
+                    {"col_name": "gc_transaction", "data_type": "string"},
+                    {"col_name": "label", "data_type": "int"},
+                ]
+            )
+            self.labels_preview = pd.DataFrame([{"gc_transaction": "tx-1", "label": 1}])
+            self.labels_validation = {
+                "inference_rows": 1,
+                "matched_rows": 1,
+                "unmatched_rows": 0,
+                "duplicate_join_keys": 0,
+                "match_rate_pct": 100.0,
+                "distinct_label_values": ("0", "1"),
+                "binary_compatible": True,
+            }
+
+        def profile_labels_mapping(self, **kwargs) -> dict:
+            assert kwargs["source_join_col"] == "gc_transaction"
+            assert kwargs["labels_join_col"] == "gc_transaction"
+            return dict(self.labels_validation)
+
+    repository = _SharedJoinRepository()
+    service = MonitorDiscoveryService(repository, mlflow=FakeMLflow(MLflowDiscovery()))
+
+    result = service.discover(
+        source_table="main.demo.inference_logs",
+        labels_table="main.demo.labels",
+    )
+
+    assert result.config.labels_join_col == "gc_transaction"
+    assert result.label_validation["matched_rows"] == 1
     assert result.requires_review is False

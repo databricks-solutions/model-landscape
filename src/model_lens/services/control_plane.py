@@ -9,9 +9,22 @@ from uuid import uuid4
 import pandas as pd
 
 from model_lens.config import settings
-from model_lens.domain.models import BaselinePolicy, InferenceContract, MLflowLineage, MonitorConfig, RefreshResult
+from model_lens.domain.models import (
+    BaselinePolicy,
+    InferenceContract,
+    MLflowLineage,
+    MonitorConfig,
+    MonitorRuntimeState,
+    RefreshResult,
+)
+from model_lens.services.inference_contracts import build_inference_contract
 from model_lens.services.lakebase import LakebaseConnection, LakebaseReadModel
-from model_lens.services.schema import ddl, monitor_config_migration_columns
+from model_lens.services.schema import (
+    ddl,
+    monitor_config_migration_columns,
+    refresh_run_migration_columns,
+    runtime_state_migration_columns,
+)
 from model_lens.services.sql_utils import array_literal, parse_string_array, quote_column, validate_identifier
 from model_lens.services.table_names import TableNames
 from model_lens.services.warehouse import WarehouseConnection, get_warehouse
@@ -26,9 +39,47 @@ def _as_text(value: Any) -> str:
     return str(value)
 
 
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if not text:
+        return default
+    return text in {"1", "true", "yes", "on"}
+
+
 def _is_field_already_exists_error(error: Exception) -> bool:
     message = str(error).upper()
     return "FIELD_ALREADY_EXISTS" in message or "ALREADY EXISTS" in message
+
+
+def _resolve_source_labels_join_col(
+    source_columns: list[str] | tuple[str, ...],
+    entity_id_col: str | None,
+    labels_join_col: str | None,
+) -> str | None:
+    normalized_columns = {str(column).strip() for column in source_columns if str(column).strip()}
+    shared_join_col = _as_text(labels_join_col).strip()
+    if shared_join_col and shared_join_col in normalized_columns:
+        return validate_identifier(shared_join_col)
+    entity_join_col = _as_text(entity_id_col).strip()
+    if entity_join_col and entity_join_col in normalized_columns:
+        return validate_identifier(entity_join_col)
+    return None
+
+
+def _monitor_status_filter(status: str | list[str] | tuple[str, ...] | None) -> tuple[str, tuple[object, ...]]:
+    if status in (None, "", "all"):
+        return "", ()
+    if isinstance(status, str):
+        return " WHERE status = %s", (status,)
+    statuses = tuple(str(value).strip().lower() for value in status if str(value).strip())
+    if not statuses:
+        return "", ()
+    placeholders = ", ".join(["%s"] * len(statuses))
+    return f" WHERE status IN ({placeholders})", statuses
 
 
 class ControlPlaneRepository:
@@ -46,6 +97,17 @@ class ControlPlaneRepository:
     def table_names(self) -> TableNames:
         return self._table_names
 
+    def fork_for_worker(self) -> ControlPlaneRepository:
+        warehouse = WarehouseConnection(
+            warehouse_id=getattr(self._warehouse, "_warehouse_id", ""),
+            host=getattr(self._warehouse, "_host", ""),
+        )
+        return ControlPlaneRepository(
+            warehouse=warehouse,
+            table_names=self._table_names,
+            read_model=None,
+        )
+
     def ensure_control_plane(self, *, create_catalog: bool = False) -> None:
         if create_catalog:
             self._warehouse.execute(f"CREATE CATALOG IF NOT EXISTS {self._table_names.catalog}")
@@ -53,12 +115,14 @@ class ControlPlaneRepository:
         for statement in ddl(self._table_names).values():
             self._warehouse.execute(statement)
         self._ensure_monitor_config_columns()
+        self._ensure_refresh_run_columns()
+        self._ensure_runtime_state_columns()
         if self._read_model and self._read_model.configured:
             self._read_model.ensure_schema()
 
-    def _ensure_monitor_config_columns(self) -> None:
+    def _ensure_table_columns(self, table_name: str, migration_columns: dict[str, str]) -> None:
         try:
-            schema = self._warehouse.describe_table(self._table_names.monitor_configs)
+            schema = self._warehouse.describe_table(table_name)
         except Exception:
             return
         existing = {
@@ -66,13 +130,13 @@ class ControlPlaneRepository:
             for value in schema.get("col_name", pd.Series(dtype=str)).tolist()
             if str(value).strip()
         }
-        for column_name, data_type in monitor_config_migration_columns().items():
+        for column_name, data_type in migration_columns.items():
             normalized_name = column_name.strip().lower()
             if normalized_name in existing:
                 continue
             try:
                 self._warehouse.execute(
-                    f"ALTER TABLE {self._table_names.monitor_configs} "
+                    f"ALTER TABLE {table_name} "
                     f"ADD COLUMNS ({validate_identifier(column_name)} {data_type})"
                 )
             except Exception as error:
@@ -80,6 +144,15 @@ class ControlPlaneRepository:
                     existing.add(normalized_name)
                     continue
                 raise
+
+    def _ensure_monitor_config_columns(self) -> None:
+        self._ensure_table_columns(self._table_names.monitor_configs, monitor_config_migration_columns())
+
+    def _ensure_refresh_run_columns(self) -> None:
+        self._ensure_table_columns(self._table_names.refresh_runs, refresh_run_migration_columns())
+
+    def _ensure_runtime_state_columns(self) -> None:
+        self._ensure_table_columns(self._table_names.monitor_runtime_state, runtime_state_migration_columns())
 
     def scan_source_table(self, table_name: str, preview_rows: int = 5) -> tuple[list[str], pd.DataFrame, pd.DataFrame]:
         validate_identifier(table_name)
@@ -109,6 +182,31 @@ class ControlPlaneRepository:
             if text:
                 values.append(text)
         return values
+
+    def _source_filters(
+        self,
+        config: MonitorConfig,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        alias: str = "s",
+    ) -> tuple[list[str], list[object]]:
+        prefix = f"{alias}." if alias else ""
+        filters: list[str] = []
+        params: list[object] = []
+        if config.model_id_value and config.contract.model_id_col:
+            filters.append(f"{prefix}{quote_column(validate_identifier(config.contract.model_id_col))} = %s")
+            params.append(config.model_id_value)
+        if config.model_version_value and config.contract.model_version_col:
+            filters.append(f"{prefix}{quote_column(validate_identifier(config.contract.model_version_col))} = %s")
+            params.append(config.model_version_value)
+        if start_date:
+            filters.append(f"CAST({prefix}{quote_column(validate_identifier(config.contract.timestamp_col))} AS DATE) >= CAST(%s AS DATE)")
+            params.append(start_date)
+        if end_date:
+            filters.append(f"CAST({prefix}{quote_column(validate_identifier(config.contract.timestamp_col))} AS DATE) <= CAST(%s AS DATE)")
+            params.append(end_date)
+        return filters, params
 
     def profile_labels_mapping(
         self,
@@ -210,6 +308,7 @@ class ControlPlaneRepository:
                 feature_columns, slice_columns, categorical_columns,
                 baseline_kind, baseline_n_days, baseline_start, baseline_end, baseline_max_comparison_days,
                 problem_type, labels_table, labels_join_col, labels_order_col,
+                drift_cadence_preset, performance_cadence_preset, schedule_enabled,
                 mlflow_experiment_name, mlflow_experiment_id, mlflow_run_id,
                 mlflow_registered_model_name, mlflow_model_version,
                 created_by, status,
@@ -220,6 +319,7 @@ class ControlPlaneRepository:
                 {feature_columns}, {slice_columns}, {categorical_columns},
                 %s, %s, CAST(%s AS DATE), CAST(%s AS DATE), %s,
                 %s, %s, %s, %s,
+                %s, %s, %s,
                 %s, %s, %s, %s, %s,
                 %s, %s,
                 CAST(%s AS TIMESTAMP), CAST(%s AS TIMESTAMP)
@@ -230,7 +330,7 @@ class ControlPlaneRepository:
                 config.display_name,
                 config.source_table,
                 config.contract.timestamp_col,
-                config.contract.model_id_col,
+                config.contract.model_id_col or "",
                 config.model_id_value or "",
                 config.contract.prediction_col,
                 config.contract.model_version_col or "",
@@ -247,34 +347,82 @@ class ControlPlaneRepository:
                 config.labels_table or "",
                 config.labels_join_col or "",
                 config.labels_order_col or "",
+                config.drift_cadence_preset,
+                config.performance_cadence_preset,
+                config.schedule_enabled,
                 config.mlflow.experiment_name or "",
                 config.mlflow.experiment_id or "",
                 config.mlflow.run_id or "",
                 config.mlflow.registered_model_name or "",
                 config.mlflow.model_version or "",
                 config.created_by,
-                "active",
+                config.status,
                 now,
                 now,
             ),
         )
         self._sync_read_model()
 
-    def list_monitor_configs(self, status: str = "active") -> list[MonitorConfig]:
-        if status:
-            frame = self._warehouse.query_params(
-                f"SELECT * FROM {self._table_names.monitor_configs} WHERE status = %s ORDER BY updated_at DESC",
-                (status,),
-            )
+    def list_monitor_configs(self, status: str | list[str] | tuple[str, ...] | None = "active") -> list[MonitorConfig]:
+        where_sql, params = _monitor_status_filter(status)
+        query = f"SELECT * FROM {self._table_names.monitor_configs}{where_sql} ORDER BY updated_at DESC"
+        if params:
+            frame = self._warehouse.query_params(query, params)
         else:
-            frame = self._warehouse.query(f"SELECT * FROM {self._table_names.monitor_configs} ORDER BY updated_at DESC")
+            frame = self._warehouse.query(query)
         return [self._row_to_monitor_config(row) for _, row in frame.iterrows()]
+
+    def archive_monitor(self, model_key: str) -> None:
+        now = pd.Timestamp.utcnow().isoformat()
+        self._warehouse.execute_params(
+            f"""
+            UPDATE {self._table_names.monitor_configs}
+            SET status = 'inactive', updated_at = CAST(%s AS TIMESTAMP)
+            WHERE model_key = %s
+            """,
+            (now, model_key),
+        )
+        self._sync_read_model()
+
+    def restore_monitor(self, model_key: str) -> None:
+        now = pd.Timestamp.utcnow().isoformat()
+        self._warehouse.execute_params(
+            f"""
+            UPDATE {self._table_names.monitor_configs}
+            SET status = 'active', updated_at = CAST(%s AS TIMESTAMP)
+            WHERE model_key = %s
+            """,
+            (now, model_key),
+        )
+        self._sync_read_model()
+
+    def delete_monitor(self, model_key: str) -> None:
+        for table_name in (
+            self._table_names.monitor_runtime_state,
+            self._table_names.refresh_runs,
+            self._table_names.comparison_windows,
+            self._table_names.drift_metrics,
+            self._table_names.quality_metrics,
+            self._table_names.quality_history,
+            self._table_names.daily_quality_profiles,
+            self._table_names.daily_feature_profiles,
+            self._table_names.performance_metrics,
+            self._table_names.daily_performance_profiles,
+            self._table_names.incidents,
+            self._table_names.incident_history,
+            self._table_names.monitor_configs,
+        ):
+            self._warehouse.execute_params(
+                f"DELETE FROM {table_name} WHERE model_key = %s",
+                (model_key,),
+            )
+        self._sync_read_model()
 
     def _row_to_monitor_config(self, row: pd.Series) -> MonitorConfig:
         contract = InferenceContract(
             timestamp_col=_as_text(row.get("timestamp_col")),
-            model_id_col=_as_text(row.get("model_id_col")),
             prediction_col=_as_text(row.get("prediction_col")),
+            model_id_col=_as_text(row.get("model_id_col")) or None,
             model_version_col=_as_text(row.get("model_version_col")) or None,
             prediction_score_col=_as_text(row.get("prediction_score_col")) or None,
             label_col=_as_text(row.get("label_col")) or None,
@@ -302,6 +450,12 @@ class ControlPlaneRepository:
             labels_table=_as_text(row.get("labels_table")) or None,
             labels_join_col=_as_text(row.get("labels_join_col")) or None,
             labels_order_col=_as_text(row.get("labels_order_col")) or None,
+            drift_cadence_preset=_as_text(row.get("drift_cadence_preset")) or "6h",
+            performance_cadence_preset=(
+                _as_text(row.get("performance_cadence_preset"))
+                or ("daily_7d_repair" if contract.label_col else "disabled")
+            ),
+            schedule_enabled=_as_bool(row.get("schedule_enabled"), default=True),
             mlflow=MLflowLineage(
                 experiment_name=_as_text(row.get("mlflow_experiment_name")) or None,
                 experiment_id=_as_text(row.get("mlflow_experiment_id")) or None,
@@ -310,14 +464,127 @@ class ControlPlaneRepository:
                 model_version=_as_text(row.get("mlflow_model_version")) or None,
             ),
             created_by=_as_text(row.get("created_by")) or "app",
+            status=_as_text(row.get("status")) or "active",
         )
+
+    def _row_to_runtime_state(self, row: pd.Series) -> MonitorRuntimeState:
+        return MonitorRuntimeState(
+            model_key=_as_text(row.get("model_key")),
+            bootstrap_status=_as_text(row.get("bootstrap_status")) or "pending",
+            last_drift_refresh_at=_as_text(row.get("last_drift_refresh_at")) or None,
+            last_performance_refresh_at=_as_text(row.get("last_performance_refresh_at")) or None,
+            next_drift_due_at=_as_text(row.get("next_drift_due_at")) or None,
+            next_performance_due_at=_as_text(row.get("next_performance_due_at")) or None,
+            last_label_watermark=_as_text(row.get("last_label_watermark")) or None,
+            last_run_status=_as_text(row.get("last_run_status")) or None,
+            last_run_error=_as_text(row.get("last_run_error")) or None,
+            last_run_started_at=_as_text(row.get("last_run_started_at")) or None,
+            last_run_completed_at=_as_text(row.get("last_run_completed_at")) or None,
+            backoff_until=_as_text(row.get("backoff_until")) or None,
+            consecutive_failures=int(row.get("consecutive_failures", 0) or 0),
+        )
+
+    def list_monitor_runtime_states(self, model_keys: list[str] | None = None) -> dict[str, MonitorRuntimeState]:
+        if model_keys:
+            placeholders = ", ".join(["%s"] * len(model_keys))
+            frame = self._warehouse.query_params(
+                f"""
+                SELECT *
+                FROM {self._table_names.monitor_runtime_state}
+                WHERE model_key IN ({placeholders})
+                """,
+                tuple(model_keys),
+            )
+        else:
+            frame = self._warehouse.query(f"SELECT * FROM {self._table_names.monitor_runtime_state}")
+        if frame.empty:
+            return {}
+        return {
+            state.model_key: state
+            for state in (
+                self._row_to_runtime_state(row)
+                for _, row in frame.iterrows()
+            )
+        }
+
+    def get_monitor_runtime_state(self, model_key: str) -> MonitorRuntimeState | None:
+        states = self.list_monitor_runtime_states([model_key])
+        return states.get(model_key)
+
+    def upsert_monitor_runtime_state(self, state: MonitorRuntimeState) -> None:
+        self._warehouse.execute_params(
+            f"DELETE FROM {self._table_names.monitor_runtime_state} WHERE model_key = %s",
+            (state.model_key,),
+        )
+        self._warehouse.execute_params(
+            f"""
+            INSERT INTO {self._table_names.monitor_runtime_state} (
+                model_key, bootstrap_status,
+                last_drift_refresh_at, last_performance_refresh_at,
+                next_drift_due_at, next_performance_due_at,
+                last_label_watermark, last_run_status, last_run_error,
+                last_run_started_at, last_run_completed_at,
+                backoff_until, consecutive_failures
+            ) VALUES (
+                %s, %s,
+                CAST(%s AS TIMESTAMP), CAST(%s AS TIMESTAMP),
+                CAST(%s AS TIMESTAMP), CAST(%s AS TIMESTAMP),
+                %s, %s, %s,
+                CAST(%s AS TIMESTAMP), CAST(%s AS TIMESTAMP),
+                CAST(%s AS TIMESTAMP), %s
+            )
+            """,
+            (
+                state.model_key,
+                state.bootstrap_status,
+                state.last_drift_refresh_at,
+                state.last_performance_refresh_at,
+                state.next_drift_due_at,
+                state.next_performance_due_at,
+                state.last_label_watermark or "",
+                state.last_run_status or "",
+                state.last_run_error or "",
+                state.last_run_started_at,
+                state.last_run_completed_at,
+                state.backoff_until,
+                state.consecutive_failures,
+            ),
+        )
+
+    def mark_monitor_bootstrap_pending(self, config: MonitorConfig) -> MonitorRuntimeState:
+        existing = self.get_monitor_runtime_state(config.model_key)
+        now = pd.Timestamp.now(tz=timezone.utc).isoformat()
+        state = MonitorRuntimeState(
+            model_key=config.model_key,
+            bootstrap_status="pending",
+            last_drift_refresh_at=existing.last_drift_refresh_at if existing else None,
+            last_performance_refresh_at=existing.last_performance_refresh_at if existing else None,
+            next_drift_due_at=now if config.schedule_enabled else None,
+            next_performance_due_at=(
+                now
+                if config.schedule_enabled and config.has_labels and config.performance_cadence_preset != "disabled"
+                else None
+            ),
+            last_label_watermark=existing.last_label_watermark if existing else None,
+            last_run_status=None,
+            last_run_error=None,
+            last_run_started_at=None,
+            last_run_completed_at=None,
+            backoff_until=None,
+            consecutive_failures=0,
+        )
+        self.upsert_monitor_runtime_state(state)
+        return state
 
     def validate_monitor_source(self, config: MonitorConfig) -> None:
         validate_identifier(config.source_table)
         if config.model_version_value and not config.contract.model_version_col:
             raise ValueError("Model Version Value requires a mapped Model Version Column.")
 
-        if not config.model_id_value:
+        if config.model_id_value and not config.contract.model_id_col:
+            raise ValueError("Monitored Model ID Value requires a mapped Model ID Column.")
+
+        if config.contract.model_id_col and not config.model_id_value:
             distinct_models = self._warehouse.query(
                 f"""
                 SELECT COUNT(DISTINCT {quote_column(validate_identifier(config.contract.model_id_col))}) AS distinct_model_ids
@@ -333,9 +600,15 @@ class ControlPlaneRepository:
         if not config.labels_table:
             return
 
-        if not (config.contract.label_col and config.contract.entity_id_col and config.labels_join_col):
+        source_columns = self._warehouse.get_columns(config.source_table)
+        source_join_col = _resolve_source_labels_join_col(
+            source_columns,
+            config.contract.entity_id_col,
+            config.labels_join_col,
+        )
+        if not (config.contract.label_col and config.labels_join_col and source_join_col):
             raise ValueError(
-                "External labels require Label Column, Entity ID Column, and External Labels Join Column."
+                "External labels require External Label Column, External Labels Join Column, and either Entity ID Column or the same join column name in the inference table."
             )
 
         label_columns = set(self._warehouse.get_columns(config.labels_table))
@@ -369,15 +642,25 @@ class ControlPlaneRepository:
                 "External labels table contains duplicate join keys. Provide External Labels Order Column so Model Lens can pick the latest label."
             )
 
-    def load_monitor_frame(self, config: MonitorConfig) -> pd.DataFrame:
+    def load_monitor_frame(
+        self,
+        config: MonitorConfig,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        feature_columns: tuple[str, ...] | None = None,
+        sample_rows_per_day: int | None = None,
+        max_total_rows: int | None = None,
+    ) -> pd.DataFrame:
         self.validate_monitor_source(config)
         ts_col = validate_identifier(config.contract.timestamp_col)
 
         select_columns = [
             config.contract.timestamp_col,
-            config.contract.model_id_col,
             config.contract.prediction_col,
         ]
+        if config.contract.model_id_col:
+            select_columns.append(config.contract.model_id_col)
         optional_source_columns = [
             config.contract.model_version_col,
             config.contract.prediction_score_col,
@@ -386,7 +669,7 @@ class ControlPlaneRepository:
         for column in optional_source_columns:
             if column:
                 select_columns.append(column)
-        for column in config.contract.feature_columns:
+        for column in feature_columns or config.contract.feature_columns:
             select_columns.append(column)
         source_label_column = None
         if config.contract.label_col and not config.labels_table:
@@ -401,7 +684,13 @@ class ControlPlaneRepository:
 
         label_projection = ""
         join_sql = ""
-        if config.labels_table and config.contract.label_col and config.contract.entity_id_col and config.labels_join_col:
+        source_columns = self._warehouse.get_columns(config.source_table) if config.labels_table else []
+        source_join_col = _resolve_source_labels_join_col(
+            source_columns,
+            config.contract.entity_id_col,
+            config.labels_join_col,
+        )
+        if config.labels_table and config.contract.label_col and source_join_col and config.labels_join_col:
             validate_identifier(config.labels_table)
             label_col = validate_identifier(config.contract.label_col)
             join_col = validate_identifier(config.labels_join_col)
@@ -428,23 +717,66 @@ class ControlPlaneRepository:
                 join_source = f"{config.labels_table} l"
             join_sql = (
                 f" LEFT JOIN {join_source}"
-                f" ON s.{quote_column(validate_identifier(config.contract.entity_id_col))}"
+                f" ON s.{quote_column(source_join_col)}"
                 f" = l.{quote_column(join_col)}"
             )
 
-        filters: list[str] = []
-        params: list[object] = []
-        if config.model_id_value:
-            filters.append(f"s.{quote_column(validate_identifier(config.contract.model_id_col))} = %s")
-            params.append(config.model_id_value)
-        if config.model_version_value and config.contract.model_version_col:
-            filters.append(f"s.{quote_column(validate_identifier(config.contract.model_version_col))} = %s")
-            params.append(config.model_version_value)
+        filters, params = self._source_filters(config, start_date=start_date, end_date=end_date, alias="s")
         where_sql = f" WHERE {' AND '.join(filters)}" if filters else ""
+
+        source_from_sql = f"{config.source_table} s"
+        if (sample_rows_per_day and sample_rows_per_day > 0) or (max_total_rows and max_total_rows > 0):
+            sample_limit = int(sample_rows_per_day) if sample_rows_per_day and sample_rows_per_day > 0 else None
+            total_limit = int(max_total_rows) if max_total_rows and max_total_rows > 0 else None
+            sample_columns = ", ".join(quote_column(validate_identifier(column)) for column in deduped_columns)
+            sample_filters, _ = self._source_filters(config, start_date=start_date, end_date=end_date, alias="")
+            sample_where_sql = f" WHERE {' AND '.join(sample_filters)}" if sample_filters else ""
+            hash_columns = [config.contract.timestamp_col, config.contract.prediction_col]
+            if config.contract.model_id_col:
+                hash_columns.append(config.contract.model_id_col)
+            if config.contract.entity_id_col:
+                hash_columns.append(config.contract.entity_id_col)
+            hash_order_terms = ", ".join(
+                f"COALESCE(CAST({quote_column(validate_identifier(column))} AS STRING), '')"
+                for column in dict.fromkeys(hash_columns)
+                if column
+            )
+            if sample_limit is not None:
+                sample_where_limit_sql = f"WHERE {quote_column('model_lens_sample_rank')} <= {sample_limit}"
+                total_limit_sql = f"ORDER BY xxhash64({hash_order_terms}) LIMIT {total_limit}" if total_limit else ""
+                source_from_sql = f"""
+                    (
+                        SELECT {sample_columns}
+                        FROM (
+                            SELECT
+                                {sample_columns},
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY CAST({quote_column(ts_col)} AS DATE)
+                                    ORDER BY xxhash64({hash_order_terms})
+                                ) AS {quote_column("model_lens_sample_rank")}
+                            FROM {config.source_table}
+                            {sample_where_sql}
+                        ) sampled_source
+                        {sample_where_limit_sql}
+                        {total_limit_sql}
+                    ) s
+                """
+            else:
+                total_limit_sql = f"ORDER BY xxhash64({hash_order_terms}) LIMIT {total_limit}" if total_limit else ""
+                source_from_sql = f"""
+                    (
+                        SELECT {sample_columns}
+                        FROM {config.source_table}
+                        {sample_where_sql}
+                        {total_limit_sql}
+                    ) s
+                """
+            params = list(self._source_filters(config, start_date=start_date, end_date=end_date, alias="")[1])
+            where_sql = ""
 
         query = f"""
             SELECT {source_projection}{label_projection}
-            FROM {config.source_table} s
+            FROM {source_from_sql}
             {join_sql}
             {where_sql}
             ORDER BY s.{quote_column(ts_col)}
@@ -453,6 +785,172 @@ class ControlPlaneRepository:
         if source_label_column and source_label_column not in frame.columns:
             frame[source_label_column] = pd.NA
         return frame
+
+    def get_source_profile(
+        self,
+        config: MonitorConfig,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> dict[str, Any]:
+        self.validate_monitor_source(config)
+        filters, params = self._source_filters(config, start_date=start_date, end_date=end_date, alias="s")
+        where_sql = f" WHERE {' AND '.join(filters)}" if filters else ""
+        ts_col = quote_column(validate_identifier(config.contract.timestamp_col))
+        prediction_col = quote_column(validate_identifier(config.contract.prediction_col))
+        label_count_sql = "0 AS label_row_count"
+        if config.contract.label_col and not config.labels_table:
+            label_count_sql = (
+                f"SUM(CASE WHEN s.{quote_column(validate_identifier(config.contract.label_col))} IS NOT NULL THEN 1 ELSE 0 END) "
+                "AS label_row_count"
+            )
+
+        summary = self._warehouse.query_params(
+            f"""
+            SELECT
+                COUNT(*) AS total_rows,
+                CAST(MIN(s.{ts_col}) AS STRING) AS min_ts,
+                CAST(MAX(s.{ts_col}) AS STRING) AS max_ts,
+                AVG(CAST(s.{prediction_col} AS DOUBLE)) AS prediction_mean,
+                STDDEV_SAMP(CAST(s.{prediction_col} AS DOUBLE)) AS prediction_std,
+                {label_count_sql}
+            FROM {config.source_table} s
+            {where_sql}
+            """,
+            tuple(params),
+        ) if params else self._warehouse.query(
+            f"""
+            SELECT
+                COUNT(*) AS total_rows,
+                CAST(MIN(s.{ts_col}) AS STRING) AS min_ts,
+                CAST(MAX(s.{ts_col}) AS STRING) AS max_ts,
+                AVG(CAST(s.{prediction_col} AS DOUBLE)) AS prediction_mean,
+                STDDEV_SAMP(CAST(s.{prediction_col} AS DOUBLE)) AS prediction_std,
+                {label_count_sql}
+            FROM {config.source_table} s
+            {where_sql}
+            """
+        )
+        if summary.empty:
+            return {
+                "total_rows": 0,
+                "min_date": None,
+                "max_date": None,
+                "prediction_mean": None,
+                "prediction_std": None,
+                "daily_volume": {},
+                "null_rates": {},
+                "label_row_count": 0,
+            }
+
+        summary_row = summary.iloc[0]
+        total_rows = int(summary_row.get("total_rows", 0) or 0)
+        min_date = _as_text(summary_row.get("min_ts") or "").split("T", 1)[0] or None
+        max_date = _as_text(summary_row.get("max_ts") or "").split("T", 1)[0] or None
+
+        daily_volume_query = f"""
+            SELECT CAST(s.{ts_col} AS DATE) AS day_key, COUNT(*) AS row_count
+            FROM {config.source_table} s
+            {where_sql}
+            GROUP BY CAST(s.{ts_col} AS DATE)
+            ORDER BY day_key
+        """
+        daily_volume_frame = self._warehouse.query_params(daily_volume_query, tuple(params)) if params else self._warehouse.query(daily_volume_query)
+        daily_volume = {
+            str(row["day_key"]): int(row["row_count"] or 0)
+            for _, row in daily_volume_frame.iterrows()
+        } if not daily_volume_frame.empty else {}
+
+        null_rates: dict[str, float] = {}
+        if config.contract.feature_columns:
+            null_rate_select = ", ".join(
+                f"ROUND(AVG(CASE WHEN s.{quote_column(validate_identifier(feature))} IS NULL THEN 100.0 ELSE 0.0 END), 2) AS {quote_column(validate_identifier(feature))}"
+                for feature in config.contract.feature_columns
+            )
+            null_rate_query = f"""
+                SELECT {null_rate_select}
+                FROM {config.source_table} s
+                {where_sql}
+            """
+            null_rate_frame = self._warehouse.query_params(null_rate_query, tuple(params)) if params else self._warehouse.query(null_rate_query)
+            if not null_rate_frame.empty:
+                null_row = null_rate_frame.iloc[0].to_dict()
+                null_rates = {
+                    feature: round(float(pd.to_numeric(pd.Series([null_row.get(feature)]), errors="coerce").iloc[0] or 0.0), 2)
+                    for feature in config.contract.feature_columns
+                }
+
+        return {
+            "total_rows": total_rows,
+            "min_date": min_date,
+            "max_date": max_date,
+            "prediction_mean": summary_row.get("prediction_mean"),
+            "prediction_std": summary_row.get("prediction_std"),
+            "daily_volume": daily_volume,
+            "null_rates": null_rates,
+            "label_row_count": int(summary_row.get("label_row_count", 0) or 0),
+        }
+
+    def get_source_date_range(
+        self,
+        config: MonitorConfig,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> tuple[str | None, str | None]:
+        self.validate_monitor_source(config)
+        ts_col = validate_identifier(config.contract.timestamp_col)
+        filters: list[str] = []
+        params: list[object] = []
+        if config.model_id_value and config.contract.model_id_col:
+            filters.append(f"{quote_column(validate_identifier(config.contract.model_id_col))} = %s")
+            params.append(config.model_id_value)
+        if config.model_version_value and config.contract.model_version_col:
+            filters.append(f"{quote_column(validate_identifier(config.contract.model_version_col))} = %s")
+            params.append(config.model_version_value)
+        if start_date:
+            filters.append(f"CAST({quote_column(ts_col)} AS DATE) >= CAST(%s AS DATE)")
+            params.append(start_date)
+        if end_date:
+            filters.append(f"CAST({quote_column(ts_col)} AS DATE) <= CAST(%s AS DATE)")
+            params.append(end_date)
+        where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+        query = f"""
+            SELECT
+                CAST(MIN({quote_column(ts_col)}) AS STRING) AS min_ts,
+                CAST(MAX({quote_column(ts_col)}) AS STRING) AS max_ts
+            FROM {config.source_table}
+            {where_sql}
+        """
+        frame = self._warehouse.query_params(query, tuple(params)) if params else self._warehouse.query(query)
+        if frame.empty:
+            return None, None
+        min_ts = _as_text(frame.iloc[0].get("min_ts")) or None
+        max_ts = _as_text(frame.iloc[0].get("max_ts")) or None
+        min_date = min_ts.split("T", 1)[0] if min_ts else None
+        max_date = max_ts.split("T", 1)[0] if max_ts else None
+        return min_date, max_date
+
+    def get_label_watermark(self, config: MonitorConfig) -> str | None:
+        if config.labels_table and config.labels_order_col:
+            frame = self._warehouse.query(
+                f"""
+                SELECT CAST(MAX({quote_column(validate_identifier(config.labels_order_col))}) AS STRING) AS watermark
+                FROM {config.labels_table}
+                """
+            )
+        elif config.contract.label_col and config.contract.label_col in self._warehouse.get_columns(config.source_table):
+            frame = self._warehouse.query(
+                f"""
+                SELECT CAST(MAX({quote_column(validate_identifier(config.contract.timestamp_col))}) AS STRING) AS watermark
+                FROM {config.source_table}
+                """
+            )
+        else:
+            return None
+        if frame.empty:
+            return None
+        return _as_text(frame.iloc[0].get("watermark")) or None
 
     def get_existing_window_keys(self, model_key: str) -> set[tuple[str, str, str, str]]:
         try:
@@ -504,24 +1002,34 @@ class ControlPlaneRepository:
         model_key: str,
         requested_mode: str,
         run_kind: str,
+        scope: str = "bootstrap",
+        scheduled_at: str | None = None,
         data_min_date: str | None = None,
         data_max_date: str | None = None,
+        range_start: str | None = None,
+        range_end: str | None = None,
+        rows_scanned: int = 0,
+        label_rows_scanned: int = 0,
     ) -> str:
         run_id = str(uuid4())
         started_at = pd.Timestamp.now(tz=timezone.utc).isoformat()
         self._warehouse.execute_params(
             f"""
             INSERT INTO {self._table_names.refresh_runs} (
-                run_id, model_key, requested_mode, run_kind, status,
-                started_at, completed_at, window_count,
+                run_id, model_key, requested_mode, run_kind, scope, status,
+                started_at, scheduled_at, completed_at, window_count,
                 data_min_date, data_max_date,
+                range_start, range_end,
                 drift_row_count, quality_row_count, performance_row_count, incident_row_count,
+                rows_scanned, label_rows_scanned,
                 error_message
             ) VALUES (
-                %s, %s, %s, %s, %s,
-                CAST(%s AS TIMESTAMP), CAST(NULL AS TIMESTAMP), %s,
+                %s, %s, %s, %s, %s, %s,
+                CAST(%s AS TIMESTAMP), CAST(%s AS TIMESTAMP), CAST(NULL AS TIMESTAMP), %s,
+                CAST(%s AS DATE), CAST(%s AS DATE),
                 CAST(%s AS DATE), CAST(%s AS DATE),
                 %s, %s, %s, %s,
+                %s, %s,
                 %s
             )
             """,
@@ -530,15 +1038,21 @@ class ControlPlaneRepository:
                 model_key,
                 requested_mode,
                 run_kind,
+                scope,
                 "running",
                 started_at,
+                scheduled_at,
                 0,
                 data_min_date or None,
                 data_max_date or None,
+                range_start or None,
+                range_end or None,
                 0,
                 0,
                 0,
                 0,
+                rows_scanned,
+                label_rows_scanned,
                 "",
             ),
         )
@@ -584,12 +1098,129 @@ class ControlPlaneRepository:
             ),
         )
 
+    def get_recent_refresh_runs(self, model_key: str, limit: int = 10) -> list[dict[str, Any]]:
+        frame = self._warehouse.query_params(
+            f"""
+            SELECT *
+            FROM {self._table_names.refresh_runs}
+            WHERE model_key = %s
+            ORDER BY started_at DESC
+            LIMIT {max(1, limit)}
+            """,
+            (model_key,),
+        )
+        if frame.empty:
+            return []
+        return [row.to_dict() for _, row in frame.iterrows()]
+
+    def get_latest_refresh_run(self, model_key: str, scope: str, statuses: tuple[str, ...] | None = None) -> dict[str, Any] | None:
+        filters = ["model_key = %s", "scope = %s"]
+        params: list[object] = [model_key, scope]
+        if statuses:
+            placeholders = ", ".join(["%s"] * len(statuses))
+            filters.append(f"status IN ({placeholders})")
+            params.extend(statuses)
+        frame = self._warehouse.query_params(
+            f"""
+            SELECT *
+            FROM {self._table_names.refresh_runs}
+            WHERE {' AND '.join(filters)}
+            ORDER BY started_at DESC
+            LIMIT 1
+            """,
+            tuple(params),
+        )
+        if frame.empty:
+            return None
+        return frame.iloc[0].to_dict()
+
+    def get_daily_quality_profile_rows(
+        self,
+        model_key: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        filters = ["model_key = %s"]
+        params: list[object] = [model_key]
+        if start_date:
+            filters.append("profile_date >= CAST(%s AS DATE)")
+            params.append(start_date)
+        if end_date:
+            filters.append("profile_date <= CAST(%s AS DATE)")
+            params.append(end_date)
+        frame = self._warehouse.query_params(
+            f"""
+            SELECT *
+            FROM {self._table_names.daily_quality_profiles}
+            WHERE {' AND '.join(filters)}
+            ORDER BY profile_date
+            """,
+            tuple(params),
+        )
+        return [row.to_dict() for _, row in frame.iterrows()] if not frame.empty else []
+
+    def get_daily_feature_profile_rows(
+        self,
+        model_key: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        filters = ["model_key = %s"]
+        params: list[object] = [model_key]
+        if start_date:
+            filters.append("profile_date >= CAST(%s AS DATE)")
+            params.append(start_date)
+        if end_date:
+            filters.append("profile_date <= CAST(%s AS DATE)")
+            params.append(end_date)
+        frame = self._warehouse.query_params(
+            f"""
+            SELECT *
+            FROM {self._table_names.daily_feature_profiles}
+            WHERE {' AND '.join(filters)}
+            ORDER BY profile_date, feature_name
+            """,
+            tuple(params),
+        )
+        return [row.to_dict() for _, row in frame.iterrows()] if not frame.empty else []
+
+    def get_daily_performance_profile_rows(
+        self,
+        model_key: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        filters = ["model_key = %s"]
+        params: list[object] = [model_key]
+        if start_date:
+            filters.append("profile_date >= CAST(%s AS DATE)")
+            params.append(start_date)
+        if end_date:
+            filters.append("profile_date <= CAST(%s AS DATE)")
+            params.append(end_date)
+        frame = self._warehouse.query_params(
+            f"""
+            SELECT *
+            FROM {self._table_names.daily_performance_profiles}
+            WHERE {' AND '.join(filters)}
+            ORDER BY profile_date, feature_name, bin_label, metric_name
+            """,
+            tuple(params),
+        )
+        return [row.to_dict() for _, row in frame.iterrows()] if not frame.empty else []
+
     def replace_all_refresh_results(self, model_key: str, result: RefreshResult, source_run_id: str | None = None) -> None:
         for table_name in (
             self._table_names.drift_metrics,
             self._table_names.performance_metrics,
             self._table_names.quality_metrics,
             self._table_names.quality_history,
+            self._table_names.daily_quality_profiles,
+            self._table_names.daily_feature_profiles,
+            self._table_names.daily_performance_profiles,
             self._table_names.incidents,
             self._table_names.incident_history,
             self._table_names.comparison_windows,
@@ -602,7 +1233,10 @@ class ControlPlaneRepository:
         self._insert_drift_rows(result.drift_rows)
         self._insert_quality_rows(result.quality_rows)
         self._insert_quality_history_rows(result.quality_history_rows)
+        self._insert_daily_quality_profile_rows(result.daily_quality_profile_rows, source_run_id=source_run_id)
+        self._insert_daily_feature_profile_rows(result.daily_feature_profile_rows, source_run_id=source_run_id)
         self._insert_performance_rows(result.performance_rows)
+        self._insert_daily_performance_profile_rows(result.daily_performance_profile_rows, source_run_id=source_run_id)
         self._insert_incident_rows(result.incident_rows)
         self._insert_incident_history_rows(result.incident_history_rows)
         self._sync_read_model()
@@ -626,6 +1260,9 @@ class ControlPlaneRepository:
         }
         quality_windows = {_as_text(row.get("window_id")) for row in result.quality_history_rows}
         incident_history_windows = {_as_text(row.get("window_id")) for row in result.incident_history_rows}
+        daily_quality_dates = {_as_text(row.get("profile_date")) for row in result.daily_quality_profile_rows}
+        daily_feature_dates = {_as_text(row.get("profile_date")) for row in result.daily_feature_profile_rows}
+        daily_performance_dates = {_as_text(row.get("profile_date")) for row in result.daily_performance_profile_rows}
 
         for baseline_start, baseline_end, window_start, window_end in drift_windows:
             self._warehouse.execute_params(
@@ -669,20 +1306,43 @@ class ControlPlaneRepository:
                 (model_key, window_id),
             )
 
-        self._warehouse.execute_params(
-            f"DELETE FROM {self._table_names.quality_metrics} WHERE model_key = %s",
-            (model_key,),
-        )
-        self._warehouse.execute_params(
-            f"DELETE FROM {self._table_names.incidents} WHERE model_key = %s",
-            (model_key,),
-        )
+        for profile_date in daily_quality_dates:
+            self._warehouse.execute_params(
+                f"DELETE FROM {self._table_names.daily_quality_profiles} WHERE model_key = %s AND profile_date = CAST(%s AS DATE)",
+                (model_key, profile_date),
+            )
+
+        for profile_date in daily_feature_dates:
+            self._warehouse.execute_params(
+                f"DELETE FROM {self._table_names.daily_feature_profiles} WHERE model_key = %s AND profile_date = CAST(%s AS DATE)",
+                (model_key, profile_date),
+            )
+
+        for profile_date in daily_performance_dates:
+            self._warehouse.execute_params(
+                f"DELETE FROM {self._table_names.daily_performance_profiles} WHERE model_key = %s AND profile_date = CAST(%s AS DATE)",
+                (model_key, profile_date),
+            )
+
+        if result.quality_rows:
+            self._warehouse.execute_params(
+                f"DELETE FROM {self._table_names.quality_metrics} WHERE model_key = %s",
+                (model_key,),
+            )
+        if result.incident_rows:
+            self._warehouse.execute_params(
+                f"DELETE FROM {self._table_names.incidents} WHERE model_key = %s",
+                (model_key,),
+            )
 
         self._insert_window_rows(result.window_rows, source_run_id=source_run_id)
         self._insert_drift_rows(result.drift_rows)
         self._insert_quality_rows(result.quality_rows)
         self._insert_quality_history_rows(result.quality_history_rows)
+        self._insert_daily_quality_profile_rows(result.daily_quality_profile_rows, source_run_id=source_run_id)
+        self._insert_daily_feature_profile_rows(result.daily_feature_profile_rows, source_run_id=source_run_id)
         self._insert_performance_rows(result.performance_rows)
+        self._insert_daily_performance_profile_rows(result.daily_performance_profile_rows, source_run_id=source_run_id)
         self._insert_incident_rows(result.incident_rows)
         self._insert_incident_history_rows(result.incident_history_rows)
         self._sync_read_model()
@@ -803,6 +1463,64 @@ class ControlPlaneRepository:
             payload,
         )
 
+    def _insert_daily_quality_profile_rows(self, rows: list[dict], *, source_run_id: str | None = None) -> None:
+        payload = [
+            (
+                row["model_key"],
+                row["profile_date"],
+                row["row_count"],
+                row["prediction_mean"],
+                row["prediction_std"],
+                row["null_rates"],
+                row["label_row_count"],
+                row["computed_at"],
+                source_run_id or "",
+            )
+            for row in rows
+        ]
+        self._warehouse.execute_batch(
+            f"""
+            INSERT INTO {self._table_names.daily_quality_profiles} (
+                model_key, profile_date, row_count,
+                prediction_mean, prediction_std, null_rates, label_row_count,
+                computed_at, source_run_id
+            ) VALUES
+            """.strip(),
+            payload,
+        )
+
+    def _insert_daily_feature_profile_rows(self, rows: list[dict], *, source_run_id: str | None = None) -> None:
+        payload = [
+            (
+                row["model_key"],
+                row["profile_date"],
+                row["feature_name"],
+                row["feature_kind"],
+                row["row_count"],
+                row["non_null_count"],
+                row["null_pct"],
+                row["mean"],
+                row["std"],
+                row["min_value"],
+                row["max_value"],
+                row["distribution_json"],
+                row["computed_at"],
+                source_run_id or "",
+            )
+            for row in rows
+        ]
+        self._warehouse.execute_batch(
+            f"""
+            INSERT INTO {self._table_names.daily_feature_profiles} (
+                model_key, profile_date, feature_name, feature_kind,
+                row_count, non_null_count, null_pct,
+                mean, std, min_value, max_value,
+                distribution_json, computed_at, source_run_id
+            ) VALUES
+            """.strip(),
+            payload,
+        )
+
     def _insert_performance_rows(self, rows: list[dict]) -> None:
         payload = [
             (
@@ -828,6 +1546,31 @@ class ControlPlaneRepository:
                 baseline_metric, current_metric, delta,
                 volume_pct, contribution, metric_name,
                 window_start, window_end, computed_at
+            ) VALUES
+            """.strip(),
+            payload,
+        )
+
+    def _insert_daily_performance_profile_rows(self, rows: list[dict], *, source_run_id: str | None = None) -> None:
+        payload = [
+            (
+                row["model_key"],
+                row["profile_date"],
+                row["feature_name"],
+                row["bin_label"],
+                row["metric_name"],
+                row["metric_value"],
+                row["row_count"],
+                row["computed_at"],
+                source_run_id or "",
+            )
+            for row in rows
+        ]
+        self._warehouse.execute_batch(
+            f"""
+            INSERT INTO {self._table_names.daily_performance_profiles} (
+                model_key, profile_date, feature_name, bin_label,
+                metric_name, metric_value, row_count, computed_at, source_run_id
             ) VALUES
             """.strip(),
             payload,

@@ -4,6 +4,7 @@ import dash_bootstrap_components as dbc
 from dash import dcc, html
 
 from model_lens.config import settings
+from model_lens.domain.models import DRIFT_CADENCE_PRESETS, PERFORMANCE_CADENCE_PRESETS
 from model_lens.ui.components import make_wizard_step
 
 
@@ -161,7 +162,9 @@ def _source_step() -> dbc.Row:
                             html.H5("Discover Monitor Draft", className="mb-3"),
                             html.P(
                                 "Paste the inference table you want to monitor. You can optionally add a labels table "
-                                "and MLflow experiment or registered model, then let Model Lens infer the draft for you.",
+                                "and MLflow experiment or registered model, then let Model Lens infer the draft for you. "
+                                "If the true labels already live in the inference table, leave the labels table blank and "
+                                "map Label Column In Source in Advanced.",
                                 className="text-muted",
                             ),
                             dbc.InputGroup(
@@ -302,7 +305,17 @@ def _contract_step(form_style: dict) -> dbc.Row:
                                             dbc.Row(
                                                 [
                                                     dbc.Col([dbc.Label("Timestamp Column"), dcc.Dropdown(id="timestamp-col-dropdown")], md=4, style=form_style),
-                                                    dbc.Col([dbc.Label("Model ID Column"), dcc.Dropdown(id="model-id-col-dropdown")], md=4, style=form_style),
+                                                    dbc.Col(
+                                                        [
+                                                            dbc.Label("Model ID Column"),
+                                                            dcc.Dropdown(id="model-id-col-dropdown"),
+                                                            dbc.FormText(
+                                                                "Optional for one-table-per-model sources. Set this only when one table contains multiple models."
+                                                            ),
+                                                        ],
+                                                        md=4,
+                                                        style=form_style,
+                                                    ),
                                                     dbc.Col([dbc.Label("Prediction Column"), dcc.Dropdown(id="prediction-col-dropdown")], md=4, style=form_style),
                                                 ]
                                             ),
@@ -316,7 +329,17 @@ def _contract_step(form_style: dict) -> dbc.Row:
                                                 [
                                                     dbc.Col([dbc.Label("Model Version Column"), dcc.Dropdown(id="model-version-col-dropdown")], md=4, style=form_style),
                                                     dbc.Col([dbc.Label("Prediction Score Column"), dcc.Dropdown(id="prediction-score-col-dropdown")], md=4, style=form_style),
-                                                    dbc.Col([dbc.Label("Entity ID Column"), dcc.Dropdown(id="entity-id-col-dropdown")], md=4, style=form_style),
+                                                    dbc.Col(
+                                                        [
+                                                            dbc.Label("Entity ID Column"),
+                                                            dcc.Dropdown(id="entity-id-col-dropdown"),
+                                                            dbc.FormText(
+                                                                "Optional when the same join column name exists in both inference and labels tables."
+                                                            ),
+                                                        ],
+                                                        md=4,
+                                                        style=form_style,
+                                                    ),
                                                 ]
                                             ),
                                             dbc.Row(
@@ -356,6 +379,16 @@ def _contract_step(form_style: dict) -> dbc.Row:
 
 
 def _review_step() -> dbc.Row:
+    cadence_options = {
+        "hourly": "Hourly",
+        "6h": "Every 6 Hours",
+        "daily": "Daily",
+        "manual": "Manual Only",
+        "disabled": "Disabled",
+        "6h_3d_repair": "Every 6 Hours (3-Day Repair)",
+        "daily_7d_repair": "Daily (7-Day Repair)",
+        "daily_14d_repair": "Daily (14-Day Repair)",
+    }
     return dbc.Row(
         [
             dbc.Col(
@@ -366,6 +399,47 @@ def _review_step() -> dbc.Row:
                             html.P(
                                 "Review the final draft and activate monitoring for this model.",
                                 className="text-muted",
+                            ),
+                            html.H6("Refresh Cadence", className="mt-4 mb-3"),
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        [
+                                            dbc.Label("Drift And Quality"),
+                                            dbc.Select(
+                                                id="review-drift-cadence-select",
+                                                options=[
+                                                    {"label": cadence_options[value], "value": value}
+                                                    for value in DRIFT_CADENCE_PRESETS
+                                                ],
+                                                value="6h",
+                                            ),
+                                        ],
+                                        md=6,
+                                    ),
+                                    dbc.Col(
+                                        [
+                                            dbc.Label("Performance And Label Repair"),
+                                            dbc.Select(
+                                                id="review-performance-cadence-select",
+                                                options=[
+                                                    {"label": cadence_options[value], "value": value}
+                                                    for value in PERFORMANCE_CADENCE_PRESETS
+                                                ],
+                                                value="disabled",
+                                            ),
+                                        ],
+                                        md=6,
+                                    ),
+                                ],
+                                className="g-3 mb-3",
+                            ),
+                            dbc.Checklist(
+                                id="review-schedule-enabled-toggle",
+                                options=[{"label": "Enable scheduled refreshes for this monitor", "value": "enabled"}],
+                                value=["enabled"],
+                                switch=True,
+                                className="mb-3",
                             ),
                             html.Div(id="onboarding-review-summary"),
                             dbc.Button(
@@ -387,7 +461,8 @@ def _review_step() -> dbc.Row:
                             html.Ul(
                                 [
                                     html.Li("The monitor config is written into the control-plane namespace."),
-                                    html.Li("The refresh workflow is triggered asynchronously so the UI does not block while the first run starts."),
+                                    html.Li("The shared refresh workflow runs hourly and picks up pending or overdue monitors automatically."),
+                                    html.Li("If the app can call Run now, it also asks the shared workflow to bootstrap this monitor immediately."),
                                     html.Li("If Lakebase is configured, the workflow syncs the UI projection after refresh."),
                                     html.Li("After activation, use Overview and the analysis pages to inspect the monitor."),
                                 ],

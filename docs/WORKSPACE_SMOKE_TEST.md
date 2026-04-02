@@ -58,7 +58,9 @@ Identity checklist for this smoke test:
 - deployer or platform operator:
   can deploy the bundle/app and has approved the control-plane namespace
 - app service principal:
-  `CAN_USE` on the SQL warehouse; `CAN MANAGE RUN` on the refresh workflow; source data `USE CATALOG`, `USE SCHEMA`, `SELECT`; control plane `USE CATALOG`, `USE SCHEMA`, `SELECT`, `MODIFY`
+  `CAN_USE` on the SQL warehouse; source data `USE CATALOG`, `USE SCHEMA`, `SELECT`; control plane `USE CATALOG`, `USE SCHEMA`, `SELECT`, `MODIFY`
+- app service principal, if you want the app to accelerate onboarding with `Run now`:
+  `CAN MANAGE RUN` on the shared refresh workflow
 - app service principal, if Setup should create missing objects:
   `CREATE TABLE` in the control-plane schema; `CREATE SCHEMA` if the schema is missing; `CREATE CATALOG` only if you plan to use the toggle
 - refresh workflow identity:
@@ -218,6 +220,7 @@ Expected tables:
 - `incident_history`
 - `refresh_runs`
 - `comparison_windows`
+- `monitor_runtime_state`
 
 If you are testing Lakebase-backed reads, also verify:
 
@@ -272,6 +275,9 @@ In the app:
    - `External Labels Join Column`: `entity_id`
    - `External Label Column`: `label`
    - `External Labels Order Column`: `label_timestamp`
+   If your real tables join on the same shared key name in both tables, `Entity ID Column` can stay blank and Model Lens should still validate the join against that shared column.
+   Hyphenated feature names such as `us-central1` should also save successfully without manual renaming.
+   If your real inference table already includes true labels, leave the labels-table inputs blank and confirm `Label Column In Source` instead.
 7. In the same `Advanced` section, confirm feature selection:
    - `amount`
    - `velocity_7d`
@@ -280,19 +286,28 @@ In the app:
 8. Optional slice check after the happy path:
    - confirm `region`
    - confirm `merchant_segment` if you added it to the dataset
-9. Continue to the `Activate` step, then save the monitor:
+9. Continue to the `Activate` step and confirm the cadence section:
+   - `Drift And Quality`: `Every 6 Hours`
+   - `Performance And Label Repair`: `Daily (7-Day Repair)` when labels are enabled
+   - `Enable scheduled refreshes for this monitor`: on
+10. Save the monitor:
 
 - click `Save Monitor And Trigger Refresh`
 
 Expected result:
 
 - success banner
-- the success banner says the monitor was saved and the refresh job was triggered asynchronously
-- if the app cannot resolve the workflow from `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`, it warns that the monitor was saved but the workflow must be run manually
+- the monitor is marked `pending bootstrap` in `monitor_runtime_state`
+- if the app has `CAN MANAGE RUN`, the success banner says the monitor was saved and the shared refresh job was triggered asynchronously
+- if the app cannot resolve the workflow or lacks `Run now` permission, the monitor is still saved and the shared hourly job remains the default pickup path
 - the monitor appears on the overview page
+- the `Reference` page shows the saved cadence, runtime state, and recent refresh-run history for the selected monitor
+- the `Reference` page also shows an `Active` / `Archived` / `All` filter plus `Archive Monitor`, `Restore Monitor`, and `Delete Monitor And History` controls; archive should hide the monitor from the active app list while keeping history, restore should bring it back without rebuilding the monitor, and delete should fully remove it after reload
 - after the workflow finishes, Drift and Performance should already show historical windows rather than a single snapshot
 - after the workflow finishes, Data Quality should show window-history charts instead of only the latest summary row
 - with the scratch dataset and `Baseline Days = 7`, you should have 8 daily comparison windows immediately
+- for very large real-world tables, the first run should stay bounded by the configured sampling caps rather than trying to load the entire inference table into pandas, and the shared job should issue one bounded range load per monitor scope rather than one warehouse query per comparison window
+- for multi-monitor tenants, the shared job should parallelize across monitors only up to `MAX_PARALLEL_REFRESH_WORKERS`, while still avoiding two scopes for the same model in one scheduler pass
 - the remaining historical hardening work is tracked in [Historical Backfill Plan](/Users/volo.vragov/Desktop/work/model-lens/docs/HISTORICAL_BACKFILL_PLAN.md)
 
 ## Step 7: Verify Persisted State In SQL
@@ -336,6 +351,30 @@ Expected:
 - `quality_windows = 8`
 
 ```sql
+SELECT model_key, COUNT(*) AS daily_quality_rows
+FROM <control-plane-catalog>.<control-plane-schema>.daily_quality_profiles
+WHERE model_key = 'fraud_model_demo'
+GROUP BY 1;
+```
+
+Expected:
+
+- one row
+- at least one persisted daily-quality profile row
+
+```sql
+SELECT model_key, COUNT(*) AS daily_feature_rows
+FROM <control-plane-catalog>.<control-plane-schema>.daily_feature_profiles
+WHERE model_key = 'fraud_model_demo'
+GROUP BY 1;
+```
+
+Expected:
+
+- one row
+- at least one persisted daily-feature profile row
+
+```sql
 SELECT model_key, COUNT(DISTINCT window_end) AS drift_windows
 FROM <control-plane-catalog>.<control-plane-schema>.drift_metrics
 WHERE model_key = 'fraud_model_demo'
@@ -374,6 +413,17 @@ Expected:
 - at least one row
 
 ```sql
+SELECT model_key, COUNT(*) AS daily_perf_rows
+FROM <control-plane-catalog>.<control-plane-schema>.daily_performance_profiles
+WHERE model_key = 'fraud_model_demo'
+GROUP BY 1;
+```
+
+Expected:
+
+- at least one row when labels are available
+
+```sql
 SELECT model_key, feature_name, metric_name, severity, status
 FROM <control-plane-catalog>.<control-plane-schema>.incidents
 WHERE model_key = 'fraud_model_demo'
@@ -386,7 +436,7 @@ Expected:
 - with this dataset, at least one drift incident is likely
 
 ```sql
-SELECT model_key, requested_mode, run_kind, status, window_count, data_min_date, data_max_date
+SELECT model_key, requested_mode, run_kind, status, window_count, data_min_date, data_max_date, range_start, range_end, rows_scanned
 FROM <control-plane-catalog>.<control-plane-schema>.refresh_runs
 WHERE model_key = 'fraud_model_demo'
 ORDER BY started_at DESC
@@ -400,6 +450,10 @@ Expected:
 - `run_kind` resolves to `backfill` on first run
 - `status = 'completed'`
 - `window_count = 8` for the scratch dataset with `Baseline Days = 7`
+- `range_start` / `range_end` are populated for scheduled shared-job runs
+- `rows_scanned` reflects the SQL-side bounded refresh range, not an unbounded app-side full-frame read
+- the resulting `comparison_windows`, `drift_metrics`, `quality_history`, and `performance_metrics` rows were derived from the daily profile layer built for that bounded range inside the same refresh run
+- on later incremental runs, those derived rows can also reuse already-persisted daily profile facts for the affected span instead of depending only on the current run’s bounded load
 
 ```sql
 SELECT model_key, COUNT(*) AS comparison_windows

@@ -29,6 +29,18 @@ class TableNames:
         return f"{self.namespace}.quality_history"
 
     @property
+    def daily_quality_profiles(self) -> str:
+        return f"{self.namespace}.daily_quality_profiles"
+
+    @property
+    def daily_feature_profiles(self) -> str:
+        return f"{self.namespace}.daily_feature_profiles"
+
+    @property
+    def daily_performance_profiles(self) -> str:
+        return f"{self.namespace}.daily_performance_profiles"
+
+    @property
     def performance_metrics(self) -> str:
         return f"{self.namespace}.performance_metrics"
 
@@ -47,3 +59,7 @@ class TableNames:
     @property
     def comparison_windows(self) -> str:
         return f"{self.namespace}.comparison_windows"
+
+    @property
+    def monitor_runtime_state(self) -> str:
+        return f"{self.namespace}.monitor_runtime_state"

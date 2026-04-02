@@ -52,6 +52,32 @@ def _walk(component: Component) -> Iterator[Component]:
         yield from _walk(children)
 
 
+def _find_callback_by_input(app, input_id: str):
+    for meta in app.callback_map.values():
+        if any(item["id"] == input_id for item in meta.get("inputs", [])):
+            callback = meta["callback"]
+            return getattr(callback, "__wrapped__", callback)
+    raise AssertionError(f"callback with input {input_id!r} not found")
+
+
+def _find_callback_by_output(app, output_id: str):
+    for key, meta in app.callback_map.items():
+        if key.startswith(f"{output_id}.") or f"...{output_id}." in key:
+            callback = meta["callback"]
+            return getattr(callback, "__wrapped__", callback)
+    raise AssertionError(f"callback with output {output_id!r} not found")
+
+
+def _find_callback_by_input_and_output(app, input_id: str, output_id: str):
+    for key, meta in app.callback_map.items():
+        if output_id not in key:
+            continue
+        if any(item["id"] == input_id for item in meta.get("inputs", [])):
+            callback = meta["callback"]
+            return getattr(callback, "__wrapped__", callback)
+    raise AssertionError(f"callback with input {input_id!r} and output {output_id!r} not found")
+
+
 def test_app_layout_exposes_slimmed_onboarding_flow() -> None:
     app = create_app()
     shell_components = [component for component in _walk(app.layout) if getattr(component, "id", None)]
@@ -87,12 +113,16 @@ def test_app_layout_exposes_slimmed_onboarding_flow() -> None:
         "mlflow-registered-model-input",
         "scan-source-btn",
         "save-monitor-btn",
+        "review-drift-cadence-select",
+        "review-performance-cadence-select",
+        "review-schedule-enabled-toggle",
         "baseline-kind-input",
         "baseline-fixed-range-input",
         "create-catalog-toggle",
         "model-id-value-input",
         "model-version-value-input",
         "labels-order-col-input",
+        "reference-page-status",
     }.issubset(ids)
 
     components_by_id = {component.id: component for component in page_components}
@@ -123,6 +153,34 @@ def test_schema_helpers_flag_non_numeric_selected_features() -> None:
 
     assert _feature_candidates(scan_data, ["event_ts", "model_id", "prediction"]) == ["amount", "country"]
     assert _non_numeric_features(["amount", "country"], scan_data) == ["country"]
+
+
+def test_monitor_contract_ready_accepts_shared_labels_join_without_entity_id_column() -> None:
+    scan_data = {
+        "columns": ["event_ts", "model_id", "prediction", "gc_transaction", "amount"],
+    }
+
+    assert callbacks_module._monitor_contract_ready(
+        scan_data=scan_data,
+        display_name="Fraud Model Demo",
+        model_key="fraud_model_demo",
+        timestamp_col="event_ts",
+        model_id_col="model_id",
+        prediction_col="prediction",
+        model_id_value=None,
+        model_version_col=None,
+        model_version_value=None,
+        entity_id_col=None,
+        source_label_col=None,
+        external_label_col="label",
+        labels_table="main.demo.labels",
+        labels_join_col="gc_transaction",
+        feature_columns=["amount"],
+        baseline_kind="rolling",
+        baseline_days=7,
+        baseline_start=None,
+        baseline_end=None,
+    ) is True
 
 
 def test_workspace_lakebase_probe_is_skipped_outside_databricks_app(monkeypatch) -> None:
@@ -261,18 +319,21 @@ def test_render_onboarding_wizard_callback_executes_for_step_two() -> None:
         None,
         None,
         None,
-        None,
-        None,
-        None,
-        None,
         "entity_id",
         "label",
         None,
         None,
         None,
         None,
+        None,
+        None,
         "rolling",
         7,
+        None,
+        None,
+        "6h",
+        "disabled",
+        ["enabled"],
         None,
         None,
         None,
@@ -433,3 +494,121 @@ def test_labels_discovery_surfaces_zero_match_warning() -> None:
     )
 
     assert "No rows matched between inference and labels tables on this join column" in str(component)
+
+
+def test_render_reference_callback_shows_archive_and_delete_actions(monkeypatch) -> None:
+    config = SimpleNamespace(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.demo.inference",
+        contract=SimpleNamespace(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            model_version_col=None,
+            label_col="label",
+            entity_id_col="entity_id",
+            feature_columns=("amount",),
+            categorical_columns=("segment",),
+            slice_columns=("segment",),
+        ),
+        model_id_value="fraud_model_v1",
+        model_version_value=None,
+        labels_table=None,
+        labels_join_col=None,
+        labels_order_col=None,
+        mlflow=SimpleNamespace(
+            experiment_name=None,
+            experiment_id=None,
+            run_id=None,
+            registered_model_name=None,
+            model_version=None,
+        ),
+        baseline=SimpleNamespace(kind="rolling", n_days=7, baseline_start=None, baseline_end=None),
+        problem_type="classification",
+        drift_cadence_preset="6h",
+        performance_cadence_preset="daily_7d_repair",
+        schedule_enabled=True,
+        status="active",
+    )
+
+    class _FakeBackend:
+        def get_reference_data(self, model_id):
+            assert model_id == "fraud_model_demo"
+            return {
+                "config": config,
+                "summary": {},
+                "runtime_state": {},
+                "recent_runs": [],
+                "settings": {"refresh_job_id": "", "refresh_job_name": "model-lens-refresh"},
+            }
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_output(app, "reference-page-body")
+
+    result = fn("/reference", "fraud_model_demo", None, 0, {})
+
+    assert "Archive Monitor" in str(result)
+    assert "Delete Monitor And History" in str(result)
+    assert "Monitor Lifecycle" in str(result)
+
+
+def test_archive_reference_monitor_callback_archives_selected_monitor(monkeypatch) -> None:
+    repository = SimpleNamespace(archived=[], deleted=[])
+
+    def archive_monitor(model_id):
+        repository.archived.append(model_id)
+
+    repository.archive_monitor = archive_monitor
+    repository.delete_monitor = lambda model_id: repository.deleted.append(model_id)
+
+    config = SimpleNamespace(display_name="Fraud Model Demo")
+
+    class _FakeBackend:
+        def __init__(self):
+            self.repository = repository
+
+        def get_monitor_config(self, model_id):
+            assert model_id == "fraud_model_demo"
+            return config
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_input_and_output(app, "reference-archive-confirm-btn", "reference-page-status")
+
+    result = fn(1, "fraud_model_demo", None, {})
+
+    assert repository.archived == ["fraud_model_demo"]
+    assert "Archived Fraud Model Demo" in str(result[0])
+    assert result[1]
+
+
+def test_delete_reference_monitor_callback_deletes_selected_monitor(monkeypatch) -> None:
+    repository = SimpleNamespace(archived=[], deleted=[])
+
+    def delete_monitor(model_id):
+        repository.deleted.append(model_id)
+
+    repository.archive_monitor = lambda model_id: repository.archived.append(model_id)
+    repository.delete_monitor = delete_monitor
+
+    config = SimpleNamespace(display_name="Fraud Model Demo", model_key="fraud_model_demo")
+
+    class _FakeBackend:
+        def __init__(self):
+            self.repository = repository
+
+        def get_monitor_config(self, model_id):
+            assert model_id == "fraud_model_demo"
+            return config
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_input_and_output(app, "reference-delete-confirm-btn", "reference-page-status")
+
+    result = fn(1, "fraud_model_demo", None, "fraud_model_demo", {})
+
+    assert repository.deleted == ["fraud_model_demo"]
+    assert "Deleted Fraud Model Demo" in str(result[0])
+    assert result[1]

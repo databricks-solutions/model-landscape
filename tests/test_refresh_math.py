@@ -6,6 +6,11 @@ from model_lens.domain.models import MonitorConfig
 from model_lens.services.contracts import build_contract
 from model_lens.services.onboarding import build_default_baseline, build_fixed_baseline
 from model_lens.services.refresh_engine import (
+    build_daily_feature_profile_rows,
+    build_daily_performance_profile_rows,
+    build_daily_quality_profile_rows,
+    derive_refresh_result_from_daily_profiles,
+    generate_window_metadata,
     generate_window_pairs,
     refresh_monitor,
     refresh_monitor_backfill,
@@ -188,3 +193,154 @@ def test_generate_window_pairs_supports_fixed_baseline_history() -> None:
         "window_start": "2026-01-16",
         "window_end": "2026-01-20",
     }
+
+
+def test_refresh_monitor_backfill_supports_regression_metrics_and_categorical_drift() -> None:
+    start = datetime(2026, 1, 1)
+    rows = []
+    for day in range(21):
+        for offset in range(2):
+            rows.append({
+                "event_ts": start + timedelta(days=day, hours=offset),
+                "model_id": "m1",
+                "prediction": float(day + offset),
+                "label": float(day + (offset * 0.5)),
+                "amount": float((day * 2) + offset),
+                "segment": "baseline" if day < 10 else "current",
+            })
+    frame = pd.DataFrame(rows)
+    contract = build_contract(
+        columns=list(frame.columns),
+        timestamp_col="event_ts",
+        model_id_col="model_id",
+        prediction_col="prediction",
+        label_col="label",
+        feature_columns=["amount", "segment"],
+        categorical_columns=["segment"],
+    )
+
+    result = refresh_monitor_backfill(
+        MonitorConfig(
+            model_key="m1",
+            display_name="Regression Model",
+            source_table="cat.sch.logs",
+            contract=contract,
+            baseline=build_default_baseline(),
+            problem_type="regression",
+        ),
+        inference_df=frame,
+    )
+
+    assert {"rmse", "mae"} == {row["metric_name"] for row in result.performance_rows}
+    assert any(row["feature_name"] == "segment" and row["metric_name"] == "psi" for row in result.drift_rows)
+
+
+def test_daily_profile_builders_emit_quality_feature_and_performance_rows() -> None:
+    start = datetime(2026, 1, 1)
+    frame = pd.DataFrame([
+        {
+            "event_ts": start + timedelta(hours=offset),
+            "model_id": "m1",
+            "prediction": 0.1 + (offset * 0.1),
+            "label": offset % 2,
+            "amount": 10.0 + offset,
+            "segment": "a" if offset < 6 else "b",
+        }
+        for offset in range(12)
+    ] + [
+        {
+            "event_ts": start + timedelta(days=1, hours=offset),
+            "model_id": "m1",
+            "prediction": 0.2 + (offset * 0.05),
+            "label": (offset + 1) % 2,
+            "amount": 20.0 + offset,
+            "segment": "b" if offset < 6 else "c",
+        }
+        for offset in range(12)
+    ])
+    contract = build_contract(
+        columns=list(frame.columns),
+        timestamp_col="event_ts",
+        model_id_col="model_id",
+        prediction_col="prediction",
+        label_col="label",
+        feature_columns=["amount", "segment"],
+        categorical_columns=["segment"],
+    )
+    config = MonitorConfig(
+        model_key="m1",
+        display_name="Model 1",
+        source_table="cat.sch.logs",
+        contract=contract,
+        baseline=build_default_baseline(),
+    )
+
+    quality_rows = build_daily_quality_profile_rows(config=config, inference_df=frame, computed_at="2026-01-02T00:00:00Z")
+    feature_rows = build_daily_feature_profile_rows(config=config, inference_df=frame, computed_at="2026-01-02T00:00:00Z")
+    performance_rows = build_daily_performance_profile_rows(config=config, inference_df=frame, computed_at="2026-01-02T00:00:00Z")
+
+    assert {row["profile_date"] for row in quality_rows} == {"2026-01-01", "2026-01-02"}
+    assert {row["feature_name"] for row in feature_rows} == {"amount", "segment"}
+    assert {row["feature_kind"] for row in feature_rows} == {"numeric", "categorical"}
+    assert performance_rows
+    assert {row["metric_name"] for row in performance_rows} == {"f1"}
+
+
+def test_daily_profiles_can_derive_window_history_without_raw_window_reloads() -> None:
+    start = datetime(2026, 1, 1)
+    rows = []
+    for day in range(21):
+        regime = 0 if day < 7 else 1 if day < 14 else 2
+        for offset in range(2):
+            rows.append({
+                "event_ts": start + timedelta(days=day, hours=offset),
+                "model_id": "m1",
+                "prediction": [0.15, 0.35, 0.55, 0.85][regime + offset if regime < 2 else 2 + offset],
+                "label": 0 if regime < 2 else 1,
+                "amount": float((day * 2) + offset + (regime * 4)),
+                "segment": "baseline" if day < 10 else "current",
+            })
+    frame = pd.DataFrame(rows)
+    contract = build_contract(
+        columns=list(frame.columns),
+        timestamp_col="event_ts",
+        model_id_col="model_id",
+        prediction_col="prediction",
+        label_col="label",
+        feature_columns=["amount", "segment"],
+        categorical_columns=["segment"],
+    )
+    config = MonitorConfig(
+        model_key="m1",
+        display_name="Model 1",
+        source_table="cat.sch.logs",
+        contract=contract,
+        baseline=build_default_baseline(),
+    )
+    computed_at = "2026-01-22T00:00:00Z"
+
+    quality_rows = build_daily_quality_profile_rows(config=config, inference_df=frame, computed_at=computed_at)
+    feature_rows = build_daily_feature_profile_rows(config=config, inference_df=frame, computed_at=computed_at)
+    performance_rows = build_daily_performance_profile_rows(config=config, inference_df=frame, computed_at=computed_at)
+    metadata_list = generate_window_metadata(
+        min_date="2026-01-01",
+        max_date="2026-01-21",
+        baseline=config.baseline,
+        model_key=config.model_key,
+    )
+
+    result = derive_refresh_result_from_daily_profiles(
+        config=config,
+        metadata_list=metadata_list,
+        daily_quality_profile_rows=quality_rows,
+        daily_feature_profile_rows=feature_rows,
+        daily_performance_profile_rows=performance_rows,
+        computed_at=computed_at,
+    )
+
+    assert len(result.window_rows) == 8
+    assert len(result.quality_history_rows) == 8
+    assert len({row["window_end"] for row in result.drift_rows}) == 8
+    assert any(row["feature_name"] == "segment" and row["metric_name"] == "psi" for row in result.drift_rows)
+    assert {row["metric_name"] for row in result.performance_rows} == {"f1"}
+    assert all(row["window_id"] for row in result.incident_history_rows)

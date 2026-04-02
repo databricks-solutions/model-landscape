@@ -61,6 +61,8 @@ Responsibilities:
 - let operators override inferred columns only when the draft is ambiguous
 - let operators choose either a rolling baseline window or a fixed known-good baseline date range
 - save monitor configs
+- let operators archive monitors from `Reference` by flipping them out of the active set while keeping warehouse history, or permanently delete a monitor and all of its persisted facts when needed
+- let operators restore archived monitors from `Reference` without going back to manual SQL
 - trigger the initial refresh workflow asynchronously during monitor activation
 - render monitor summaries and incidents from Lakebase when configured
 - recommend the Lakebase-enabled target when running warehouse-only in a workspace that appears to have Lakebase available
@@ -97,7 +99,10 @@ Current tables:
 - `drift_metrics`
 - `quality_metrics`
 - `quality_history`
+- `daily_quality_profiles`
+- `daily_feature_profiles`
 - `performance_metrics`
+- `daily_performance_profiles`
 - `incidents`
 - `incident_history`
 - `refresh_runs`
@@ -121,20 +126,32 @@ The app uses Lakebase for hot UI reads when configured. If Lakebase is unavailab
 
 The refresh workflow is a serverless Databricks job.
 
-The app does not run the heavy first refresh inline. During activation it saves the monitor config, resolves the workflow from `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`, and triggers the job asynchronously so the UI stays responsive. That means the app service principal also needs `CAN MANAGE RUN` on the refresh job, while the job's Run as identity still needs the source-data and control-plane privileges required for the actual computation.
+Model Lens uses one shared refresh workflow by default. The bundle-managed workflow and the generated manual existing-app workflow payload are both scheduled hourly, so saved monitors have a default pickup path even when the app cannot call `Run now`.
+
+The app does not run the heavy first refresh inline. During activation it saves the monitor config, resolves the workflow from `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`, and can trigger the job asynchronously so the UI stays responsive. `CAN MANAGE RUN` on the refresh job is therefore optional acceleration for the app service principal, while the job's Run as identity still needs the source-data and control-plane privileges required for the actual computation.
 
 Responsibilities:
 
 - enumerate active monitors
-- read source inference data
+- pick only monitors that are pending bootstrap or overdue for their saved cadence preset
+- prioritize one scope per model per scheduler run: `bootstrap` first, then `drift_quality`, then `performance_repair`
+- process due monitors with monitor-level concurrency only, using a bounded worker pool rather than feature-level fanout
+- read SQL-side source profiles for bounded refresh ranges
+- load one bounded projected refresh range per monitor scope instead of re-querying every comparison window from the warehouse
 - optionally join labels from an external table with deterministic dedupe
 - scope shared source tables down to one monitored model/version when configured
 - backfill all valid daily rolling or fixed-baseline comparison windows on the first run
 - append only new daily windows on later runs by default
-- compute drift, quality, and degradation summaries across those windows
+- enforce deterministic per-day and per-window row caps during pandas-based window analysis so very large tables do not cause simple worker OOMs
+- materialize daily quality, feature, and performance profiles from the bounded range load, then derive the persisted comparison-window history from those daily profiles in the same refresh pass
+- for non-bootstrap runs, merge those newly built daily profiles with already-persisted daily facts for the affected date span before deriving the window/history tables
 - record one refresh-run row per model execution with requested mode, effective mode, counts, status, and data range
+- persist one `monitor_runtime_state` row per monitor so the shared job can track bootstrap state, next due timestamps, and the latest error without requiring per-monitor Databricks jobs
 - persist one comparison-window row per logical baseline/current pairing
 - persist one quality-history row per comparison window for row-count, null-rate, and prediction-stat trends
+- persist one daily-quality profile row per model/day
+- persist one daily-feature profile row per model/day/feature
+- persist one daily-performance profile row per model/day/feature/bin/metric
 - persist incident lifecycle rows (`opened`, `ongoing`, `escalated`, `downgraded`, `recovered`) per comparison window while keeping `incidents` as the current open-incident projection
 - replace or append persisted metric windows depending on refresh mode
 - sync the current UI projection into Lakebase
@@ -158,32 +175,37 @@ Primary code:
 
 1. The operator enters a source inference table and can optionally add a labels table plus an MLflow experiment or registered model.
 2. The app loads schema metadata and sample rows through the SQL warehouse.
-3. The discovery service infers the monitoring contract, feature set, slices, model scope candidates, and optional MLflow lineage. It accepts timestamp-like ISO strings, prioritizes shared-name shared-type join keys for external labels, and can fall back to identifier-like `model_version` values when a dedicated `model_id` column is absent.
+3. The discovery service infers the monitoring contract, feature set, slices, model scope candidates, and optional MLflow lineage. It accepts timestamp-like ISO strings, can use a true-label column directly from the inference table when one exists, prioritizes shared-name shared-type join keys for external labels, reuses that shared join column on the inference side even when no explicit `entity_id`-style column exists, and can fall back to identifier-like `model_version` values when a dedicated `model_id` column is absent.
    It also treats a 0-row labels join as a review-blocking warning and keeps the full numeric feature set selected by default rather than silently shrinking the first refresh to a small subset.
 4. In the contract step, the operator reviews the inferred draft and only opens `Advanced` when overrides are needed.
 5. If the source table contains multiple model IDs, the operator confirms or pins one `model_id_value`.
 6. If the labels table is not unique on the join key, the operator confirms or provides a label ordering column.
-7. In the review step, the app summarizes the final namespace, feature set, model scope, labels strategy, and MLflow linkage before activation.
-8. The app writes one active row into `monitor_configs`.
+7. In the review step, the app summarizes the final namespace, feature set, model scope, labels strategy, MLflow linkage, and per-monitor cadence presets before activation.
+8. The app writes one active row into `monitor_configs` and marks the monitor `pending` in `monitor_runtime_state`.
 9. If Lakebase mode is active, the repository syncs the projected monitor inventory into Lakebase.
-10. The app can immediately trigger the first refresh.
+10. The app can immediately trigger the shared refresh job for bootstrap when `Run now` permissions are available.
+11. If that trigger is unavailable, the scheduled hourly shared job still picks up the pending bootstrap automatically.
 
 ### Refresh Flow
 
-1. The workflow loads active monitor configs.
+1. The workflow loads active monitor configs and their runtime state.
 2. For each config, it reads source data from the inference table.
 3. If configured, it applies `model_id_value` / `model_version_value` filters before analysis.
-4. If configured, it joins an external labels table and uses the configured order column to dedupe repeated label keys.
-5. It generates all valid daily comparison windows for the configured baseline policy within the comparison horizon.
-6. In `auto` mode, it backfills full history when no matching history exists and appends only new windows when history is already aligned.
-7. It computes numeric drift metrics, windowed quality history, incident lifecycle rows, and performance contributors for each comparison window, while still keeping `quality_metrics` as the latest-summary compatibility row and `incidents` as the current open-incident projection.
-8. It writes `refresh_runs` and `comparison_windows` provenance rows alongside the metric facts.
-9. It replaces or appends persisted rows for that model without duplicating logical windows.
-10. If Lakebase mode is active, it refreshes the Lakebase monitor summary and open-incident projection.
+4. If configured, it either reads labels directly from the inference table or joins an external labels table and uses the configured order column to dedupe repeated label keys.
+5. It calculates a SQL-side source profile for the refresh range so total rows, min/max dates, prediction stats, daily volume, and null-rate summaries do not require a raw full-frame load.
+6. It loads one bounded projected refresh range for that monitor scope, using the configured sampling caps.
+7. It materializes `daily_quality_profiles`, `daily_feature_profiles`, and `daily_performance_profiles` from that bounded range.
+8. It generates all valid daily comparison windows for the configured baseline policy within the comparison horizon, merges any already-persisted daily facts for the affected span, and derives drift, quality history, performance contributors, and incident lifecycle rows from that combined daily-profile layer instead of reloading each window separately.
+9. In `auto` mode, it backfills full history when no matching history exists and appends only new windows when history is already aligned.
+10. It writes `refresh_runs`, `comparison_windows`, and `monitor_runtime_state` updates alongside the metric facts.
+11. It replaces or appends persisted rows for that model without duplicating logical windows.
+12. If Lakebase mode is active, it refreshes the Lakebase monitor summary and open-incident projection.
 
 Current limitation:
 
 - the app UI still emphasizes current/open incidents; there is not yet a dedicated historical incident timeline page even though warehouse incident history is now persisted
+- the next scale step is reading already-persisted daily facts across more readback and recompute paths; the current shipping implementation already derives window tables from the per-run daily-profile layer inside refresh, but it still rebuilds that daily layer from a bounded source-range load on each affected run
+- readback still centers on the stable window/history tables; only selected paths such as feature distributions and quality-history fallback currently read the daily-profile layer directly
 - the remaining incident readback/productization work is tracked in [Historical Backfill Plan](/Users/volo.vragov/Desktop/work/model-lens/docs/HISTORICAL_BACKFILL_PLAN.md)
 
 ### Readback Flow
@@ -241,3 +263,4 @@ The product now follows this split:
   - bundle-managed app resource mode, where [app.yaml](/Users/volo.vragov/Desktop/work/model-lens/app.yaml) resolves `SQL_WAREHOUSE_ID` from `valueFrom: sql_warehouse`
   - manual existing-app mode, where [prepare_existing_app_source.py](/Users/volo.vragov/Desktop/work/model-lens/scripts/prepare_existing_app_source.py) generates an alternate `app.yaml` with a literal `SQL_WAREHOUSE_ID` so constrained operators do not need permission to manage app resources
 - `databricks bundle deploy` creates the app resource, but `databricks apps deploy ... --source-code-path ...` is still required to deploy the app source onto compute.
+- `MAX_PARALLEL_REFRESH_WORKERS` caps only monitor-level concurrency inside the shared job. It does not fan out feature computations, and it should be tuned alongside the row-sampling caps rather than treated as a free throughput multiplier.

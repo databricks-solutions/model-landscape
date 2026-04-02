@@ -2,6 +2,9 @@ resources:
   jobs:
     refresh_control_plane:
       name: ${var.app_name}-refresh
+      max_concurrent_runs: 1
+      queue:
+        enabled: true
       tasks:
         - task_key: refresh_control_plane
           python_wheel_task:
@@ -14,10 +17,16 @@ resources:
               - ${var.control_plane_catalog}
               - --schema
               - ${var.control_plane_schema}
+              - --scope
+              - scheduler
           environment_key: refresh_runtime
           max_retries: 2
           min_retry_interval_millis: 60000
           timeout_seconds: 3600
+      schedule:
+        quartz_cron_expression: "0 0 * * * ?"
+        timezone_id: "UTC"
+        pause_status: UNPAUSED
       environments:
         - environment_key: refresh_runtime
           spec:

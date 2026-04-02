@@ -135,6 +135,29 @@ class _FakeWarehouse:
                     },
                 ]
             )
+        if "FROM daily_quality_profiles" in sql:
+            return pd.DataFrame(
+                [
+                    {
+                        "model_key": model_key,
+                        "profile_date": "2026-01-20",
+                        "row_count": 110,
+                        "prediction_mean": 0.42,
+                        "prediction_std": 0.12,
+                        "null_rates": '{"amount": 0.0, "velocity_7d": 0.8}',
+                        "computed_at": "2026-01-20T10:00:00",
+                    },
+                    {
+                        "model_key": model_key,
+                        "profile_date": "2026-01-21",
+                        "row_count": 120,
+                        "prediction_mean": 0.44,
+                        "prediction_std": 0.13,
+                        "null_rates": '{"amount": 0.0, "velocity_7d": 1.2}',
+                        "computed_at": "2026-01-21T10:00:00",
+                    },
+                ]
+            )
         if "FROM performance_metrics" in sql:
             return pd.DataFrame(
                 [
@@ -269,6 +292,8 @@ def test_list_models_merges_monitor_configs_with_summary() -> None:
             "max_psi": 0.21,
             "total_rows": 840,
             "open_incident_count": 1,
+            "freshness_status": "pending_bootstrap",
+            "last_run_status": "",
         }
     ]
 
@@ -320,6 +345,50 @@ def test_get_quality_history_returns_windowed_rows_with_null_rate_metadata() -> 
     assert history.iloc[1]["max_null_rate"] == 1.2
 
 
+def test_get_quality_history_falls_back_to_daily_profiles_when_window_history_is_missing() -> None:
+    class MissingWindowHistoryWarehouse(_FakeWarehouse):
+        def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
+            if "FROM quality_history" in sql:
+                return pd.DataFrame()
+            return super().query_params(sql, params)
+
+    config = MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.model_lens_demo.inference_logs",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=("amount", "velocity_7d"),
+            slice_columns=("region",),
+            categorical_columns=("region",),
+        ),
+        baseline=BaselinePolicy(n_days=7),
+        model_id_value="fraud_model_v1",
+    )
+    repository = SimpleNamespace(
+        _warehouse=MissingWindowHistoryWarehouse(),
+        table_names=SimpleNamespace(
+            drift_metrics="drift_metrics",
+            quality_metrics="quality_metrics",
+            quality_history="quality_history",
+            daily_quality_profiles="daily_quality_profiles",
+            performance_metrics="performance_metrics",
+        ),
+        list_monitor_configs=lambda status="active": [config],
+        get_monitor_summary=lambda: pd.DataFrame(),
+    )
+    backend = DashboardBackend(repository=repository)
+
+    history = backend.get_quality_history("fraud_model_demo")
+
+    assert list(history["period"]) == ["2026-01-20", "2026-01-21"]
+    assert list(history["row_count"]) == [110, 120]
+    assert history.iloc[1]["null_rates_dict"] == {"amount": 0.0, "velocity_7d": 1.2}
+
+
 def test_get_null_rate_history_explodes_top_features_over_time() -> None:
     backend = _make_backend()
 
@@ -342,3 +411,61 @@ def test_get_performance_summary_keeps_zero_delta_rows_visible() -> None:
     assert set(performance["contributors"]["feature"]) == {"amount", "velocity_7d"}
     assert performance["has_significant_degradation"] is False
     assert performance["worst_weighted_delta"] == 0.0
+
+
+def test_feature_detail_load_uses_bounded_sampled_frame() -> None:
+    calls: list[dict[str, object]] = []
+    config = MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.model_lens_demo.inference_logs",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=("amount", "velocity_7d"),
+            slice_columns=("region",),
+            categorical_columns=("region",),
+        ),
+        baseline=BaselinePolicy(n_days=7),
+        model_id_value="fraud_model_v1",
+    )
+
+    def load_monitor_frame(config_arg, **kwargs):
+        del config_arg
+        calls.append(kwargs)
+        return pd.DataFrame(
+            [
+                {
+                    "event_ts": f"2026-01-{day:02d}T00:00:00",
+                    "amount": float(day),
+                }
+                for day in range(7, 22)
+            ]
+        )
+
+    repository = SimpleNamespace(
+        _warehouse=_FakeWarehouse(),
+        table_names=SimpleNamespace(
+            drift_metrics="drift_metrics",
+            quality_metrics="quality_metrics",
+            quality_history="quality_history",
+            performance_metrics="performance_metrics",
+        ),
+        list_monitor_configs=lambda status="active": [config],
+        get_monitor_summary=lambda: pd.DataFrame(),
+        load_monitor_frame=load_monitor_frame,
+    )
+    backend = DashboardBackend(repository=repository)
+
+    baseline, current = backend.get_feature_distribution("fraud_model_demo", "amount")
+
+    assert not baseline.empty
+    assert not current.empty
+    assert len(calls) == 1
+    assert calls[0]["start_date"] == "2026-01-07"
+    assert calls[0]["end_date"] == "2026-01-21"
+    assert calls[0]["feature_columns"] == ("amount",)
+    assert calls[0]["sample_rows_per_day"] > 0
+    assert calls[0]["max_total_rows"] > 0

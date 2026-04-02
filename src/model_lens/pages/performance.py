@@ -21,6 +21,8 @@ def layout():
                                 id="perf-metric-select",
                                 options=[
                                     {"label": "F1 Score", "value": "f1"},
+                                    {"label": "RMSE", "value": "rmse"},
+                                    {"label": "MAE", "value": "mae"},
                                 ],
                                 value="f1",
                                 style=DROPDOWN_STYLE,
@@ -59,4 +61,3 @@ def layout():
             html.Div(id="perf-date-range-note", className="mt-3"),
         ]
     )
-

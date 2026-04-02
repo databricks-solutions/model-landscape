@@ -6,13 +6,22 @@ import re
 from typing import Any
 
 
-_IDENTIFIER_RE = re.compile(r"\A[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*\Z")
+_IDENTIFIER_PART_RE = re.compile(r"\A[a-zA-Z0-9_]+\Z")
+_COLUMN_IDENTIFIER_RE = re.compile(r"\A[a-zA-Z0-9_][a-zA-Z0-9_-]*\Z")
 
 
 def validate_identifier(name: str) -> str:
-    if not name or not _IDENTIFIER_RE.match(name):
+    text = str(name or "").strip()
+    if not text:
         raise ValueError(f"Invalid SQL identifier: {name!r}")
-    return name
+    if "." in text:
+        parts = text.split(".")
+        if not all(_IDENTIFIER_PART_RE.match(part) for part in parts):
+            raise ValueError(f"Invalid SQL identifier: {name!r}")
+        return text
+    if not _COLUMN_IDENTIFIER_RE.match(text):
+        raise ValueError(f"Invalid SQL identifier: {name!r}")
+    return text
 
 
 def quote_column(name: str) -> str:

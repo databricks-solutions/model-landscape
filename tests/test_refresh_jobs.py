@@ -32,10 +32,10 @@ def test_build_refresh_job_params_uses_namespace_and_model_key(monkeypatch) -> N
         "model_observability",
         "--schema",
         "control_plane",
+        "--scope",
+        "scheduler",
         "--model-key",
         "fraud_model_demo",
-        "--mode",
-        "auto",
     ]
 
 
@@ -106,7 +106,7 @@ def test_trigger_refresh_job_uses_configured_job_id(monkeypatch) -> None:
     assert trigger.job_id == 321
     assert trigger.run_id == 999
     assert fake_jobs.run_call["job_id"] == 321
-    assert fake_jobs.run_call["python_params"][-2:] == ["--mode", "auto"]
+    assert fake_jobs.run_call["python_params"][-4:] == ["--scope", "bootstrap", "--model-key", "fraud_model_demo"]
 
 
 def test_trigger_refresh_job_falls_back_to_named_lookup(monkeypatch) -> None:

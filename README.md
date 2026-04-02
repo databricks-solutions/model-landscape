@@ -10,7 +10,10 @@ It is built for teams that want an in-house alternative to external observabilit
 - map source columns into one stable monitoring contract
 - backfill drift and performance history on the first refresh workflow run, then append new windows incrementally
 - compute drift, quality, and performance-contributor summaries on a refresh workflow
+- store per-monitor refresh cadence presets and runtime state so one shared job can service many monitors
+- let operators archive a monitor from the `Reference` page without losing history, restore an archived monitor later, or permanently delete the monitor and its stored history when cleanup is required
 - backfill drift, quality, and performance window history on the first refresh so timelines are populated immediately
+- keep giant inference tables off the app memory hot path by using SQL-side source profiles plus projected, date-bounded, sampled window loads
 - persist durable monitoring state in Unity Catalog Delta tables
 - optionally project hot UI state into Lakebase for fast monitor and incident views
 - deep-link overview cards into model-specific drift investigation
@@ -28,8 +31,10 @@ Model Lens has three layers:
    - not the source of truth
 3. `Operator app + refresh workflow`
    - Databricks App for setup, onboarding, and investigation
-   - serverless refresh workflow for all active monitors
-   - bundle-built wheel packaging for the workflow runtime
+- one shared serverless refresh workflow for all active monitors, scheduled hourly by default
+- per-monitor cadence presets for drift and performance repair, stored in the control plane
+- monitor-level concurrency only inside the shared workflow, capped by `MAX_PARALLEL_REFRESH_WORKERS`
+- bundle-built wheel packaging for the workflow runtime
 
 ```mermaid
 flowchart LR
@@ -48,11 +53,11 @@ flowchart LR
 Required mapped fields:
 
 - `event_ts`
-- `model_id`
 - `prediction`
 
 Optional mapped fields:
 
+- `model_id`
 - `model_version`
 - `prediction_proba`
 - `label`
@@ -62,6 +67,8 @@ Optional monitor-scoping fields:
 
 - `model_id_value`
 - `model_version_value`
+
+If one source table already represents exactly one model, `model_id` can stay blank and the monitor is treated as table-scoped. If one source table contains multiple models, set `model_id` and pin `model_id_value`.
 
 All other mapped fields become feature columns, categorical columns, or slice columns.
 
@@ -77,13 +84,57 @@ Current engine behavior:
 - an optional MLflow experiment or registered model can contribute feature ordering, model/version hints, and lineage metadata during onboarding
 - discovery keeps the full numeric feature set by default; Model Lens does not silently trim the first run to a top-N subset
 - the drift/performance path now avoids redundant per-feature numeric coercion during backfills so wide numeric schemas are cheaper to process than the earlier implementation
+- the review step now stores per-monitor cadence presets, and the Reference page can edit those cadences later without creating new Databricks jobs
+- classification monitors use `f1` on the Performance page; regression monitors now use `rmse` by default and also persist `mae`
+- categorical features no longer stop at contract storage only; categorical drift now emits PSI / JS / KL rows alongside numeric drift
 - onboarding supports two baseline policies:
   - `rolling`: compare the latest `n` days with the preceding `n` days
   - `fixed`: compare a user-selected known-good baseline range with the latest window of the same length
 - the first successful refresh now backfills all valid daily comparison windows for the configured baseline policy, up to the configured comparison horizon
 - later refreshes run in `auto` mode by default: they append new windows when history already exists and fall back to full backfill when the stored history no longer matches the current baseline configuration
+- every monitor now stores its own drift cadence, performance cadence, and runtime state so the shared hourly workflow can pick up only the monitors that are pending or overdue
+- scheduled refreshes no longer read entire source tables into pandas by default; they fetch SQL-side summary profiles, then load one bounded projected refresh range with deterministic sampling caps, materialize daily quality/feature/performance profiles, and derive comparison-window history from those daily profiles instead of reloading every window from the warehouse
 - if an external labels table is not unique on the join key, you must provide an `External Labels Order Column`
 - if a source table contains multiple `model_id` values, you must provide `Monitored Model ID Value`
+
+## Large-Table Safeguards
+
+Model Lens is now tuned to avoid straightforward OOM failures on very large inference tables.
+
+Current protections:
+
+- scheduled refresh first reads a SQL aggregate profile for the bounded refresh range instead of loading the full source frame into pandas
+- each monitor scope then loads one bounded projected refresh range, not one warehouse query per comparison window
+- the workflow materializes `daily_quality_profiles`, `daily_feature_profiles`, and `daily_performance_profiles` from that bounded range and derives the persisted window/history tables from those daily profiles inside the same refresh pass
+- those bounded range loads use deterministic row caps so one very large day or one very wide table does not explode memory on the app or workflow worker
+- the shared workflow parallelizes across monitors, not across features, and caps concurrent monitor execution with a small worker pool so large tenants get more throughput without multiplying per-monitor memory spikes
+- feature deep-dive charts no longer reread the full source table when daily feature samples are available; they read sampled values from `daily_feature_profiles` first and only fall back to a bounded raw load when needed
+- non-bootstrap refreshes now merge the current run’s daily profiles with already-persisted daily facts for the affected derivation span, so recomputed windows can reuse prior baseline/profile history instead of depending entirely on the current bounded load
+
+Relevant runtime knobs:
+
+- `REFRESH_SAMPLE_ROWS_PER_DAY`
+  default `50000`
+  cap rows sampled per calendar day for a refresh-window load
+- `REFRESH_MAX_ROWS_PER_WINDOW`
+  default `250000`
+  hard cap for the total sampled rows loaded into pandas for one refresh window
+- `FEATURE_DETAIL_SAMPLE_ROWS_PER_DAY`
+  default `50000`
+  cap rows sampled per calendar day for feature-investigation reads
+- `FEATURE_DETAIL_MAX_ROWS`
+  default `200000`
+  hard cap for the total sampled rows loaded for feature/detail charts
+- `MAX_PARALLEL_REFRESH_WORKERS`
+  default `2`
+  cap for concurrent monitor refreshes inside the shared job; the scheduler still keeps one scope per model per run (`bootstrap` before `drift_quality` before `performance_repair`)
+
+Operational guidance:
+
+- start with the defaults
+- if a customer has exceptionally wide or high-volume tables, lower the row caps before increasing compute size
+- increase `MAX_PARALLEL_REFRESH_WORKERS` only after the row caps are already safe for that tenant, because throughput scales at the monitor level while pandas memory still scales inside each active worker
+- the next scale step is reusing already-persisted daily facts across even more readback paths and cross-run recompute flows; the current shipping implementation already merges persisted daily facts into incremental derivation for affected spans and uses daily-feature samples in readback, while the UI still reads the stable window/history tables
 
 Discovery priorities:
 
@@ -118,6 +169,7 @@ You need all of the following in the target Databricks workspace:
 - serverless jobs enabled
 - permissions to deploy Databricks Asset Bundles and Databricks Apps
 - permissions to write into an existing or pre-approved Unity Catalog namespace for the control plane
+- enough shared-job capacity for the number of monitors you plan to keep active at once; cadence is per monitor, but the default deployment still uses one shared workflow
 - optional permissions to create:
   - source test tables
   - the control-plane catalog if you want the app setup flow to create it
@@ -143,7 +195,10 @@ Current control-plane tables:
 - `drift_metrics`
 - `quality_metrics`
 - `quality_history`
+- `daily_quality_profiles`
+- `daily_feature_profiles`
 - `performance_metrics`
+- `daily_performance_profiles`
 - `incidents`
 - `incident_history`
 - `refresh_runs`
@@ -240,12 +295,14 @@ databricks apps get model-lens -o json
 ```
 
 Use the returned app identity to confirm `CAN_USE` on the SQL warehouse before opening the app.
-Also verify that the same app identity has `CAN MANAGE RUN` on the refresh workflow so onboarding can trigger the first refresh asynchronously.
+If you want onboarding to accelerate the first run immediately, also verify that the same app identity has `CAN MANAGE RUN` on the refresh workflow. Without that permission, the monitor still saves and the shared scheduled job can pick it up on its next hourly run.
 
-The app now triggers the first refresh asynchronously during activation. It resolves the workflow in this order:
+The app can accelerate the first refresh asynchronously during activation. It resolves the workflow in this order:
 
 - `REFRESH_JOB_ID` if you set it explicitly
 - otherwise `REFRESH_JOB_NAME`, which defaults to `model-lens-refresh`
+
+The shared refresh job itself is also scheduled hourly by default in both the bundle-managed path and the generated manual existing-app path, so saved monitors are not blocked forever when `run_now` permissions are unavailable.
 
 If you deploy with a custom bundle `app_name`, set `REFRESH_JOB_NAME=<app-name>-refresh` or set `REFRESH_JOB_ID=<job-id>` before `databricks apps deploy`.
 The current resolver also handles Databricks Asset Bundles development prefixes such as `[dev volo_vragov] model-lens-refresh` by falling back to a suffix match, but `REFRESH_JOB_ID` is still the safest option when multiple similarly named jobs exist.
@@ -293,8 +350,8 @@ After deploy:
 8. In the `Confirm` step, review the inferred display name, model key, problem type, and feature set. Use `Advanced` only if the draft needs overrides.
 9. If the table contains more than one `model_id`, confirm or fill in `Monitored Model ID Value`.
 10. If external labels are not unique on the join key, confirm or fill in `External Labels Order Column`.
-11. Continue to `Activate`, then save the monitor and trigger the refresh workflow.
-12. Confirm the app immediately acknowledges that the monitor was saved and the refresh job was triggered.
+11. Continue to `Activate`, then save the monitor.
+12. Confirm the app acknowledges that the monitor was saved. If `CAN MANAGE RUN` is configured, it should also say the shared refresh job was triggered for bootstrap; otherwise the shared hourly job can pick it up on its next run.
 13. Open the overview and analysis pages after the workflow finishes to confirm the new monitor appears and the initial refresh populated historical readback immediately.
 
 ## Full Docs
@@ -372,17 +429,19 @@ Implemented now:
 - modular multi-page Dash frontend with a staged onboarding wizard, shared components, and route-based navigation
 - app-driven setup, onboarding, and refresh
 - serverless refresh workflow
-- external labels joins with explicit dedupe support
+- true labels can come either from the inference table itself or from an optional external labels table
+- external labels joins with explicit dedupe support, including shared join-column reuse when the same key exists in both inference and labels tables
+- hyphenated Databricks column names supported through backtick-quoted SQL identifiers
 - explicit model scoping for shared inference tables
 - rolling recent-window drift comparison
 - scratch data and workspace smoke test path
 
 Still intentionally limited:
 
-- categorical-specific drift metrics
 - slice-level UI rollups
 - alert delivery integrations
 - full incident lifecycle with acknowledge / resolve / history
+- deriving the current drift/performance window tables directly from daily profile facts; the current implementation persists those daily facts as a foundation but still computes the UI-facing window tables in the refresh pass
 
 ## Positioning
 

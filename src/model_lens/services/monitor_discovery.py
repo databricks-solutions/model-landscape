@@ -7,8 +7,8 @@ from collections.abc import Iterable
 import pandas as pd
 
 from model_lens.domain.models import MLflowDiscovery, MonitorConfig, MonitorDiscoveryResult
-from model_lens.services.contracts import build_contract
 from model_lens.services.control_plane import ControlPlaneRepository
+from model_lens.services.inference_contracts import build_inference_contract
 from model_lens.services.mlflow_discovery import MLflowDiscoveryService
 from model_lens.services.onboarding import build_default_baseline
 
@@ -257,6 +257,20 @@ def _shared_join_candidates(
     )
 
 
+def _resolve_source_labels_join_col(
+    source_columns: list[str],
+    entity_id_col: str | None,
+    labels_join_col: str | None,
+) -> str | None:
+    shared_join_col = _normalize(labels_join_col)
+    if shared_join_col and shared_join_col in set(source_columns):
+        return shared_join_col
+    entity_join_col = _normalize(entity_id_col)
+    if entity_join_col and entity_join_col in set(source_columns):
+        return entity_join_col
+    return None
+
+
 class MonitorDiscoveryService:
     def __init__(
         self,
@@ -300,7 +314,7 @@ class MonitorDiscoveryService:
         label_candidates = _rank_columns(columns, LABEL_PATTERNS, schema_types)
 
         timestamp_col = timestamp_candidates[0] if timestamp_candidates else _fallback_column(columns, schema_types, TIMESTAMP_TYPE_TOKENS)
-        model_id_col = model_id_candidates[0] if model_id_candidates else _fallback_column(columns, schema_types, STRING_TYPE_TOKENS)
+        model_id_col = model_id_candidates[0] if model_id_candidates else None
         prediction_col = prediction_candidates[0] if prediction_candidates else _fallback_column(columns, schema_types, NUMERIC_TYPE_TOKENS)
         version_candidates = [
             column
@@ -313,7 +327,6 @@ class MonitorDiscoveryService:
 
         required_candidates = {
             "timestamp": timestamp_candidates,
-            "model ID": model_id_candidates,
             "prediction": prediction_candidates,
         }
         for label, candidates in required_candidates.items():
@@ -425,10 +438,12 @@ class MonitorDiscoveryService:
             labels_join_col = join_candidates[0] if join_candidates else entity_id_col
             labels_order_col = order_candidates[0] if order_candidates else None
 
+            source_labels_join_col = _resolve_source_labels_join_col(columns, entity_id_col, labels_join_col)
+
             if not label_col or not labels_join_col:
                 warnings.append("External labels table needs a join column and label column; review advanced mappings.")
                 requires_review = True
-            elif not entity_id_col or entity_id_col not in columns:
+            elif not source_labels_join_col:
                 warnings.append("Could not find a matching inference-table join column for external labels; review mappings.")
                 requires_review = True
             elif labels_join_col not in label_columns:
@@ -437,7 +452,7 @@ class MonitorDiscoveryService:
             else:
                 label_validation = self._repository.profile_labels_mapping(
                     source_table=source_table.strip(),
-                    source_join_col=entity_id_col,
+                    source_join_col=source_labels_join_col,
                     labels_table=labels_table,
                     labels_join_col=labels_join_col,
                     label_col=label_col,
@@ -499,7 +514,7 @@ class MonitorDiscoveryService:
             display_name = model_id_value.replace("_", " ").title()
             model_key = re.sub(r"[^a-zA-Z0-9_]", "_", model_id_value).lower()
 
-        contract = build_contract(
+        contract = build_inference_contract(
             columns=columns,
             timestamp_col=timestamp_col,
             model_id_col=model_id_col,
@@ -528,18 +543,19 @@ class MonitorDiscoveryService:
         if not timestamp_candidates:
             warnings.append(f"Fell back to {timestamp_col!r} as the timestamp column.")
             requires_review = True
-        if not model_id_candidates:
-            warnings.append(f"Fell back to {model_id_col!r} as the model ID column.")
-            requires_review = True
         if not prediction_candidates:
             warnings.append(f"Fell back to {prediction_col!r} as the prediction column.")
             requires_review = True
         confidence = "high"
         if requires_review or warnings:
             confidence = "medium"
-        if not timestamp_col or not model_id_col or not prediction_col:
+        if not timestamp_col or not prediction_col:
             confidence = "low"
             requires_review = True
+        elif not model_id_col:
+            warnings.append(
+                "No model ID column was detected. This draft will treat the inference table as one monitored model unless you map a model ID column manually."
+            )
         return MonitorDiscoveryResult(
             config=config,
             columns=tuple(columns),
@@ -558,7 +574,7 @@ class MonitorDiscoveryService:
         self,
         *,
         source_table: str,
-        model_id_col: str,
+        model_id_col: str | None,
         mlflow: MLflowDiscovery,
         warnings: list[str],
     ) -> tuple[str | None, bool]:

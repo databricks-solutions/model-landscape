@@ -41,7 +41,9 @@ On Databricks CLI `v0.260.0`, the bundle can bind the SQL warehouse to the app b
 - `warehouse_only` is fully automated
 - `dev` / `prod` automate the workflow-side Lakebase sync inputs
 - the app-side Lakebase read path is enabled either from the workspace setup fields in the UI or by pre-populating `LAKEBASE_INSTANCE_NAME` / `LAKEBASE_DATABASE_NAME` in `app.yaml` before `databricks apps deploy`
-- the app triggers onboarding refreshes asynchronously by resolving `REFRESH_JOB_ID` first, then falling back to `REFRESH_JOB_NAME` (default `model-lens-refresh`)
+- the bundle-managed refresh workflow is one shared job (`<app-name>-refresh`) scheduled hourly by default
+- each monitor stores its own drift/performance cadence in the control plane, so one shared job can service many monitors without creating one Databricks job per model
+- the app can accelerate onboarding refreshes asynchronously by resolving `REFRESH_JOB_ID` first, then falling back to `REFRESH_JOB_NAME` (default `model-lens-refresh`)
 - when `REFRESH_JOB_NAME` is used, the resolver now also accepts Databricks Asset Bundles development job names that end with the configured base name, such as `[dev user] model-lens-refresh`
 
 The commands below assume the default bundle variable `app_name=model-lens`.
@@ -59,7 +61,9 @@ Treat permissions as identity-specific:
 - Deployer or platform operator, when adding app resources manually in the Databricks Apps UI:
   `Can manage` on the app and `Can manage` on the resource being attached, such as the SQL warehouse.
 - App service principal:
-  `CAN_USE` on the SQL warehouse; `CAN MANAGE RUN` on the refresh workflow; source data `USE CATALOG`, `USE SCHEMA`, `SELECT`; control plane `USE CATALOG`, `USE SCHEMA`, `SELECT`, `MODIFY`.
+  `CAN_USE` on the SQL warehouse; source data `USE CATALOG`, `USE SCHEMA`, `SELECT`; control plane `USE CATALOG`, `USE SCHEMA`, `SELECT`, `MODIFY`.
+- App service principal, if you want onboarding to accelerate the first run with `Run now`:
+  `CAN MANAGE RUN` on the shared refresh workflow.
 - App service principal, if Setup should create missing objects:
   `CREATE TABLE` in the control-plane schema; `CREATE SCHEMA` if the schema may not exist yet; `CREATE CATALOG` only if you intend to use the `Create catalog if missing` toggle.
 - Refresh workflow identity:
@@ -80,6 +84,19 @@ For `warehouse_only`, Model Lens expects:
 Optional but important when you do not want the default names:
 
 - `app_name`
+
+Large-table tuning knobs:
+
+- `REFRESH_SAMPLE_ROWS_PER_DAY`
+  default `50000`
+- `REFRESH_MAX_ROWS_PER_WINDOW`
+  default `250000`
+- `FEATURE_DETAIL_SAMPLE_ROWS_PER_DAY`
+  default `50000`
+- `FEATURE_DETAIL_MAX_ROWS`
+  default `200000`
+
+These are app and workflow environment variables, not bundle vars. They cap pandas-side window loads so one extremely large monitor does not force a full-table in-memory read.
 
 For `dev` or `prod`, Model Lens expects:
 
@@ -139,6 +156,8 @@ Expected result:
 - bundle validation succeeds
 - the wheel build succeeds and the bundle can resolve `../dist/*.whl` for the serverless workflow environment
 
+If you know the workspace will monitor very large or very wide inference tables, set the large-table caps deliberately before deploy rather than discovering OOM pressure during the first backfill. Lowering the caps is usually safer than immediately scaling compute.
+
 ## 3. Deploy The Bundle
 
 This section assumes the bundle is managing creation of the Databricks App resource.
@@ -185,6 +204,7 @@ Expected result:
 
 - the app `model-lens` is created
 - the workflow `<app-name>-refresh` is created, where `<app-name>` is `model-lens` unless you overrode `app_name`
+- the workflow is scheduled hourly by default and acts as the shared pickup path for newly saved monitors
 - `databricks apps start model-lens` brings the app compute into `ACTIVE`
 - after `databricks apps deploy`, the app source is deployed to compute
 - on CLI `v0.260.0`, the app resource only binds the SQL warehouse; Lakebase app reads are configured from the app session fields or app env overrides
@@ -204,13 +224,19 @@ databricks apps get model-lens -o json
 Then grant the app identity all of the following:
 
 - `CAN_USE` on the SQL warehouse used by Model Lens
-- `CAN MANAGE RUN` on the refresh workflow used by Model Lens
 - read access to the source data catalog/schema/tables
 - read/write access to the control-plane catalog/schema/tables
 - if Model Lens should create the control-plane tables itself, `CREATE TABLE` in the control-plane schema
 
 Treat the warehouse grant as a post-deploy check, not a one-time assumption. After every `databricks apps start model-lens` + `databricks apps deploy model-lens ...` cycle, verify the same app identity still has `CAN_USE` on the configured SQL warehouse and regrant it if the app shows warehouse-access errors.
-Do the same for `CAN MANAGE RUN` on the refresh workflow if the app is expected to trigger onboarding refreshes asynchronously.
+If you want the app to accelerate onboarding with `Run now`, also verify `CAN MANAGE RUN` on the refresh workflow. If that permission is unavailable, the shared hourly job still remains the default pickup path.
+
+For large-table customers, also verify that the deployed app and shared refresh workflow environment include the intended row-cap settings:
+
+- `REFRESH_SAMPLE_ROWS_PER_DAY`
+- `REFRESH_MAX_ROWS_PER_WINDOW`
+- `FEATURE_DETAIL_SAMPLE_ROWS_PER_DAY`
+- `FEATURE_DETAIL_MAX_ROWS`
 
 At a minimum, the app identity and the scheduled refresh job identity must be able to do this:
 
@@ -219,7 +245,7 @@ At a minimum, the app identity and the scheduled refresh job identity must be ab
 
 Additionally:
 
-- app identity: `CAN MANAGE RUN` on the refresh job
+- app identity: `CAN MANAGE RUN` on the refresh job only if the app should accelerate onboarding with `Run now`
 - refresh job Run as identity: the data and control-plane privileges above, because `Run now` uses the job owner's or Run as identity's privileges for the actual compute
 
 If you want Model Lens to initialize the control plane from the UI, the identity running setup also needs create privileges in that namespace.
@@ -297,6 +323,7 @@ In the app:
    - join validation with matched rows, unmatched rows, and duplicate label keys
    Discovery should prefer the shared string key if both tables expose one, accept ISO timestamp strings as timestamp/order candidates, and keep all detected numeric features selected by default.
    If the labels join shows `matched=0`, treat that as an error and fix the join column before continuing.
+   If your inference table already contains the true labels, leave `Optional Labels Table` blank and confirm the inferred `Label Column In Source` instead.
 4. Continue to the `Confirm` step. The core fields should already be inferred. Use:
    - `Display Name`: `Fraud Model Demo`
    - `Model Key`: `fraud_model_demo`
@@ -314,6 +341,9 @@ In the app:
    - `External Labels Join Column`: `entity_id`
    - `External Label Column`: `label`
    - `External Labels Order Column`: `label_timestamp`
+   If the same join column name exists in both inference and labels tables, `Entity ID Column` can be left blank and Model Lens will reuse the shared join column on the inference side.
+   Hyphenated feature or slice columns such as `us-central1` are supported and should not require renaming before onboarding.
+   If you are using labels from the inference table itself, keep `Optional Labels Table` empty and set `Label Column In Source` instead of the external-label fields.
 6. In the same `Advanced` section, confirm features:
    - `amount`
    - `velocity_7d`
@@ -325,9 +355,14 @@ In the app:
 Expected result:
 
 - the config is saved
+- the monitor is marked `pending bootstrap` in `monitor_runtime_state`
 - the app returns immediately instead of blocking on the refresh computation
-- the refresh job is triggered asynchronously
-- if the app cannot resolve the workflow from `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`, it warns that the monitor was saved but the workflow must be run manually
+- if the app has `CAN MANAGE RUN`, the shared refresh job is triggered asynchronously for bootstrap
+- if the app cannot resolve the workflow or lacks `Run now` permission, the monitor is still saved and the shared hourly job remains the default pickup path
+- inside the shared job, monitor refreshes can run concurrently, but only up to the configured `MAX_PARALLEL_REFRESH_WORKERS` cap and never with two scopes for the same model in one scheduler pass
+- each monitor scope is processed from one bounded projected source-range load, and the workflow derives the persisted window/history rows from the daily profile layer built for that range instead of re-querying every comparison window
+- on incremental runs, the workflow also reuses already-persisted daily profile facts for the affected date span before rewriting the touched window/history rows
+- the cadence you selected in the review step is stored with the monitor and can be edited later from the `Reference` page
 - the monitor appears in the app
 - after the workflow finishes, the new monitor appears on the overview page and the analysis pages can load it
 - the first refresh still backfills historical daily comparison windows immediately instead of writing only a single latest snapshot

@@ -10,11 +10,34 @@ def monitor_config_migration_columns() -> dict[str, str]:
         "model_id_value": "STRING",
         "model_version_value": "STRING",
         "labels_order_col": "STRING",
+        "drift_cadence_preset": "STRING",
+        "performance_cadence_preset": "STRING",
+        "schedule_enabled": "BOOLEAN",
         "mlflow_experiment_name": "STRING",
         "mlflow_experiment_id": "STRING",
         "mlflow_run_id": "STRING",
         "mlflow_registered_model_name": "STRING",
         "mlflow_model_version": "STRING",
+    }
+
+
+def refresh_run_migration_columns() -> dict[str, str]:
+    return {
+        "scope": "STRING",
+        "scheduled_at": "TIMESTAMP",
+        "range_start": "DATE",
+        "range_end": "DATE",
+        "rows_scanned": "BIGINT",
+        "label_rows_scanned": "BIGINT",
+    }
+
+
+def runtime_state_migration_columns() -> dict[str, str]:
+    return {
+        "last_run_started_at": "TIMESTAMP",
+        "last_run_completed_at": "TIMESTAMP",
+        "backoff_until": "TIMESTAMP",
+        "consecutive_failures": "INT",
     }
 
 
@@ -46,6 +69,9 @@ def ddl(table_names: TableNames) -> dict[str, str]:
                 labels_table STRING,
                 labels_join_col STRING,
                 labels_order_col STRING,
+                drift_cadence_preset STRING,
+                performance_cadence_preset STRING,
+                schedule_enabled BOOLEAN,
                 mlflow_experiment_name STRING,
                 mlflow_experiment_id STRING,
                 mlflow_run_id STRING,
@@ -106,6 +132,37 @@ def ddl(table_names: TableNames) -> dict[str, str]:
                 computed_at TIMESTAMP
             ) USING DELTA
         """.strip(),
+        "daily_quality_profiles": f"""
+            CREATE TABLE IF NOT EXISTS {table_names.daily_quality_profiles} (
+                model_key STRING,
+                profile_date DATE,
+                row_count BIGINT,
+                prediction_mean DOUBLE,
+                prediction_std DOUBLE,
+                null_rates STRING,
+                label_row_count BIGINT,
+                computed_at TIMESTAMP,
+                source_run_id STRING
+            ) USING DELTA
+        """.strip(),
+        "daily_feature_profiles": f"""
+            CREATE TABLE IF NOT EXISTS {table_names.daily_feature_profiles} (
+                model_key STRING,
+                profile_date DATE,
+                feature_name STRING,
+                feature_kind STRING,
+                row_count BIGINT,
+                non_null_count BIGINT,
+                null_pct DOUBLE,
+                mean DOUBLE,
+                std DOUBLE,
+                min_value DOUBLE,
+                max_value DOUBLE,
+                distribution_json STRING,
+                computed_at TIMESTAMP,
+                source_run_id STRING
+            ) USING DELTA
+        """.strip(),
         "performance_metrics": f"""
             CREATE TABLE IF NOT EXISTS {table_names.performance_metrics} (
                 model_key STRING,
@@ -120,6 +177,19 @@ def ddl(table_names: TableNames) -> dict[str, str]:
                 window_start DATE,
                 window_end DATE,
                 computed_at TIMESTAMP
+            ) USING DELTA
+        """.strip(),
+        "daily_performance_profiles": f"""
+            CREATE TABLE IF NOT EXISTS {table_names.daily_performance_profiles} (
+                model_key STRING,
+                profile_date DATE,
+                feature_name STRING,
+                bin_label STRING,
+                metric_name STRING,
+                metric_value DOUBLE,
+                row_count BIGINT,
+                computed_at TIMESTAMP,
+                source_run_id STRING
             ) USING DELTA
         """.strip(),
         "incidents": f"""
@@ -157,16 +227,22 @@ def ddl(table_names: TableNames) -> dict[str, str]:
                 model_key STRING,
                 requested_mode STRING,
                 run_kind STRING,
+                scope STRING,
                 status STRING,
                 started_at TIMESTAMP,
+                scheduled_at TIMESTAMP,
                 completed_at TIMESTAMP,
                 window_count INT,
                 data_min_date DATE,
                 data_max_date DATE,
+                range_start DATE,
+                range_end DATE,
                 drift_row_count BIGINT,
                 quality_row_count BIGINT,
                 performance_row_count BIGINT,
                 incident_row_count BIGINT,
+                rows_scanned BIGINT,
+                label_rows_scanned BIGINT,
                 error_message STRING
             ) USING DELTA
         """.strip(),
@@ -182,6 +258,23 @@ def ddl(table_names: TableNames) -> dict[str, str]:
                 baseline_kind STRING,
                 created_at TIMESTAMP,
                 source_run_id STRING
+            ) USING DELTA
+        """.strip(),
+        "monitor_runtime_state": f"""
+            CREATE TABLE IF NOT EXISTS {table_names.monitor_runtime_state} (
+                model_key STRING,
+                bootstrap_status STRING,
+                last_drift_refresh_at TIMESTAMP,
+                last_performance_refresh_at TIMESTAMP,
+                next_drift_due_at TIMESTAMP,
+                next_performance_due_at TIMESTAMP,
+                last_label_watermark STRING,
+                last_run_status STRING,
+                last_run_error STRING,
+                last_run_started_at TIMESTAMP,
+                last_run_completed_at TIMESTAMP,
+                backoff_until TIMESTAMP,
+                consecutive_failures INT
             ) USING DELTA
         """.strip(),
     }

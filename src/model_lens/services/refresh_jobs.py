@@ -47,7 +47,7 @@ def build_refresh_job_params(
     lakebase_instance_name: str = "",
     lakebase_database_name: str = "",
     lakebase_schema: str = "",
-    mode: str = "auto",
+    scope: str = "scheduler",
 ) -> list[str]:
     warehouse_id = _clean(settings.sql_warehouse_id)
     if not warehouse_id:
@@ -60,11 +60,11 @@ def build_refresh_job_params(
         _clean(control_plane_catalog),
         "--schema",
         _clean(control_plane_schema),
-        "--model-key",
-        _clean(model_key),
-        "--mode",
-        _clean(mode) or "auto",
+        "--scope",
+        _clean(scope) or "scheduler",
     ]
+    if _clean(model_key):
+        params.extend(["--model-key", _clean(model_key)])
 
     resolved_lakebase_schema = _clean(lakebase_schema) or _clean(settings.lakebase_schema)
     resolved_lakebase_instance = _clean(lakebase_instance_name)
@@ -140,7 +140,7 @@ def trigger_refresh_job(
     lakebase_instance_name: str = "",
     lakebase_database_name: str = "",
     lakebase_schema: str = "",
-    mode: str = "auto",
+    scope: str = "bootstrap",
     workspace_client=None,
 ) -> RefreshJobTrigger:
     client = workspace_client or _workspace_client()
@@ -152,7 +152,7 @@ def trigger_refresh_job(
         lakebase_instance_name=lakebase_instance_name,
         lakebase_database_name=lakebase_database_name,
         lakebase_schema=lakebase_schema,
-        mode=mode,
+        scope=scope,
     )
     waiter = client.jobs.run_now(
         job_id=job_id,

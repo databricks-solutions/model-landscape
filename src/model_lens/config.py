@@ -28,6 +28,15 @@ class Settings:
     lakebase_password: str = os.getenv("LAKEBASE_PASSWORD", os.getenv("PGPASSWORD", ""))
     lakebase_sslmode: str = os.getenv("LAKEBASE_SSLMODE", os.getenv("PGSSLMODE", "require"))
     lakebase_schema: str = os.getenv("LAKEBASE_SCHEMA", "model_lens_ui")
+    refresh_failure_backoff_minutes: int = int(os.getenv("REFRESH_FAILURE_BACKOFF_MINUTES", "30"))
+    max_bootstraps_per_run: int = int(os.getenv("MAX_BOOTSTRAPS_PER_RUN", "5"))
+    max_drift_monitors_per_run: int = int(os.getenv("MAX_DRIFT_MONITORS_PER_RUN", "20"))
+    max_performance_monitors_per_run: int = int(os.getenv("MAX_PERFORMANCE_MONITORS_PER_RUN", "20"))
+    max_parallel_refresh_workers: int = int(os.getenv("MAX_PARALLEL_REFRESH_WORKERS", "2"))
+    refresh_sample_rows_per_day: int = int(os.getenv("REFRESH_SAMPLE_ROWS_PER_DAY", "50000"))
+    refresh_max_rows_per_window: int = int(os.getenv("REFRESH_MAX_ROWS_PER_WINDOW", "250000"))
+    feature_detail_sample_rows_per_day: int = int(os.getenv("FEATURE_DETAIL_SAMPLE_ROWS_PER_DAY", "50000"))
+    feature_detail_max_rows: int = int(os.getenv("FEATURE_DETAIL_MAX_ROWS", "200000"))
     use_lakebase_read_model: bool = (
         _optional_bool("USE_LAKEBASE_READ_MODEL")
         if _optional_bool("USE_LAKEBASE_READ_MODEL") is not None

@@ -232,7 +232,18 @@ At this point, the generated `app.yaml` uses:
 - `SQL_WAREHOUSE_ID=<literal warehouse id>`
 - `REFRESH_JOB_NAME=<existing-app-name>-refresh`
 
-That means you can create the refresh workflow first and then later switch the app to `REFRESH_JOB_ID` if you want stricter wiring.
+If the app will monitor very large tables, set these environment variables in the generated `app.yaml` and shared refresh job before deploy:
+
+- `REFRESH_SAMPLE_ROWS_PER_DAY`
+- `REFRESH_MAX_ROWS_PER_WINDOW`
+- `FEATURE_DETAIL_SAMPLE_ROWS_PER_DAY`
+- `FEATURE_DETAIL_MAX_ROWS`
+- `MAX_PARALLEL_REFRESH_WORKERS`
+
+Defaults are safe for many customers, but lowering them is the first lever to pull when a workspace has exceptionally wide or high-volume tables.
+`MAX_PARALLEL_REFRESH_WORKERS` controls only monitor-level concurrency in the shared job. Leave it low unless the row caps are already known-safe for the tenant, because the scheduler will still run one scope per model at a time and each active worker still holds its own bounded pandas range in memory while deriving daily profiles and comparison-window history from that range.
+
+That means you can create the shared refresh workflow first and then later switch the app to `REFRESH_JOB_ID` if you want stricter wiring.
 
 ## Step 5: Upload The Prepared Source Tree To Workspace
 
@@ -284,6 +295,8 @@ databricks jobs create --json @/tmp/model-lens-existing-app/refresh-job.json
 Expected result:
 
 - a workflow named `<existing-app-name>-refresh` is created
+- it is scheduled hourly by default as the shared pickup path for saved monitors
+- it uses control-plane runtime state and cadence presets, so you do not need one Databricks workflow per model
 - the environment dependencies point at the wheel under `/Workspace/Users/<your-email>/model-lens-existing-app/dist/...`
 
 Then fetch the job ID:
@@ -625,7 +638,10 @@ From the app:
 Expected result:
 
 - the monitor saves immediately
-- the app reports that the refresh job was triggered
+- the monitor is marked `pending bootstrap` in the control plane
+- if the app has `CAN MANAGE RUN`, it reports that the shared refresh job was triggered
+- if it does not, the shared hourly job still remains the default pickup path
+- the cadence chosen during activation is stored with the monitor and can be edited later from the `Reference` page
 - the Overview page shows the monitor after the workflow finishes
 
 ## Troubleshooting
@@ -651,6 +667,8 @@ Check:
 - `REFRESH_JOB_ID` or `REFRESH_JOB_NAME` is set correctly
 - the app service principal has `CAN MANAGE RUN` on the refresh job
 - if using `REFRESH_JOB_NAME`, the configured value matches the real deployed workflow name for this app
+
+If `CAN MANAGE RUN` is intentionally unavailable, the app can still save the monitor and the shared hourly job can pick it up on its next run. In that operating mode, treat the missing `Run now` permission as lost acceleration, not lost functionality.
 
 ### The App Opens But Cannot Query The Warehouse
 

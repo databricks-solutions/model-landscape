@@ -71,6 +71,8 @@ def make_model_status_card(
     metric_label: str = "PSI",
     metric_key: str = "psi",
     computing: bool = False,
+    freshness_status: str = "fresh",
+    last_run_status: str = "",
 ):
     if computing:
         border = COLORS["cyan"]
@@ -116,6 +118,14 @@ def make_model_status_card(
 
     status, badge_color, border = get_drift_status(max_psi, metric_key)
     badges = [dbc.Badge(status, color=badge_color, className="mb-2")]
+    freshness_badges = {
+        "pending_bootstrap": dbc.Badge("Pending Bootstrap", color="secondary", className="ms-1 mb-2"),
+        "stale": dbc.Badge("Refresh Overdue", color="warning", className="ms-1 mb-2"),
+        "failed": dbc.Badge("Last Run Failed", color="danger", className="ms-1 mb-2"),
+        "manual": dbc.Badge("Manual Schedule", color="dark", className="ms-1 mb-2"),
+    }
+    if freshness_status in freshness_badges:
+        badges.append(freshness_badges[freshness_status])
     if has_labels:
         badges.append(
             dbc.Badge([html.I(className="fas fa-tag me-1"), "Labels"], color="info", className="ms-1 mb-2")
@@ -147,6 +157,10 @@ def make_model_status_card(
                 html.P(description, className="text-muted mb-2", style={"fontSize": "0.75rem"})
                 if description
                 else None,
+                html.Small(
+                    f"Last shared-job status: {last_run_status or 'not started'}",
+                    className="text-muted d-block mb-2",
+                ),
                 html.Hr(style={"borderColor": COLORS["grid"], "margin": "8px 0"}),
                 dbc.Row(
                     [
@@ -211,4 +225,3 @@ def make_wizard_step(step_num: int, label: str, current_step: int):
         ],
         className="d-flex flex-column align-items-center mx-2",
     )
-

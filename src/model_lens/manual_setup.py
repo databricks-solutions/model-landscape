@@ -124,6 +124,8 @@ def build_manual_refresh_job_payload(settings: ManualRefreshJobSettings) -> dict
 
     return {
         "name": f"{settings.app_name}-refresh",
+        "max_concurrent_runs": 1,
+        "queue": {"enabled": True},
         "tasks": [
             {
                 "task_key": "refresh_control_plane",
@@ -138,6 +140,11 @@ def build_manual_refresh_job_payload(settings: ManualRefreshJobSettings) -> dict
                 "timeout_seconds": 3600,
             }
         ],
+        "schedule": {
+            "quartz_cron_expression": "0 0 * * * ?",
+            "timezone_id": "UTC",
+            "pause_status": "UNPAUSED",
+        },
         "environments": [
             {
                 "environment_key": "refresh_runtime",

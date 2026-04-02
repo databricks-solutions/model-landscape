@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from model_lens.config import settings
-from model_lens.domain.models import MonitorConfig, MonitorDiscoveryResult
+from model_lens.domain.models import MonitorConfig, MonitorDiscoveryResult, MonitorRuntimeState
 from model_lens.services.control_plane import ControlPlaneRepository, build_repository
 from model_lens.services.monitor_discovery import MonitorDiscoveryService
 from model_lens.services.onboarding import baseline_label
@@ -23,6 +23,25 @@ def _safe_json_dict(value: object) -> dict:
     except (TypeError, json.JSONDecodeError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _safe_json_list(value: object) -> list[float]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, list):
+        return [float(item) for item in value]
+    try:
+        parsed = json.loads(str(value))
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    numeric: list[float] = []
+    for item in parsed:
+        series = pd.to_numeric(pd.Series([item]), errors="coerce").dropna()
+        if not series.empty:
+            numeric.append(float(series.iloc[0]))
+    return numeric
 
 
 def _safe_float(value: object) -> float:
@@ -50,6 +69,54 @@ def _null_rate_dict(value: object) -> dict[str, float]:
     return {key: float(parsed) for key, parsed in _safe_json_dict(value).items()}
 
 
+def _quality_history_from_daily_profiles(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return pd.DataFrame()
+    working = frame.copy()
+    working["profile_date_ts"] = pd.to_datetime(working["profile_date"], errors="coerce")
+    working["period"] = working["profile_date_ts"].dt.date.astype(str)
+    working["window_start"] = working["period"]
+    working["window_end"] = working["period"]
+    working["baseline_start"] = ""
+    working["baseline_end"] = ""
+    working["window_id"] = working["period"].apply(lambda value: f"daily_profile|{value}")
+    working["row_count"] = pd.to_numeric(working["row_count"], errors="coerce").fillna(0).astype(int)
+    working["prediction_mean"] = pd.to_numeric(working["prediction_mean"], errors="coerce").fillna(0.0)
+    working["prediction_std"] = pd.to_numeric(working["prediction_std"], errors="coerce").fillna(0.0)
+    working["null_rates_dict"] = working["null_rates"].apply(_null_rate_dict)
+    working["max_null_rate"] = working["null_rates_dict"].apply(
+        lambda values: max(values.values()) if values else 0.0
+    )
+    return working.sort_values("profile_date_ts").reset_index(drop=True)
+
+
+def _coerce_timestamp(value: object) -> pd.Timestamp | None:
+    if value in (None, "", pd.NaT):
+        return None
+    ts = pd.to_datetime(value, errors="coerce", utc=True)
+    if pd.isna(ts):
+        return None
+    return pd.Timestamp(ts)
+
+
+def _freshness_status(config: MonitorConfig, runtime_state: MonitorRuntimeState | None) -> str:
+    if runtime_state is None or runtime_state.bootstrap_status != "completed":
+        return "pending_bootstrap"
+    if runtime_state.last_run_status == "failed":
+        return "failed"
+    if not config.schedule_enabled:
+        return "manual"
+    now = pd.Timestamp.now(tz="UTC")
+    due_points = [
+        _coerce_timestamp(runtime_state.next_drift_due_at),
+        _coerce_timestamp(runtime_state.next_performance_due_at) if config.has_labels else None,
+    ]
+    active_due_points = [value for value in due_points if value is not None]
+    if active_due_points and min(active_due_points) <= now:
+        return "stale"
+    return "fresh"
+
+
 def _period_label(series: pd.Series, granularity: str) -> pd.Series:
     timestamps = pd.to_datetime(series, errors="coerce")
     if granularity == "monthly":
@@ -70,6 +137,11 @@ class DashboardBackend:
     def list_models(self) -> list[dict]:
         configs = self.repository.list_monitor_configs(status="active")
         summary = self.repository.get_monitor_summary()
+        runtime_states = (
+            self.repository.list_monitor_runtime_states([config.model_key for config in configs])
+            if hasattr(self.repository, "list_monitor_runtime_states")
+            else {}
+        )
         summary_map = {
             str(row["model_key"]): row
             for _, row in summary.iterrows()
@@ -77,6 +149,7 @@ class DashboardBackend:
         models: list[dict] = []
         for config in configs:
             row = summary_map.get(config.model_key, {})
+            runtime_state = runtime_states.get(config.model_key)
             versions = [config.model_version_value] if config.model_version_value else []
             description_parts = [config.source_table]
             if config.model_id_value:
@@ -98,6 +171,8 @@ class DashboardBackend:
                     "max_psi": _safe_float(row.get("max_psi", 0)),
                     "total_rows": _safe_int(row.get("total_rows", 0)),
                     "open_incident_count": _safe_int(row.get("open_incident_count", 0)),
+                    "freshness_status": _freshness_status(config, runtime_state),
+                    "last_run_status": (runtime_state.last_run_status if runtime_state else None) or "",
                 }
             )
         return models
@@ -105,8 +180,19 @@ class DashboardBackend:
     def get_model_map(self) -> dict[str, dict]:
         return {model["id"]: model for model in self.list_models()}
 
-    def get_monitor_config(self, model_id: str) -> MonitorConfig | None:
-        for config in self.repository.list_monitor_configs(status="active"):
+    def list_reference_models(self, status: str | None = "active") -> list[dict[str, str]]:
+        configs = self.repository.list_monitor_configs(status=status)
+        return [
+            {
+                "id": config.model_key,
+                "name": config.display_name,
+                "status": config.status,
+            }
+            for config in configs
+        ]
+
+    def get_monitor_config(self, model_id: str, status: str | list[str] | tuple[str, ...] | None = "active") -> MonitorConfig | None:
+        for config in self.repository.list_monitor_configs(status=status):
             if config.model_key == model_id:
                 return config
         return None
@@ -259,7 +345,19 @@ class DashboardBackend:
             (model_id,),
         )
         if frame.empty:
-            return pd.DataFrame()
+            daily_quality_profiles = getattr(self.repository.table_names, "daily_quality_profiles", "")
+            if not daily_quality_profiles:
+                return pd.DataFrame()
+            daily_frame = self._warehouse.query_params(
+                f"""
+                SELECT *
+                FROM {daily_quality_profiles}
+                WHERE model_key = %s
+                ORDER BY profile_date
+                """,
+                (model_id,),
+            )
+            return _quality_history_from_daily_profiles(daily_frame)
         working = frame.copy()
         working["window_end_ts"] = pd.to_datetime(working["window_end"], errors="coerce")
         working["period"] = working["window_end_ts"].dt.date.astype(str)
@@ -320,6 +418,8 @@ class DashboardBackend:
                     "max_null_rate": max_null,
                     "has_labels": model["has_labels"],
                     "computing": drift.empty,
+                    "freshness_status": model["freshness_status"],
+                    "last_run_status": model["last_run_status"],
                 }
             )
         return rows
@@ -336,16 +436,110 @@ class DashboardBackend:
             return []
         return list(config.contract.slice_columns)
 
-    def _load_baseline_current(self, model_id: str) -> tuple[MonitorConfig | None, pd.DataFrame, pd.DataFrame]:
+    def _load_baseline_current(
+        self,
+        model_id: str,
+        *,
+        feature_columns: tuple[str, ...] | None = None,
+    ) -> tuple[MonitorConfig | None, pd.DataFrame, pd.DataFrame]:
         config = self.get_monitor_config(model_id)
         if not config:
             return None, pd.DataFrame(), pd.DataFrame()
-        frame = self.repository.load_monitor_frame(config)
+        drift = self.get_drift_results(model_id)
+        if drift.empty or "window_end" not in drift.columns or "baseline_start" not in drift.columns:
+            return config, pd.DataFrame(), pd.DataFrame()
+        latest = drift.sort_values("window_end").iloc[-1]
+        start_date = str(latest.get("baseline_start") or "")
+        end_date = str(latest.get("window_end") or "")
+        try:
+            frame = self.repository.load_monitor_frame(
+                config,
+                start_date=start_date or None,
+                end_date=end_date or None,
+                feature_columns=feature_columns or config.contract.feature_columns,
+                sample_rows_per_day=settings.feature_detail_sample_rows_per_day,
+                max_total_rows=settings.feature_detail_max_rows,
+            )
+        except TypeError:
+            try:
+                frame = self.repository.load_monitor_frame(
+                    config,
+                    start_date=start_date or None,
+                    end_date=end_date or None,
+                    feature_columns=feature_columns or config.contract.feature_columns,
+                    max_total_rows=settings.feature_detail_max_rows,
+                )
+            except TypeError:
+                frame = self.repository.load_monitor_frame(config)
         baseline, current = split_baseline_current(frame, config.contract.timestamp_col, config.baseline)
         return config, baseline, current
 
+    def _latest_window_bounds(self, model_id: str) -> dict[str, str] | None:
+        comparison_windows = getattr(self.repository.table_names, "comparison_windows", "")
+        if not comparison_windows:
+            return None
+        frame = self._warehouse.query_params(
+            f"""
+            SELECT baseline_start, baseline_end, window_start, window_end
+            FROM {comparison_windows}
+            WHERE model_key = %s
+            ORDER BY window_end DESC, created_at DESC
+            LIMIT 1
+            """,
+            (model_id,),
+        )
+        if frame.empty:
+            return None
+        row = frame.iloc[0]
+        return {
+            "baseline_start": str(row.get("baseline_start") or ""),
+            "baseline_end": str(row.get("baseline_end") or ""),
+            "window_start": str(row.get("window_start") or ""),
+            "window_end": str(row.get("window_end") or ""),
+        }
+
+    def _feature_samples_from_daily_profiles(self, model_id: str, feature: str) -> tuple[pd.Series, pd.Series]:
+        daily_feature_profiles = getattr(self.repository.table_names, "daily_feature_profiles", "")
+        if not daily_feature_profiles:
+            return pd.Series(dtype=float), pd.Series(dtype=float)
+        bounds = self._latest_window_bounds(model_id)
+        if not bounds:
+            return pd.Series(dtype=float), pd.Series(dtype=float)
+        frame = self._warehouse.query_params(
+            f"""
+            SELECT profile_date, distribution_json
+            FROM {daily_feature_profiles}
+            WHERE model_key = %s AND feature_name = %s
+            ORDER BY profile_date
+            """,
+            (model_id, feature),
+        )
+        if frame.empty:
+            return pd.Series(dtype=float), pd.Series(dtype=float)
+
+        baseline_values: list[float] = []
+        current_values: list[float] = []
+        baseline_start = bounds["baseline_start"]
+        baseline_end = bounds["baseline_end"]
+        window_start = bounds["window_start"]
+        window_end = bounds["window_end"]
+        for _, row in frame.iterrows():
+            profile_date = str(row.get("profile_date") or "")
+            payload = _safe_json_dict(row.get("distribution_json"))
+            sample_values = _safe_json_list(payload.get("sample_values"))
+            if not sample_values:
+                continue
+            if baseline_start <= profile_date <= baseline_end:
+                baseline_values.extend(sample_values)
+            elif window_start <= profile_date <= window_end:
+                current_values.extend(sample_values)
+        return pd.Series(baseline_values, dtype=float), pd.Series(current_values, dtype=float)
+
     def get_feature_distribution(self, model_id: str, feature: str) -> tuple[pd.Series, pd.Series]:
-        config, baseline, current = self._load_baseline_current(model_id)
+        baseline_samples, current_samples = self._feature_samples_from_daily_profiles(model_id, feature)
+        if not baseline_samples.empty and not current_samples.empty:
+            return baseline_samples, current_samples
+        config, baseline, current = self._load_baseline_current(model_id, feature_columns=(feature,))
         if not config or feature not in baseline.columns or feature not in current.columns:
             return pd.Series(dtype=float), pd.Series(dtype=float)
         return (
@@ -354,7 +548,7 @@ class DashboardBackend:
         )
 
     def get_dimension_breakdown(self, model_id: str, feature: str, dimension: str) -> pd.DataFrame:
-        config, _, current = self._load_baseline_current(model_id)
+        config, _, current = self._load_baseline_current(model_id, feature_columns=(feature, dimension))
         if not config or feature not in current.columns or dimension not in current.columns:
             return pd.DataFrame()
         working = current[[dimension, feature]].copy()
@@ -456,12 +650,20 @@ class DashboardBackend:
         }
 
     def get_reference_data(self, model_id: str) -> dict:
-        config = self.get_monitor_config(model_id)
+        config = self.get_monitor_config(model_id, status=None)
         summary = self.repository.get_monitor_summary()
         summary_row = summary[summary["model_key"] == model_id]
+        runtime_state = self.repository.get_monitor_runtime_state(model_id) if hasattr(self.repository, "get_monitor_runtime_state") else None
         return {
             "config": config,
+            "status": config.status if config else "",
             "summary": summary_row.iloc[0].to_dict() if not summary_row.empty else {},
+            "runtime_state": runtime_state.__dict__ if runtime_state else {},
+            "recent_runs": (
+                self.repository.get_recent_refresh_runs(model_id, limit=8)
+                if hasattr(self.repository, "get_recent_refresh_runs")
+                else []
+            ),
             "settings": {
                 "app_title": settings.app_title,
                 "control_plane_catalog": self.repository.table_names.catalog,

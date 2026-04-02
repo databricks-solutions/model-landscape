@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+from sklearn.metrics import accuracy_score, f1_score, mean_absolute_error, mean_squared_error, precision_score, recall_score
 
 
 def compute_bin_edges(values: np.ndarray, n_bins: int = 10) -> np.ndarray:
@@ -27,6 +27,22 @@ def compute_classification_metrics(df: pd.DataFrame, prediction_col: str, label_
     }
 
 
+def compute_regression_metrics(df: pd.DataFrame, prediction_col: str, label_col: str) -> dict[str, float]:
+    pred = pd.to_numeric(df[prediction_col], errors="coerce").to_numpy()
+    truth = pd.to_numeric(df[label_col], errors="coerce").to_numpy()
+    mask = ~(np.isnan(pred) | np.isnan(truth))
+    pred = pred[mask]
+    truth = truth[mask]
+    if len(pred) == 0:
+        return {}
+    rmse = float(np.sqrt(mean_squared_error(truth, pred)))
+    mae = float(mean_absolute_error(truth, pred))
+    return {
+        "rmse": round(rmse, 4),
+        "mae": round(mae, 4),
+    }
+
+
 def _numeric_array(series: pd.Series) -> np.ndarray:
     if pd.api.types.is_numeric_dtype(series):
         return series.to_numpy(dtype=float, copy=False)
@@ -40,8 +56,11 @@ def rank_degradation_contributors(
     prediction_col: str,
     label_col: str,
     n_bins: int = 10,
+    problem_type: str = "classification",
 ) -> pd.DataFrame:
     rows: list[dict] = []
+    normalized_problem_type = (problem_type or "classification").strip().lower()
+    regression_mode = normalized_problem_type == "regression"
     for feature in feature_columns:
         if feature not in baseline_df.columns or feature not in current_df.columns:
             continue
@@ -59,22 +78,37 @@ def rank_degradation_contributors(
             cur_slice = current_df.iloc[np.where(cur_bins == index)[0]]
             if base_slice.empty or cur_slice.empty:
                 continue
-            base_metrics = compute_classification_metrics(base_slice, prediction_col, label_col)
-            cur_metrics = compute_classification_metrics(cur_slice, prediction_col, label_col)
+            if regression_mode:
+                base_metrics = compute_regression_metrics(base_slice, prediction_col, label_col)
+                cur_metrics = compute_regression_metrics(cur_slice, prediction_col, label_col)
+            else:
+                base_metrics = compute_classification_metrics(base_slice, prediction_col, label_col)
+                cur_metrics = compute_classification_metrics(cur_slice, prediction_col, label_col)
             if not base_metrics or not cur_metrics:
                 continue
-            delta = cur_metrics["f1"] - base_metrics["f1"]
             volume_pct = round(float(len(cur_slice) / total_current * 100), 2)
-            rows.append({
-                "feature_name": feature,
-                "bin_label": f"[{edges[index]:.4g}, {edges[index + 1]:.4g})",
-                "baseline_metric": base_metrics["f1"],
-                "current_metric": cur_metrics["f1"],
-                "delta": round(delta, 4),
-                "volume_pct": volume_pct,
-                "contribution": round(delta * volume_pct / 100, 4),
-            })
+            metric_names = ("rmse", "mae") if regression_mode else ("f1",)
+            for metric_name in metric_names:
+                if metric_name not in base_metrics or metric_name not in cur_metrics:
+                    continue
+                baseline_metric = base_metrics[metric_name]
+                current_metric = cur_metrics[metric_name]
+                delta = (
+                    baseline_metric - current_metric
+                    if regression_mode
+                    else current_metric - baseline_metric
+                )
+                rows.append({
+                    "feature_name": feature,
+                    "bin_label": f"[{edges[index]:.4g}, {edges[index + 1]:.4g})",
+                    "baseline_metric": baseline_metric,
+                    "current_metric": current_metric,
+                    "delta": round(delta, 4),
+                    "volume_pct": volume_pct,
+                    "contribution": round(delta * volume_pct / 100, 4),
+                    "metric_name": metric_name,
+                })
     frame = pd.DataFrame(rows)
     if frame.empty:
         return frame
-    return frame.sort_values("contribution")
+    return frame.sort_values(["metric_name", "contribution"])

@@ -258,6 +258,19 @@ The frontend should remain thin:
 - move from implicit logical keys to explicit `window_id`
 - capture provenance, run kind, status, and repair/backfill lineage
 
+### Phase 4: Shared-Job Scheduler And Runtime State
+
+- keep one shared refresh workflow as the default deployment contract
+- add per-monitor cadence presets to `monitor_configs`
+- add `monitor_runtime_state` for:
+  - `bootstrap_status`
+  - last drift/performance refresh timestamps
+  - next due timestamps
+  - latest label watermark
+  - latest run status/error
+- treat app-side `Run now` as optional acceleration only
+- let the shared hourly workflow pick up pending bootstraps and overdue monitors even when the app cannot trigger runs directly
+
 ### Phase 4: Repository / Backend Queries
 
 - query persisted history directly
@@ -270,7 +283,17 @@ The frontend should remain thin:
 - keep incremental refresh continuity by seeding the first new window from the repository’s current open incidents
 - leave richer incident readback and UI surfaces as the next follow-up
 
-### Phase 6: Operationalization
+### Phase 6: Daily Profile Foundations
+
+- persist `daily_quality_profiles`
+- persist `daily_feature_profiles`
+- persist `daily_performance_profiles`
+- use bounded range reads and the shared refresh job to materialize those facts without requiring a full-table pandas load
+- derive the persisted comparison-window tables from that per-run daily-profile layer so refresh no longer reloads every logical window from the warehouse
+- on incremental runs, merge already-persisted daily facts for the affected date span so derivation can reuse prior history instead of depending entirely on the current bounded load
+- keep the current window tables as the stable UI/read contract
+
+### Phase 7: Operationalization
 
 - add a `--mode` argument to the refresh workflow entry point
 - default scheduled jobs to `auto`
@@ -284,5 +307,5 @@ The frontend should remain thin:
 3. Performance pages render stable windows as healthy/stable, not blank.
 4. The first refresh can be rerun idempotently without duplicating historical rows.
 5. Scheduled refreshes append new windows instead of recomputing full history unnecessarily.
-6. The first implementation can ship without a schema migration to new history tables.
-7. A later provenance hardening pass can be added without breaking existing multi-window reads.
+6. Daily profile facts exist and are already used inside refresh to derive the persisted window/history tables, even though the UI still reads the stable window/history tables.
+7. The first implementation can ship without forcing a frontend rewrite for those daily facts.

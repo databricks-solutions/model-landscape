@@ -12,9 +12,15 @@ from dash import Input, Output, State, dcc, html, ctx, no_update
 
 from model_lens.backend import DashboardBackend, build_dashboard_backend
 from model_lens.config import settings
-from model_lens.domain.models import MLflowLineage, MonitorConfig
+from model_lens.domain.models import (
+    DRIFT_CADENCE_PRESETS,
+    MLflowLineage,
+    MonitorConfig,
+    MonitorRuntimeState,
+    PERFORMANCE_CADENCE_PRESETS,
+)
 from model_lens.pages import onboarding
-from model_lens.services.contracts import build_contract
+from model_lens.services.inference_contracts import build_inference_contract
 from model_lens.services.onboarding import baseline_label, build_default_baseline, build_fixed_baseline
 from model_lens.services.refresh_jobs import trigger_refresh_job
 from model_lens.ui import charts
@@ -73,6 +79,15 @@ def _comparison_history_message(window_count: int, granularity: str = "daily") -
     )
 
 
+def _default_performance_metric(model_id: str | None, backend: DashboardBackend) -> str:
+    if not model_id:
+        return "f1"
+    config = backend.get_monitor_config(model_id)
+    if config and config.problem_type == "regression":
+        return "rmse"
+    return "f1"
+
+
 def _render_frame(frame: pd.DataFrame, empty_message: str, max_rows: int = 20) -> html.Div:
     if frame is None or frame.empty:
         return html.Div(empty_message, className="text-muted")
@@ -119,7 +134,7 @@ def _guess_column(columns: list[str], patterns: tuple[str, ...], *, fallback_fir
 
 def _guess_defaults(table_name: str, columns: list[str]) -> dict:
     timestamp_col = _guess_column(columns, ("event_ts", "timestamp", "datetime", "date", "time", "_ts"))
-    model_id_col = _guess_column(columns, ("model_id", "model", "model_name"))
+    model_id_col = _guess_column(columns, ("model_id", "model", "model_name"), fallback_first=False)
     prediction_col = _guess_column(columns, ("prediction", "score", "probability", "prob"))
     model_version_col = _guess_column(columns, ("model_version", "version"), fallback_first=False)
     prediction_score_col = _guess_column(columns, ("prediction_proba", "prediction_score", "probability", "score"), fallback_first=False)
@@ -225,6 +240,21 @@ def _selected_model_from_search(search: str | None) -> str | None:
     return selected or None
 
 
+def _resolve_reference_model_id(global_model_id: str | None, reference_model_id: str | None) -> str | None:
+    selected = str(reference_model_id or "").strip()
+    if selected:
+        return selected
+    selected = str(global_model_id or "").strip()
+    return selected or None
+
+
+def _get_monitor_config_for_reference(backend: DashboardBackend, model_id: str) -> MonitorConfig | None:
+    try:
+        return backend.get_monitor_config(model_id, status=None)
+    except TypeError:
+        return backend.get_monitor_config(model_id)
+
+
 def _make_backend(session_data: dict | None) -> DashboardBackend:
     session = _session_config(session_data)
     return build_dashboard_backend(
@@ -254,6 +284,19 @@ def _step_style(is_active: bool) -> dict:
     return {} if is_active else {"display": "none"}
 
 
+def _source_labels_join_col(scan_data: dict | None, entity_id_col: str | None, labels_join_col: str | None) -> str | None:
+    if not isinstance(scan_data, dict):
+        return None
+    columns = {str(column).strip() for column in scan_data.get("columns", []) if str(column).strip()}
+    shared_join_col = (labels_join_col or "").strip()
+    if shared_join_col and shared_join_col in columns:
+        return shared_join_col
+    entity_join_col = (entity_id_col or "").strip()
+    if entity_join_col and entity_join_col in columns:
+        return entity_join_col
+    return None
+
+
 def _monitor_contract_ready(
     *,
     scan_data: dict | None,
@@ -262,6 +305,7 @@ def _monitor_contract_ready(
     timestamp_col: str | None,
     model_id_col: str | None,
     prediction_col: str | None,
+    model_id_value: str | None = None,
     model_version_col: str | None,
     model_version_value: str | None,
     entity_id_col: str | None,
@@ -282,11 +326,12 @@ def _monitor_contract_ready(
             (display_name or "").strip(),
             (model_key or "").strip(),
             timestamp_col,
-            model_id_col,
             prediction_col,
             feature_columns,
         ]
     ):
+        return False
+    if (model_id_value or "").strip() and not model_id_col:
         return False
     try:
         if (baseline_kind or "rolling") == "fixed":
@@ -298,7 +343,11 @@ def _monitor_contract_ready(
     if (model_version_value or "").strip() and not model_version_col:
         return False
     if (labels_table or "").strip():
-        return bool(entity_id_col and (labels_join_col or "").strip() and ((external_label_col or "").strip() or source_label_col))
+        return bool(
+            _source_labels_join_col(scan_data, entity_id_col, labels_join_col)
+            and (labels_join_col or "").strip()
+            and ((external_label_col or "").strip() or source_label_col)
+        )
     return True
 
 
@@ -309,6 +358,7 @@ def _review_summary(
     source_table: str | None,
     display_name: str | None,
     model_key: str | None,
+    model_id_col: str | None,
     feature_columns: list[str] | None,
     categorical_columns: list[str] | None,
     slice_columns: list[str] | None,
@@ -322,15 +372,21 @@ def _review_summary(
     baseline_start: str | None,
     baseline_end: str | None,
     problem_type: str | None,
+    drift_cadence_preset: str | None,
+    performance_cadence_preset: str | None,
+    schedule_enabled: bool,
     lakebase_instance_name: str | None,
     lakebase_database_name: str | None,
     mlflow_experiment_name: str | None,
     mlflow_registered_model_name: str | None,
 ) -> html.Div:
-    label_source = (labels_table or "").strip() if (labels_table or "").strip() else ((source_label_col or "").strip() or "none")
+    label_source = str(labels_table or "").strip() if str(labels_table or "").strip() else (str(source_label_col or "").strip() or "none")
+    problem_type_text = str(problem_type or "classification").strip() or "classification"
+    drift_cadence_text = str(drift_cadence_preset or "6h").strip() or "6h"
+    performance_cadence_text = str(performance_cadence_preset or "disabled").strip() or "disabled"
     baseline_policy = (
-        build_fixed_baseline((baseline_start or "").strip(), (baseline_end or "").strip())
-        if (baseline_kind or "rolling") == "fixed" and (baseline_start or "").strip() and (baseline_end or "").strip()
+        build_fixed_baseline(str(baseline_start or "").strip(), str(baseline_end or "").strip())
+        if str(baseline_kind or "rolling").strip() == "fixed" and str(baseline_start or "").strip() and str(baseline_end or "").strip()
         else build_default_baseline(int(baseline_days or 7))
     )
     rows = [
@@ -338,12 +394,19 @@ def _review_summary(
         ("Source Table", (source_table or "").strip() or "Not scanned yet"),
         ("Display Name", (display_name or "").strip() or "Not set"),
         ("Model Key", (model_key or "").strip() or "Not set"),
-        ("Problem Type", (problem_type or "classification").title()),
+        ("Problem Type", problem_type_text.title()),
         ("Baseline Policy", baseline_label(baseline_policy)),
+        ("Scheduled Refreshes", "Enabled" if schedule_enabled else "Manual only"),
+        ("Drift Cadence", drift_cadence_text),
+        ("Performance Cadence", performance_cadence_text),
         ("Feature Columns", str(len(feature_columns or []))),
         ("Categorical Columns", str(len(categorical_columns or []))),
         ("Slice Columns", str(len(slice_columns or []))),
-        ("Model Scope", (model_id_value or "").strip() or "All model_id values"),
+        (
+            "Model Scope",
+            (model_id_value or "").strip()
+            or ("Table-scoped monitor" if not str(model_id_col or "").strip() else "All model_id values"),
+        ),
         ("Version Scope", (model_version_value or "").strip() or "All versions"),
         ("Labels", label_source),
         (
@@ -538,6 +601,9 @@ def register_callbacks(app) -> None:
         Input("baseline-days-input", "value"),
         Input("baseline-fixed-range-input", "start_date"),
         Input("baseline-fixed-range-input", "end_date"),
+        Input("review-drift-cadence-select", "value"),
+        Input("review-performance-cadence-select", "value"),
+        Input("review-schedule-enabled-toggle", "value"),
         Input("mlflow-experiment-input", "value"),
         Input("mlflow-registered-model-input", "value"),
         Input("lakebase-instance-input", "value"),
@@ -572,6 +638,9 @@ def register_callbacks(app) -> None:
         baseline_days,
         baseline_start,
         baseline_end,
+        review_drift_cadence,
+        review_performance_cadence,
+        review_schedule_enabled,
         mlflow_experiment_name,
         mlflow_registered_model_name,
         lakebase_instance_name,
@@ -595,6 +664,7 @@ def register_callbacks(app) -> None:
             timestamp_col=timestamp_col,
             model_id_col=model_id_col,
             prediction_col=prediction_col,
+            model_id_value=model_id_value,
             model_version_col=model_version_col,
             model_version_value=model_version_value,
             entity_id_col=entity_id_col,
@@ -628,7 +698,7 @@ def register_callbacks(app) -> None:
                 "success" if contract_ready else "secondary",
             ),
             4: (
-                "Activate the monitor. Model Lens saves the config and triggers the refresh workflow asynchronously.",
+                "Activate the monitor. Model Lens saves the config, marks bootstrap pending, and asks the shared refresh workflow to pick it up.",
                 "primary",
             ),
         }
@@ -644,6 +714,7 @@ def register_callbacks(app) -> None:
             source_table=(scan_data or {}).get("table_name") or source_table,
             display_name=display_name,
             model_key=model_key,
+            model_id_col=model_id_col,
             feature_columns=feature_columns,
             categorical_columns=categorical_columns,
             slice_columns=slice_columns,
@@ -657,6 +728,9 @@ def register_callbacks(app) -> None:
             baseline_start=baseline_start,
             baseline_end=baseline_end,
             problem_type=problem_type,
+            drift_cadence_preset=review_drift_cadence,
+            performance_cadence_preset=review_performance_cadence,
+            schedule_enabled="enabled" in (review_schedule_enabled or []),
             lakebase_instance_name=lakebase_instance_name,
             lakebase_database_name=lakebase_database_name,
             mlflow_experiment_name=mlflow_experiment_name,
@@ -708,6 +782,37 @@ def register_callbacks(app) -> None:
         if requested in values:
             return options, requested
         return options, current_value if current_value in values else options[0]["value"]
+
+    @app.callback(
+        Output("reference-monitor-select", "options"),
+        Output("reference-monitor-select", "value"),
+        Input("url", "pathname"),
+        Input("reference-monitor-status-filter", "value"),
+        Input("reload-token", "data"),
+        Input("session-config-store", "data"),
+        State("global-model-select", "value"),
+        State("reference-monitor-select", "value"),
+    )
+    def populate_reference_model_selector(pathname, status_filter, _, session_data, global_model_id, current_value):
+        if pathname != "/reference":
+            return no_update, no_update
+        backend = _make_backend(session_data)
+        models = backend.list_reference_models(status=status_filter or "active")
+        options = [
+            {
+                "label": f"{model['name']} ({'Archived' if model['status'] == 'inactive' else 'Active'})",
+                "value": model["id"],
+            }
+            for model in models
+        ]
+        if not options:
+            return [], None
+        values = {option["value"] for option in options}
+        if current_value in values:
+            return options, current_value
+        if global_model_id in values:
+            return options, global_model_id
+        return options, options[0]["value"]
 
     @app.callback(
         Output("sidebar-status", "children"),
@@ -803,7 +908,7 @@ def register_callbacks(app) -> None:
                 "display_name": discovery.config.display_name,
                 "model_key": discovery.config.model_key,
                 "timestamp_col": discovery.config.contract.timestamp_col,
-                "model_id_col": discovery.config.contract.model_id_col,
+                "model_id_col": discovery.config.contract.model_id_col or "",
                 "prediction_col": discovery.config.contract.prediction_col,
                 "model_id_value": discovery.config.model_id_value or "",
                 "model_version_col": discovery.config.contract.model_version_col or "",
@@ -863,6 +968,13 @@ def register_callbacks(app) -> None:
                         "danger" if inference_rows > 0 and matched_rows == 0 else "info",
                     )
                 )
+        elif discovery.config.contract.label_col:
+            status_items.append(
+                (
+                    f"Detected source labels in the inference table via {discovery.config.contract.label_col}.",
+                    "info",
+                )
+            )
         if discovery.config.mlflow.connected:
             status_items.append(
                 (
@@ -995,7 +1107,7 @@ def register_callbacks(app) -> None:
             defaults["model_key"],
             required_options,
             defaults["timestamp_col"],
-            required_options,
+            optional_options,
             defaults["model_id_col"],
             required_options,
             defaults["prediction_col"],
@@ -1189,6 +1301,9 @@ def register_callbacks(app) -> None:
         State("baseline-days-input", "value"),
         State("baseline-fixed-range-input", "start_date"),
         State("baseline-fixed-range-input", "end_date"),
+        State("review-drift-cadence-select", "value"),
+        State("review-performance-cadence-select", "value"),
+        State("review-schedule-enabled-toggle", "value"),
         State("control-plane-catalog-input", "value"),
         State("control-plane-schema-input", "value"),
         State("lakebase-instance-input", "value"),
@@ -1223,6 +1338,9 @@ def register_callbacks(app) -> None:
         baseline_days,
         baseline_start,
         baseline_end,
+        review_drift_cadence,
+        review_performance_cadence,
+        review_schedule_enabled,
         control_plane_catalog,
         control_plane_schema,
         lakebase_instance_name,
@@ -1251,18 +1369,19 @@ def register_callbacks(app) -> None:
         if not _ready_for_session(ready_state, session):
             return _status_alert("Run Setup Control Plane successfully before saving a monitor.", "warning"), no_update, no_update
         label_col = external_label_col or source_label_col or None
-        if labels_table and (not entity_id_col or not labels_join_col or not label_col):
+        source_join_col = _source_labels_join_col(scan_data, entity_id_col, labels_join_col)
+        if labels_table and (not source_join_col or not labels_join_col or not label_col):
             return _status_alert(
-                "External labels require Entity ID Column, External Labels Join Column, and External Label Column.",
+                "External labels require External Labels Join Column, External Label Column, and either Entity ID Column or the same join column name in the inference table.",
                 "warning",
             ), no_update, no_update
         if model_version_value and not model_version_col:
             return _status_alert("Monitored Model Version Value requires a mapped Model Version Column.", "warning"), no_update, no_update
         try:
-            contract = build_contract(
+            contract = build_inference_contract(
                 columns=scan_data["columns"],
                 timestamp_col=timestamp_col,
-                model_id_col=model_id_col,
+                model_id_col=(model_id_col or "").strip() or None,
                 prediction_col=prediction_col,
                 model_version_col=model_version_col or None,
                 prediction_score_col=prediction_score_col or None,
@@ -1288,6 +1407,13 @@ def register_callbacks(app) -> None:
                 labels_table=labels_table or None,
                 labels_join_col=labels_join_col or None,
                 labels_order_col=labels_order_col or None,
+                drift_cadence_preset=review_drift_cadence or "6h",
+                performance_cadence_preset=(
+                    review_performance_cadence
+                    if label_col
+                    else "disabled"
+                ),
+                schedule_enabled="enabled" in (review_schedule_enabled or []),
                 mlflow=MLflowLineage(
                     experiment_name=str(((discovery.get("mlflow") or {}).get("experiment_name") or "")).strip() or None,
                     experiment_id=str(((discovery.get("mlflow") or {}).get("experiment_id") or "")).strip() or None,
@@ -1300,6 +1426,7 @@ def register_callbacks(app) -> None:
             backend = _make_backend(session)
             backend.repository.validate_monitor_source(config)
             backend.repository.upsert_monitor_config(config)
+            backend.repository.mark_monitor_bootstrap_pending(config)
         except Exception as error:
             return _status_alert(f"Save failed: {error}", "danger"), no_update, no_update
         messages: list[tuple[str, str]] = []
@@ -1311,7 +1438,7 @@ def register_callbacks(app) -> None:
                 lakebase_instance_name=session["lakebase_instance_name"],
                 lakebase_database_name=session["lakebase_database_name"],
                 lakebase_schema=session["lakebase_schema"],
-                mode="auto",
+                scope="bootstrap",
             )
             run_id_text = f", run_id={trigger.run_id}" if trigger.run_id is not None else ""
             messages.append((
@@ -1321,9 +1448,9 @@ def register_callbacks(app) -> None:
         except Exception as error:
             messages.append((
                 "Saved monitor "
-                f"{config.model_key}, but the refresh job could not be triggered automatically: {error}. "
-                "Run the refresh workflow manually after fixing the job configuration or permissions.",
-                "warning",
+                f"{config.model_key}. Initial refresh is pending on the shared refresh job; automatic trigger was unavailable: {error}. "
+                "The hourly scheduler will pick it up, or you can run the shared refresh workflow manually.",
+                "success",
             ))
         non_numeric = _non_numeric_features(feature_columns or [], scan_data)
         if non_numeric:
@@ -1376,6 +1503,8 @@ def register_callbacks(app) -> None:
                         max_null_rate=row["max_null_rate"],
                         has_labels=row["has_labels"],
                         computing=row["computing"],
+                        freshness_status=row["freshness_status"],
+                        last_run_status=row["last_run_status"],
                     ),
                     href=f"/drift?model={row['model_id']}",
                     style={"textDecoration": "none"},
@@ -1578,6 +1707,28 @@ def register_callbacks(app) -> None:
         )
 
     @app.callback(
+        Output("perf-metric-select", "options"),
+        Output("perf-metric-select", "value"),
+        Input("global-model-select", "value"),
+        Input("session-config-store", "data"),
+        State("perf-metric-select", "value"),
+    )
+    def sync_performance_metric_options(model_id, session_data, current_metric):
+        backend = _make_backend(session_data)
+        default_metric = _default_performance_metric(model_id, backend)
+        options = (
+            [
+                {"label": "RMSE", "value": "rmse"},
+                {"label": "MAE", "value": "mae"},
+            ]
+            if default_metric == "rmse"
+            else [{"label": "F1 Score", "value": "f1"}]
+        )
+        valid_values = {option["value"] for option in options}
+        value = current_metric if current_metric in valid_values else default_metric
+        return options, value
+
+    @app.callback(
         Output("perf-labels-alert", "children"),
         Output("perf-kpi-cards", "children"),
         Output("perf-timeline-container", "children"),
@@ -1610,7 +1761,8 @@ def register_callbacks(app) -> None:
                 None,
                 html.Div(),
             )
-        performance = backend.get_performance_summary(model_id, metric_name=metric_name or "f1")
+        resolved_metric = metric_name or _default_performance_metric(model_id, backend)
+        performance = backend.get_performance_summary(model_id, metric_name=resolved_metric)
         latest_bins = performance["latest_bins"]
         all_bins = performance.get("all_bins", pd.DataFrame())
         if all_bins.empty:
@@ -1695,7 +1847,7 @@ def register_callbacks(app) -> None:
         return (
             alert,
             kpi_cards,
-            make_chart_card(charts.build_performance_timeline(performance["timeline"], metric_name=metric_name or "f1")),
+            make_chart_card(charts.build_performance_timeline(performance["timeline"], metric_name=resolved_metric)),
             html.Div(
                 [
                     make_chart_card(charts.build_feature_bin_impact(feature_frame, contributors)),
@@ -1723,32 +1875,54 @@ def register_callbacks(app) -> None:
         if not model_id or not feature:
             return html.Div()
         backend = _make_backend(session_data)
-        performance = backend.get_performance_summary(model_id, metric_name=metric_name or "f1")
+        resolved_metric = metric_name or _default_performance_metric(model_id, backend)
+        performance = backend.get_performance_summary(model_id, metric_name=resolved_metric)
         latest_bins = performance["latest_bins"] if not performance["latest_bins"].empty else performance.get("all_bins", pd.DataFrame())
         feature_bins = latest_bins[latest_bins["feature"] == feature]
-        return make_chart_card(charts.build_bin_detail(feature_bins, feature, metric_name=metric_name or "f1"))
+        return make_chart_card(charts.build_bin_detail(feature_bins, feature, metric_name=resolved_metric))
 
     @app.callback(
         Output("reference-page-body", "children"),
         Input("url", "pathname"),
         Input("global-model-select", "value"),
+        Input("reference-monitor-select", "value"),
         Input("reload-token", "data"),
         Input("session-config-store", "data"),
     )
-    def render_reference(pathname, model_id, _, session_data):
+    def render_reference(pathname, global_model_id, *args):
+        if len(args) == 3:
+            reference_model_id, _, session_data = args
+        elif len(args) == 2:
+            reference_model_id = None
+            _, session_data = args
+        else:
+            reference_model_id = None
+            session_data = None
         if pathname != "/reference":
             return no_update
         backend = _make_backend(session_data)
+        model_id = _resolve_reference_model_id(global_model_id, reference_model_id)
         if not model_id:
             return make_empty_state("Select a model to inspect the contract and runtime state.", icon="fas fa-book")
         data = backend.get_reference_data(model_id)
         config = data["config"]
         if not config:
             return make_empty_state("Selected model is no longer available.", icon="fas fa-book")
+        config_status = getattr(config, "status", "active")
+        cadence_labels = {
+            "hourly": "Hourly",
+            "6h": "Every 6 Hours",
+            "daily": "Daily",
+            "manual": "Manual Only",
+            "disabled": "Disabled",
+            "6h_3d_repair": "Every 6 Hours (3-Day Repair)",
+            "daily_7d_repair": "Daily (7-Day Repair)",
+            "daily_14d_repair": "Daily (14-Day Repair)",
+        }
         contract_frame = pd.DataFrame(
             [
                 {"field": "timestamp_col", "value": config.contract.timestamp_col},
-                {"field": "model_id_col", "value": config.contract.model_id_col},
+                {"field": "model_id_col", "value": config.contract.model_id_col or ""},
                 {"field": "model_id_value", "value": config.model_id_value or ""},
                 {"field": "prediction_col", "value": config.contract.prediction_col},
                 {"field": "model_version_col", "value": config.contract.model_version_col or ""},
@@ -1770,28 +1944,410 @@ def register_callbacks(app) -> None:
                 {"field": "baseline_start", "value": config.baseline.baseline_start or ""},
                 {"field": "baseline_end", "value": config.baseline.baseline_end or ""},
                 {"field": "problem_type", "value": config.problem_type},
+                {"field": "drift_cadence_preset", "value": config.drift_cadence_preset},
+                {"field": "performance_cadence_preset", "value": config.performance_cadence_preset},
+                {"field": "schedule_enabled", "value": config.schedule_enabled},
             ]
         )
         summary_frame = pd.DataFrame([data["summary"]]) if data["summary"] else pd.DataFrame()
+        runtime_frame = pd.DataFrame(
+            [{"field": key, "value": value} for key, value in (data.get("runtime_state") or {}).items()]
+        )
+        recent_runs = data.get("recent_runs") or []
+        recent_runs_frame = (
+            pd.DataFrame(recent_runs)[
+                [
+                    column
+                    for column in (
+                        "scope",
+                        "status",
+                        "started_at",
+                        "completed_at",
+                        "window_count",
+                        "drift_row_count",
+                        "quality_row_count",
+                        "performance_row_count",
+                        "incident_row_count",
+                        "error_message",
+                    )
+                    if recent_runs and column in recent_runs[0]
+                ]
+            ]
+            if recent_runs
+            else pd.DataFrame()
+        )
         settings_frame = pd.DataFrame(
             [
                 {"field": field, "value": _format_runtime_setting_value(field, value)}
                 for field, value in data["settings"].items()
             ]
         )
+        schedule_card = dbc.Card(
+            dbc.CardBody(
+                [
+                    html.H6("Refresh Cadence", className="text-light mb-3"),
+                    dbc.Row(
+                        [
+                            dbc.Col(
+                                [
+                                    dbc.Label("Drift And Quality"),
+                                    dbc.Select(
+                                        id="reference-drift-cadence-select",
+                                        options=[
+                                            {"label": cadence_labels[value], "value": value}
+                                            for value in DRIFT_CADENCE_PRESETS
+                                        ],
+                                        value=config.drift_cadence_preset,
+                                    ),
+                                ],
+                                md=4,
+                            ),
+                            dbc.Col(
+                                [
+                                    dbc.Label("Performance And Label Repair"),
+                                    dbc.Select(
+                                        id="reference-performance-cadence-select",
+                                        options=[
+                                            {"label": cadence_labels[value], "value": value}
+                                            for value in PERFORMANCE_CADENCE_PRESETS
+                                        ],
+                                        value=config.performance_cadence_preset,
+                                    ),
+                                ],
+                                md=4,
+                            ),
+                            dbc.Col(
+                                [
+                                    dbc.Label("Schedule"),
+                                    dbc.Checklist(
+                                        id="reference-schedule-enabled-toggle",
+                                        options=[{"label": "Enabled", "value": "enabled"}],
+                                        value=["enabled"] if config.schedule_enabled else [],
+                                        switch=True,
+                                    ),
+                                ],
+                                md=4,
+                            ),
+                        ],
+                        className="g-3",
+                    ),
+                    dbc.Button("Save Schedule", id="reference-save-schedule-btn", color="primary", className="mt-3"),
+                ]
+            ),
+            className="mb-4",
+        )
+        lifecycle_card = dbc.Card(
+            dbc.CardBody(
+                [
+                    html.H6("Monitor Lifecycle", className="text-light mb-2"),
+                    html.P(
+                        "Archive stops scheduled refreshes and hides the monitor from the active app list while keeping its stored history. Restore makes an archived monitor active again. Delete permanently removes the monitor and all persisted monitoring history for this model key.",
+                        className="text-muted mb-3",
+                    ),
+                    dbc.Row(
+                        [
+                            dbc.Col(
+                                dbc.Button(
+                                    "Archive Monitor",
+                                    id="reference-archive-monitor-btn",
+                                    color="warning",
+                                    outline=True,
+                                    className="w-100",
+                                    disabled=config_status != "active",
+                                ),
+                                md=4,
+                            ),
+                            dbc.Col(
+                                dbc.Button(
+                                    "Restore Monitor",
+                                    id="reference-restore-monitor-btn",
+                                    color="success",
+                                    outline=True,
+                                    className="w-100",
+                                    disabled=config_status != "inactive",
+                                ),
+                                md=4,
+                            ),
+                            dbc.Col(
+                                dbc.Button(
+                                    "Delete Monitor And History",
+                                    id="reference-delete-monitor-btn",
+                                    color="danger",
+                                    outline=True,
+                                    className="w-100",
+                                ),
+                                md=4,
+                            ),
+                        ],
+                        className="g-3",
+                    ),
+                    dbc.Modal(
+                        [
+                            dbc.ModalHeader(dbc.ModalTitle("Archive Monitor")),
+                            dbc.ModalBody(
+                                [
+                                    html.P(
+                                        f"Archive {config.display_name} ({config.model_key})? Scheduled refreshes will stop, but stored history will be kept.",
+                                        className="mb-0",
+                                    )
+                                ]
+                            ),
+                            dbc.ModalFooter(
+                                [
+                                    dbc.Button("Cancel", id="reference-archive-cancel-btn", color="secondary", outline=True),
+                                    dbc.Button("Archive", id="reference-archive-confirm-btn", color="warning"),
+                                ]
+                            ),
+                        ],
+                        id="reference-archive-modal",
+                        is_open=False,
+                    ),
+                    dbc.Modal(
+                        [
+                            dbc.ModalHeader(dbc.ModalTitle("Delete Monitor And History")),
+                            dbc.ModalBody(
+                                [
+                                    html.P(
+                                        "This permanently removes the monitor and all persisted monitoring history. Type the exact model key to confirm.",
+                                        className="mb-3",
+                                    ),
+                                    dbc.Input(
+                                        id="reference-delete-confirm-input",
+                                        placeholder=config.model_key,
+                                        value="",
+                                    ),
+                                ]
+                            ),
+                            dbc.ModalFooter(
+                                [
+                                    dbc.Button("Cancel", id="reference-delete-cancel-btn", color="secondary", outline=True),
+                                    dbc.Button("Delete", id="reference-delete-confirm-btn", color="danger"),
+                                ]
+                            ),
+                        ],
+                        id="reference-delete-modal",
+                        is_open=False,
+                    ),
+                ]
+            ),
+            className="mb-4",
+        )
         return html.Div(
             [
                 html.P(
-                    f"Showing contract and latest summary for the currently selected monitor: {config.display_name} ({config.model_key}). Runtime settings are global to the app.",
+                    f"Showing contract and latest summary for the currently selected monitor: {config.display_name} ({config.model_key}, {config_status}). Runtime settings are global to the app.",
                     className="text-muted mb-3",
                 ),
+                schedule_card,
+                lifecycle_card,
                 html.H6("Monitor Contract", className="text-light mb-2"),
                 _render_frame(contract_frame, "No contract data."),
                 html.Hr(),
                 html.H6("Latest Summary", className="text-light mb-2"),
                 _render_frame(summary_frame, "No summary data."),
                 html.Hr(),
+                html.H6("Runtime State", className="text-light mb-2"),
+                _render_frame(runtime_frame, "No runtime state yet."),
+                html.Hr(),
+                html.H6("Recent Refresh Runs", className="text-light mb-2"),
+                _render_frame(recent_runs_frame, "No refresh runs recorded yet."),
+                html.Hr(),
                 html.H6("Runtime Settings", className="text-light mb-2"),
                 _render_frame(settings_frame, "No runtime settings."),
             ]
+        )
+
+    @app.callback(
+        Output("reference-page-status", "children"),
+        Output("reload-token", "data", allow_duplicate=True),
+        Input("reference-save-schedule-btn", "n_clicks"),
+        State("global-model-select", "value"),
+        State("reference-monitor-select", "value"),
+        State("reference-drift-cadence-select", "value"),
+        State("reference-performance-cadence-select", "value"),
+        State("reference-schedule-enabled-toggle", "value"),
+        State("session-config-store", "data"),
+        prevent_initial_call=True,
+    )
+    def save_reference_schedule(_, global_model_id, reference_model_id, drift_cadence, performance_cadence, schedule_enabled, session_data):
+        model_id = _resolve_reference_model_id(global_model_id, reference_model_id)
+        if not model_id:
+            return _status_alert("Select a monitor before updating cadence.", "warning"), no_update
+        backend = _make_backend(session_data)
+        config = _get_monitor_config_for_reference(backend, model_id)
+        if not config:
+            return _status_alert("Selected monitor no longer exists.", "warning"), no_update
+        try:
+            updated = MonitorConfig(
+                model_key=config.model_key,
+                display_name=config.display_name,
+                source_table=config.source_table,
+                contract=config.contract,
+                baseline=config.baseline,
+                problem_type=config.problem_type,
+                model_id_value=config.model_id_value,
+                model_version_value=config.model_version_value,
+                labels_table=config.labels_table,
+                labels_join_col=config.labels_join_col,
+                labels_order_col=config.labels_order_col,
+                drift_cadence_preset=drift_cadence or config.drift_cadence_preset,
+                performance_cadence_preset=(
+                    performance_cadence
+                    if config.has_labels
+                    else "disabled"
+                ),
+                schedule_enabled="enabled" in (schedule_enabled or []),
+                mlflow=config.mlflow,
+                created_by=config.created_by,
+                status=getattr(config, "status", "active"),
+            )
+            backend.repository.upsert_monitor_config(updated)
+            existing_state = backend.repository.get_monitor_runtime_state(updated.model_key)
+            now_text = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            if existing_state:
+                backend.repository.upsert_monitor_runtime_state(
+                    MonitorRuntimeState(
+                        model_key=existing_state.model_key,
+                        bootstrap_status=existing_state.bootstrap_status,
+                        last_drift_refresh_at=existing_state.last_drift_refresh_at,
+                        last_performance_refresh_at=existing_state.last_performance_refresh_at,
+                        next_drift_due_at=now_text if updated.schedule_enabled else None,
+                        next_performance_due_at=(
+                            now_text
+                            if updated.schedule_enabled and updated.has_labels and updated.performance_cadence_preset != "disabled"
+                            else None
+                        ),
+                        last_label_watermark=existing_state.last_label_watermark,
+                        last_run_status=existing_state.last_run_status,
+                        last_run_error=existing_state.last_run_error,
+                        last_run_started_at=existing_state.last_run_started_at,
+                        last_run_completed_at=existing_state.last_run_completed_at,
+                        backoff_until=existing_state.backoff_until,
+                        consecutive_failures=existing_state.consecutive_failures,
+                    )
+                )
+        except Exception as error:
+            return _status_alert(f"Could not update cadence: {error}", "danger"), no_update
+        return (
+            _status_alert(f"Updated refresh cadence for {updated.display_name}.", "success"),
+            datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        )
+
+    @app.callback(
+        Output("reference-archive-modal", "is_open"),
+        Input("reference-archive-monitor-btn", "n_clicks"),
+        Input("reference-archive-cancel-btn", "n_clicks"),
+        Input("reference-archive-confirm-btn", "n_clicks"),
+        State("reference-archive-modal", "is_open"),
+        prevent_initial_call=True,
+    )
+    def toggle_reference_archive_modal(open_clicks, cancel_clicks, confirm_clicks, is_open):
+        if any((open_clicks, cancel_clicks, confirm_clicks)):
+            return not is_open
+        return is_open
+
+    @app.callback(
+        Output("reference-page-status", "children", allow_duplicate=True),
+        Output("reload-token", "data", allow_duplicate=True),
+        Input("reference-archive-confirm-btn", "n_clicks"),
+        State("global-model-select", "value"),
+        State("reference-monitor-select", "value"),
+        State("session-config-store", "data"),
+        prevent_initial_call=True,
+    )
+    def archive_reference_monitor(_, global_model_id, reference_model_id, session_data):
+        model_id = _resolve_reference_model_id(global_model_id, reference_model_id)
+        if not model_id:
+            return _status_alert("Select a monitor before archiving it.", "warning"), no_update
+        backend = _make_backend(session_data)
+        config = _get_monitor_config_for_reference(backend, model_id)
+        if not config:
+            return _status_alert("Selected monitor no longer exists.", "warning"), no_update
+        try:
+            backend.repository.archive_monitor(model_id)
+        except Exception as error:
+            return _status_alert(f"Could not archive monitor: {error}", "danger"), no_update
+        return (
+            _status_alert(
+                f"Archived {config.display_name}. It is no longer active, but its historical rows were kept.",
+                "success",
+            ),
+            datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        )
+
+    @app.callback(
+        Output("reference-page-status", "children", allow_duplicate=True),
+        Output("reload-token", "data", allow_duplicate=True),
+        Input("reference-restore-monitor-btn", "n_clicks"),
+        State("global-model-select", "value"),
+        State("reference-monitor-select", "value"),
+        State("session-config-store", "data"),
+        prevent_initial_call=True,
+    )
+    def restore_reference_monitor(_, global_model_id, reference_model_id, session_data):
+        model_id = _resolve_reference_model_id(global_model_id, reference_model_id)
+        if not model_id:
+            return _status_alert("Select a monitor before restoring it.", "warning"), no_update
+        backend = _make_backend(session_data)
+        config = _get_monitor_config_for_reference(backend, model_id)
+        if not config:
+            return _status_alert("Selected monitor no longer exists.", "warning"), no_update
+        try:
+            backend.repository.restore_monitor(model_id)
+        except Exception as error:
+            return _status_alert(f"Could not restore monitor: {error}", "danger"), no_update
+        return (
+            _status_alert(
+                f"Restored {config.display_name}. It is active again and eligible for scheduled refresh.",
+                "success",
+            ),
+            datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        )
+
+    @app.callback(
+        Output("reference-delete-modal", "is_open"),
+        Input("reference-delete-monitor-btn", "n_clicks"),
+        Input("reference-delete-cancel-btn", "n_clicks"),
+        Input("reference-delete-confirm-btn", "n_clicks"),
+        State("reference-delete-modal", "is_open"),
+        prevent_initial_call=True,
+    )
+    def toggle_reference_delete_modal(open_clicks, cancel_clicks, confirm_clicks, is_open):
+        if any((open_clicks, cancel_clicks, confirm_clicks)):
+            return not is_open
+        return is_open
+
+    @app.callback(
+        Output("reference-page-status", "children", allow_duplicate=True),
+        Output("reload-token", "data", allow_duplicate=True),
+        Input("reference-delete-confirm-btn", "n_clicks"),
+        State("global-model-select", "value"),
+        State("reference-monitor-select", "value"),
+        State("reference-delete-confirm-input", "value"),
+        State("session-config-store", "data"),
+        prevent_initial_call=True,
+    )
+    def delete_reference_monitor(_, global_model_id, reference_model_id, confirmation_text, session_data):
+        model_id = _resolve_reference_model_id(global_model_id, reference_model_id)
+        if not model_id:
+            return _status_alert("Select a monitor before deleting it.", "warning"), no_update
+        backend = _make_backend(session_data)
+        config = _get_monitor_config_for_reference(backend, model_id)
+        if not config:
+            return _status_alert("Selected monitor no longer exists.", "warning"), no_update
+        if (confirmation_text or "").strip() != config.model_key:
+            return _status_alert(
+                f"Type the exact model key ({config.model_key}) before deleting this monitor.",
+                "warning",
+            ), no_update
+        try:
+            backend.repository.delete_monitor(model_id)
+        except Exception as error:
+            return _status_alert(f"Could not delete monitor: {error}", "danger"), no_update
+        return (
+            _status_alert(
+                f"Deleted {config.display_name} and its persisted monitoring history.",
+                "success",
+            ),
+            datetime.now(timezone.utc).isoformat(timespec="seconds"),
         )
