@@ -27,6 +27,7 @@ Run the test in this order:
 6. verify app readback
 7. verify manual workflow refresh
 8. exercise a few failure paths
+9. run the focused rollout gates for Overview, severe drift, and same-day detail views
 
 ## Prerequisites
 
@@ -215,7 +216,11 @@ Expected tables:
 - `drift_metrics`
 - `quality_metrics`
 - `quality_history`
+- `daily_quality_profiles`
+- `daily_feature_profiles`
 - `performance_metrics`
+- `daily_performance_profiles`
+- `performance_bin_specs`
 - `incidents`
 - `incident_history`
 - `refresh_runs`
@@ -264,6 +269,7 @@ In the app:
    - `Baseline Days`: `7`
    Keep the default rolling baseline for this smoke test. Fixed baselines are supported, but the default rolling window is enough to exercise the full pipeline.
 6. Open `Advanced mappings and overrides` and confirm:
+   Shared-table example:
    - `Timestamp Column`: `event_ts`
    - `Model ID Column`: `model_id`
    - `Monitored Model ID Value`: `fraud_model_v1`
@@ -275,6 +281,9 @@ In the app:
    - `External Labels Join Column`: `entity_id`
    - `External Label Column`: `label`
    - `External Labels Order Column`: `label_timestamp`
+   Table-scoped example:
+   - if your inference table already represents exactly one model and has no real model-id column, leave `Model ID Column` and `Monitored Model ID Value` blank on purpose
+   - discovery should keep that draft as a normal table-scoped monitor instead of downgrading it just because `model_id` is absent
    If your real tables join on the same shared key name in both tables, `Entity ID Column` can stay blank and Model Lens should still validate the join against that shared column.
    Hyphenated feature names such as `us-central1` should also save successfully without manual renaming.
    If your real inference table already includes true labels, leave the labels-table inputs blank and confirm `Label Column In Source` instead.
@@ -290,6 +299,8 @@ In the app:
    - `Drift And Quality`: `Every 6 Hours`
    - `Performance And Label Repair`: `Daily (7-Day Repair)` when labels are enabled
    - `Enable scheduled refreshes for this monitor`: on
+   - `Tracked Performance Metrics`: `F1 Score`, `Precision`, `Recall`
+   - `Default Performance Metric`: `F1 Score`
 10. Save the monitor:
 
 - click `Save Monitor And Trigger Refresh`
@@ -302,12 +313,17 @@ Expected result:
 - if the app cannot resolve the workflow or lacks `Run now` permission, the monitor is still saved and the shared hourly job remains the default pickup path
 - the monitor appears on the overview page
 - the `Reference` page shows the saved cadence, runtime state, and recent refresh-run history for the selected monitor
+- the `Reference` page also shows recent incident lifecycle rows for that monitor when drift/performance incidents have been opened, escalated, or recovered
 - the `Reference` page also shows an `Active` / `Archived` / `All` filter plus `Archive Monitor`, `Restore Monitor`, and `Delete Monitor And History` controls; archive should hide the monitor from the active app list while keeping history, restore should bring it back without rebuilding the monitor, and delete should fully remove it after reload
 - after the workflow finishes, Drift and Performance should already show historical windows rather than a single snapshot
 - after the workflow finishes, Data Quality should show window-history charts instead of only the latest summary row
 - with the scratch dataset and `Baseline Days = 7`, you should have 8 daily comparison windows immediately
 - for very large real-world tables, the first run should stay bounded by the configured sampling caps rather than trying to load the entire inference table into pandas, and the shared job should issue one bounded range load per monitor scope rather than one warehouse query per comparison window
 - for multi-monitor tenants, the shared job should parallelize across monitors only up to `MAX_PARALLEL_REFRESH_WORKERS`, while still avoiding two scopes for the same model in one scheduler pass
+- `quality_metrics` should remain model-wide because the workflow rebuilds it from all persisted `daily_quality_profiles`, not only from the bounded refresh slice
+- `performance_bin_specs` should be created for numeric performance features so later repair runs reuse the same bucket edges
+- if labels come from the inference table itself, performance repair should track an opaque label-freshness signature instead of only the max event timestamp
+- if the repository falls back to an unbounded raw current-window load, rows later in the `window_end` day should still appear in prediction and dimension detail views
 - the remaining historical hardening work is tracked in [Historical Backfill Plan](/Users/volo.vragov/Desktop/work/model-lens/docs/HISTORICAL_BACKFILL_PLAN.md)
 
 ## Step 7: Verify Persisted State In SQL
@@ -413,6 +429,19 @@ Expected:
 - at least one row
 
 ```sql
+SELECT DISTINCT metric_name
+FROM <control-plane-catalog>.<control-plane-schema>.performance_metrics
+WHERE model_key = 'fraud_model_demo'
+ORDER BY metric_name;
+```
+
+Expected for the default classification path:
+
+- `f1`
+- `precision`
+- `recall`
+
+```sql
 SELECT model_key, COUNT(*) AS daily_perf_rows
 FROM <control-plane-catalog>.<control-plane-schema>.daily_performance_profiles
 WHERE model_key = 'fraud_model_demo'
@@ -422,6 +451,18 @@ GROUP BY 1;
 Expected:
 
 - at least one row when labels are available
+
+```sql
+SELECT model_key, feature_name, edges_json
+FROM <control-plane-catalog>.<control-plane-schema>.performance_bin_specs
+WHERE model_key = 'fraud_model_demo'
+ORDER BY feature_name;
+```
+
+Expected:
+
+- at least one row when labels and numeric performance features are available
+- `edges_json` stays stable across later incremental repair runs for the same monitor
 
 ```sql
 SELECT model_key, feature_name, metric_name, severity, status
@@ -452,6 +493,7 @@ Expected:
 - `window_count = 8` for the scratch dataset with `Baseline Days = 7`
 - `range_start` / `range_end` are populated for scheduled shared-job runs
 - `rows_scanned` reflects the SQL-side bounded refresh range, not an unbounded app-side full-frame read
+- the row exists even for early skipped or failed monitor attempts, because the workflow now creates it before source-range discovery
 - the resulting `comparison_windows`, `drift_metrics`, `quality_history`, and `performance_metrics` rows were derived from the daily profile layer built for that bounded range inside the same refresh run
 - on later incremental runs, those derived rows can also reuse already-persisted daily profile facts for the affected span instead of depending only on the current run’s bounded load
 
@@ -592,6 +634,41 @@ Expected:
 - save succeeds
 - refresh warns that there is no comparable baseline/current window yet
 
+## Step 11: Focused Rollout Gates
+
+Run these three checks before broader customer rollout:
+
+### Overview with multiple active monitors
+
+- onboard or restore a second monitor
+- return to Overview
+
+Expected:
+
+- both monitor cards render
+- the page loads successfully using the bulk latest-quality/latest-drift read path in a real Databricks workspace
+
+### Severe numeric drift
+
+- use a scratch variant or real table whose latest current-window values sit fully outside the baseline range
+- run the shared refresh workflow
+- open Drift
+
+Expected:
+
+- PSI / JS / KL stay finite
+- the page shows a real severe-drift signal instead of blank output or warning-driven gaps
+
+### Same-day current-window detail
+
+- use a source table whose newest rows land later in the day on `window_end`
+- open Prediction Distribution and one Dimension Breakdown view for that monitor
+
+Expected:
+
+- those same-day rows are included
+- detail views do not silently truncate rows after midnight on `window_end`
+
 ## Step 12: Pre-Client Acceptance Checklist
 
 Do not send to a client until all of these are true:
@@ -606,4 +683,7 @@ Do not send to a client until all of these are true:
 - if you tested the Lakebase target, Lakebase tables contain the expected projected rows
 - the app summary matches the persisted state
 - the workflow refresh path works outside the app
+- Overview renders with 2+ active monitors in a real workspace
+- severe out-of-range drift still produces finite PSI / JS / KL values
+- same-day current-window detail views include rows later on `window_end`
 - there are no old names left in the product surface

@@ -238,9 +238,11 @@ If the app will monitor very large tables, set these environment variables in th
 - `REFRESH_MAX_ROWS_PER_WINDOW`
 - `FEATURE_DETAIL_SAMPLE_ROWS_PER_DAY`
 - `FEATURE_DETAIL_MAX_ROWS`
+- `REFRESH_STALE_RUN_MINUTES`
 - `MAX_PARALLEL_REFRESH_WORKERS`
 
 Defaults are safe for many customers, but lowering them is the first lever to pull when a workspace has exceptionally wide or high-volume tables.
+`REFRESH_STALE_RUN_MINUTES` controls when the shared scheduler automatically marks an abandoned `running` row failed so that monitor can be retried later.
 `MAX_PARALLEL_REFRESH_WORKERS` controls only monitor-level concurrency in the shared job. Leave it low unless the row caps are already known-safe for the tenant, because the scheduler will still run one scope per model at a time and each active worker still holds its own bounded pandas range in memory while deriving daily profiles and comparison-window history from that range.
 
 That means you can create the shared refresh workflow first and then later switch the app to `REFRESH_JOB_ID` if you want stricter wiring.
@@ -297,6 +299,8 @@ Expected result:
 - a workflow named `<existing-app-name>-refresh` is created
 - it is scheduled hourly by default as the shared pickup path for saved monitors
 - it uses control-plane runtime state and cadence presets, so you do not need one Databricks workflow per model
+- it writes one `refresh_runs` audit row per attempted monitor execution and rebuilds `quality_metrics` from persisted `daily_quality_profiles`, so bounded incremental runs do not shrink the monitor summary
+- it reuses persisted `performance_bin_specs` for performance repair, so per-feature buckets stay stable across bootstrap and later incremental runs
 - the environment dependencies point at the wheel under `/Workspace/Users/<your-email>/model-lens-existing-app/dist/...`
 
 Then fetch the job ID:

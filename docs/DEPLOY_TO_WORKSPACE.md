@@ -95,8 +95,10 @@ Large-table tuning knobs:
   default `50000`
 - `FEATURE_DETAIL_MAX_ROWS`
   default `200000`
+- `REFRESH_STALE_RUN_MINUTES`
+  default `75`
 
-These are app and workflow environment variables, not bundle vars. They cap pandas-side window loads so one extremely large monitor does not force a full-table in-memory read.
+These are app and workflow environment variables, not bundle vars. They cap pandas-side window loads so one extremely large monitor does not force a full-table in-memory read, and they control when the shared scheduler automatically marks an abandoned `running` refresh as failed so the monitor can be retried later.
 
 For `dev` or `prod`, Model Lens expects:
 
@@ -155,6 +157,12 @@ Expected result:
 - tests pass
 - bundle validation succeeds
 - the wheel build succeeds and the bundle can resolve `../dist/*.whl` for the serverless workflow environment
+
+Before calling the build broadly customer-ready, run these focused workspace release gates in addition to the local validation above:
+
+- open Overview with at least two active monitors and confirm the bulk latest-quality/latest-drift queries render normally in a real Databricks workspace
+- force a severe numeric drift case where the latest current window sits fully outside the baseline range and confirm Drift still shows finite PSI / JS / KL values instead of blanks or warnings
+- open feature detail and prediction detail on a window whose newest rows land later in the `window_end` day and confirm those same-day rows are still included
 
 If you know the workspace will monitor very large or very wide inference tables, set the large-table caps deliberately before deploy rather than discovering OOM pressure during the first backfill. Lowering the caps is usually safer than immediately scaling compute.
 
@@ -294,11 +302,16 @@ Expected:
 - `drift_metrics`
 - `quality_metrics`
 - `quality_history`
+- `daily_quality_profiles`
+- `daily_feature_profiles`
 - `performance_metrics`
+- `daily_performance_profiles`
+- `performance_bin_specs`
 - `incidents`
 - `incident_history`
 - `refresh_runs`
 - `comparison_windows`
+- `monitor_runtime_state`
 
 ## 7. Load Test Data
 
@@ -349,7 +362,12 @@ In the app:
    - `velocity_7d`
    - `device_score`
    Model Lens now keeps the full detected numeric feature set on by default. If your real table has dozens of numeric features, the first refresh may still take longer, but the app should not silently trim the contract.
-7. Continue to `Activate`
+7. Continue to `Activate` and confirm:
+   - `Drift And Quality`: `Every 6 Hours`
+   - `Performance And Label Repair`: `Daily (7-Day Repair)` when labels are enabled
+   - `Enable scheduled refreshes for this monitor`: on
+   - `Tracked Performance Metrics`: `F1 Score`, `Precision`, `Recall`
+   - `Default Performance Metric`: `F1 Score`
 8. Click `Save Monitor And Trigger Refresh`
 
 Expected result:
@@ -360,9 +378,14 @@ Expected result:
 - if the app has `CAN MANAGE RUN`, the shared refresh job is triggered asynchronously for bootstrap
 - if the app cannot resolve the workflow or lacks `Run now` permission, the monitor is still saved and the shared hourly job remains the default pickup path
 - inside the shared job, monitor refreshes can run concurrently, but only up to the configured `MAX_PARALLEL_REFRESH_WORKERS` cap and never with two scopes for the same model in one scheduler pass
+- if one monitor hits an unexpected worker-level exception, that result is recorded as a failed monitor refresh instead of aborting the whole shared batch
 - each monitor scope is processed from one bounded projected source-range load, and the workflow derives the persisted window/history rows from the daily profile layer built for that range instead of re-querying every comparison window
 - on incremental runs, the workflow also reuses already-persisted daily profile facts for the affected date span before rewriting the touched window/history rows
+- `quality_metrics` stays model-wide because the workflow rebuilds that compatibility row from all persisted `daily_quality_profiles`, not just from the bounded incremental slice
+- numeric performance buckets stay stable across runs because the workflow stores canonical `performance_bin_specs` per monitor feature and reuses them during later performance repair
+- for labels stored directly in the inference table, performance repair compares an opaque label-freshness signature over the repair horizon, so late backfills on older rows still trigger recompute
 - the cadence you selected in the review step is stored with the monitor and can be edited later from the `Reference` page
+- the selected built-in performance metrics and default metric are stored with the monitor and drive both refresh persistence and the Performance-tab selector
 - the monitor appears in the app
 - after the workflow finishes, the new monitor appears on the overview page and the analysis pages can load it
 - the first refresh still backfills historical daily comparison windows immediately instead of writing only a single latest snapshot
@@ -415,8 +438,10 @@ Expected result:
 - `quality_windows` is populated immediately after the first refresh for datasets with enough history
 - `drift_windows` is populated immediately after the first refresh for datasets with enough history
 - `incident_events` is populated when drift crosses thresholds or later recovers across comparison windows
-- `refresh_runs` records the refresh mode, status, and window counts for audit/debugging
+- `refresh_runs` records the refresh mode, status, and window counts for audit/debugging, and each monitor attempt now gets its row before source-range discovery so early skips/failures are auditable too
 - `comparison_windows` records one row per logical baseline/current pairing
+- `quality_metrics` reflects the full persisted monitor history even after incremental refreshes
+- `performance_bin_specs` contains one canonical bucket spec row per numeric feature that participates in performance repair
 - if Lakebase is configured for the current app session or refresh workflow, Lakebase tables contain the latest monitor inventory, summary, and open incidents
 
 ## 10. Verify The Workflow

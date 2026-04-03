@@ -170,6 +170,53 @@ def test_discovery_prefers_source_label_when_present_in_inference_table() -> Non
     assert result.requires_review is False
 
 
+def test_discovery_supports_table_scoped_monitor_without_model_id_column() -> None:
+    class _TableScopedRepository(FakeRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.source_schema = pd.DataFrame(
+                [
+                    {"col_name": "event_ts", "data_type": "timestamp"},
+                    {"col_name": "prediction", "data_type": "double"},
+                    {"col_name": "label", "data_type": "int"},
+                    {"col_name": "amount", "data_type": "double"},
+                    {"col_name": "velocity_7d", "data_type": "double"},
+                    {"col_name": "region", "data_type": "string"},
+                ]
+            )
+            self.source_preview = pd.DataFrame(
+                [
+                    {
+                        "event_ts": "2026-01-01T00:00:00",
+                        "prediction": 0.91,
+                        "label": 1,
+                        "amount": 120.0,
+                        "velocity_7d": 2.4,
+                        "region": "na",
+                    },
+                    {
+                        "event_ts": "2026-01-02T00:00:00",
+                        "prediction": 0.13,
+                        "label": 0,
+                        "amount": 83.0,
+                        "velocity_7d": 1.1,
+                        "region": "eu",
+                    },
+                ]
+            )
+
+    repository = _TableScopedRepository()
+    service = MonitorDiscoveryService(repository, mlflow=FakeMLflow(MLflowDiscovery()))
+
+    result = service.discover(source_table="main.demo.inference_logs")
+
+    assert result.config.contract.model_id_col is None
+    assert result.config.model_id_value is None
+    assert result.config.contract.label_col == "label"
+    assert result.requires_review is False
+    assert result.confidence == "high"
+
+
 def test_discovery_uses_mlflow_and_labels_to_fill_scope_and_lineage() -> None:
     repository = FakeRepository()
     repository.distinct_values[("main.demo.inference_logs", "model_id")] = ["fraud_model_demo", "other_model"]

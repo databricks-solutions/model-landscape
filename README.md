@@ -11,10 +11,17 @@ It is built for teams that want an in-house alternative to external observabilit
 - backfill drift and performance history on the first refresh workflow run, then append new windows incrementally
 - compute drift, quality, and performance-contributor summaries on a refresh workflow
 - store per-monitor refresh cadence presets and runtime state so one shared job can service many monitors
+- keep `quality_metrics` as a monitor-wide latest summary rebuilt from persisted `daily_quality_profiles`, even when incremental refreshes only touch a bounded repair range
 - let operators archive a monitor from the `Reference` page without losing history, restore an archived monitor later, or permanently delete the monitor and its stored history when cleanup is required
+- show recent incident lifecycle events in `Reference` so operators can inspect openings, escalations, and recoveries without leaving the current monitor context
 - backfill drift, quality, and performance window history on the first refresh so timelines are populated immediately
 - keep giant inference tables off the app memory hot path by using SQL-side source profiles plus projected, date-bounded, sampled window loads
+- read Overview in bulk for large tenants by querying the latest drift and quality snapshots across all active monitors with explicit latest-row windowing instead of replaying full per-monitor history queries on page load
+- keep those bulk Overview reads Databricks-SQL-safe by explicitly aliasing derived tables instead of relying on permissive parser behavior
 - persist durable monitoring state in Unity Catalog Delta tables
+- persist one `refresh_runs` audit row per attempted monitor execution, including skipped and failed runs
+- reconcile stale `running` refresh rows automatically after a timeout so one killed worker does not wedge a monitor forever
+- isolate unexpected worker failures to the affected monitor so one bad target does not fail the whole shared refresh batch
 - optionally project hot UI state into Lakebase for fast monitor and incident views
 - deep-link overview cards into model-specific drift investigation
 - keep the whole stack deployable inside a customer Databricks workspace
@@ -81,18 +88,22 @@ Current engine behavior:
 - a 0-row join match is treated as a real review failure, not a soft hint; the UI raises a red warning so the operator can correct the join column before activation
 - timestamp discovery handles both warehouse `TIMESTAMP` columns and ISO-like timestamps stored as `STRING`
 - if a source table has no explicit `model_id` field but `model_version` carries identifier-like values, discovery can use that column as the monitored model scope
+- if a source table truly has no model-id-like column and already represents one model, discovery now keeps that as a normal table-scoped monitor path instead of downgrading the draft just because `model_id` is absent
 - an optional MLflow experiment or registered model can contribute feature ordering, model/version hints, and lineage metadata during onboarding
 - discovery keeps the full numeric feature set by default; Model Lens does not silently trim the first run to a top-N subset
 - the drift/performance path now avoids redundant per-feature numeric coercion during backfills so wide numeric schemas are cheaper to process than the earlier implementation
-- the review step now stores per-monitor cadence presets, and the Reference page can edit those cadences later without creating new Databricks jobs
-- classification monitors use `f1` on the Performance page; regression monitors now use `rmse` by default and also persist `mae`
+- the review step now stores per-monitor cadence presets plus per-monitor performance metrics, and the Reference page can edit those settings later without creating new Databricks jobs
+- classification monitors now track `f1`, `precision`, and `recall` by default, with optional `accuracy`; regression monitors track `rmse` and `mae` by default
+- the Performance page still lets the viewer switch metrics, but the dropdown is now constrained to the metric set configured for that monitor
 - categorical features no longer stop at contract storage only; categorical drift now emits PSI / JS / KL rows alongside numeric drift
+- performance repair now uses canonical persisted bin specs per `model_key + feature_name`, so daily performance profiles remain comparable across bootstrap and later incremental runs
 - onboarding supports two baseline policies:
   - `rolling`: compare the latest `n` days with the preceding `n` days
   - `fixed`: compare a user-selected known-good baseline range with the latest window of the same length
 - the first successful refresh now backfills all valid daily comparison windows for the configured baseline policy, up to the configured comparison horizon
 - later refreshes run in `auto` mode by default: they append new windows when history already exists and fall back to full backfill when the stored history no longer matches the current baseline configuration
 - every monitor now stores its own drift cadence, performance cadence, and runtime state so the shared hourly workflow can pick up only the monitors that are pending or overdue
+- `last_label_watermark` now stores an opaque freshness signature, not just a raw timestamp; for in-source labels it includes both the latest labeled timestamp and the non-null label count inside the repair horizon so late backfills on old rows still trigger performance repair
 - scheduled refreshes no longer read entire source tables into pandas by default; they fetch SQL-side summary profiles, then load one bounded projected refresh range with deterministic sampling caps, materialize daily quality/feature/performance profiles, and derive comparison-window history from those daily profiles instead of reloading every window from the warehouse
 - if an external labels table is not unique on the join key, you must provide an `External Labels Order Column`
 - if a source table contains multiple `model_id` values, you must provide `Monitored Model ID Value`
@@ -109,7 +120,10 @@ Current protections:
 - those bounded range loads use deterministic row caps so one very large day or one very wide table does not explode memory on the app or workflow worker
 - the shared workflow parallelizes across monitors, not across features, and caps concurrent monitor execution with a small worker pool so large tenants get more throughput without multiplying per-monitor memory spikes
 - feature deep-dive charts no longer reread the full source table when daily feature samples are available; they read sampled values from `daily_feature_profiles` first and only fall back to a bounded raw load when needed
+- when a feature/detail fallback still needs raw rows, the app now loads only the latest current comparison window for prediction and dimension views instead of rereading the full baseline+current span
+- raw current-window fallbacks now treat `window_end` as inclusive through the end of that calendar day, so same-day rows are not dropped when the lightweight repository path is used
 - non-bootstrap refreshes now merge the current run’s daily profiles with already-persisted daily facts for the affected derivation span, so recomputed windows can reuse prior baseline/profile history instead of depending entirely on the current bounded load
+- numeric drift now keeps finite PSI / JS / KL values even when the current distribution moves completely outside the reference-derived range, instead of degrading into runtime warnings or `NaN`
 
 Relevant runtime knobs:
 
@@ -125,6 +139,9 @@ Relevant runtime knobs:
 - `FEATURE_DETAIL_MAX_ROWS`
   default `200000`
   hard cap for the total sampled rows loaded for feature/detail charts
+- `REFRESH_STALE_RUN_MINUTES`
+  default `75`
+  stale-run timeout used by the shared scheduler to mark abandoned `running` rows failed before selecting new due monitors
 - `MAX_PARALLEL_REFRESH_WORKERS`
   default `2`
   cap for concurrent monitor refreshes inside the shared job; the scheduler still keeps one scope per model per run (`bootstrap` before `drift_quality` before `performance_repair`)
@@ -199,10 +216,12 @@ Current control-plane tables:
 - `daily_feature_profiles`
 - `performance_metrics`
 - `daily_performance_profiles`
+- `performance_bin_specs`
 - `incidents`
 - `incident_history`
 - `refresh_runs`
 - `comparison_windows`
+- `monitor_runtime_state`
 
 Before handing this to a customer, also make sure the Databricks App service principal can:
 

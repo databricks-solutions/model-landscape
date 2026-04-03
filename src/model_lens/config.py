@@ -29,6 +29,7 @@ class Settings:
     lakebase_sslmode: str = os.getenv("LAKEBASE_SSLMODE", os.getenv("PGSSLMODE", "require"))
     lakebase_schema: str = os.getenv("LAKEBASE_SCHEMA", "model_lens_ui")
     refresh_failure_backoff_minutes: int = int(os.getenv("REFRESH_FAILURE_BACKOFF_MINUTES", "30"))
+    refresh_stale_run_minutes: int = int(os.getenv("REFRESH_STALE_RUN_MINUTES", "75"))
     max_bootstraps_per_run: int = int(os.getenv("MAX_BOOTSTRAPS_PER_RUN", "5"))
     max_drift_monitors_per_run: int = int(os.getenv("MAX_DRIFT_MONITORS_PER_RUN", "20"))
     max_performance_monitors_per_run: int = int(os.getenv("MAX_PERFORMANCE_MONITORS_PER_RUN", "20"))

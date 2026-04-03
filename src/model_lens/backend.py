@@ -69,6 +69,15 @@ def _null_rate_dict(value: object) -> dict[str, float]:
     return {key: float(parsed) for key, parsed in _safe_json_dict(value).items()}
 
 
+def _inclusive_end_bound(value: str) -> pd.Timestamp:
+    bound = pd.Timestamp(value)
+    if pd.isna(bound):
+        return bound
+    if bound == bound.normalize():
+        return bound + pd.Timedelta(days=1)
+    return bound
+
+
 def _quality_history_from_daily_profiles(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return pd.DataFrame()
@@ -124,6 +133,10 @@ def _period_label(series: pd.Series, granularity: str) -> pd.Series:
     if granularity == "weekly":
         return timestamps.dt.to_period("W").dt.end_time.dt.date.astype(str)
     return timestamps.dt.date.astype(str)
+
+
+def _sql_placeholders(count: int) -> str:
+    return ", ".join(["%s"] * max(count, 1))
 
 
 @dataclass
@@ -396,28 +409,135 @@ class DashboardBackend:
         )
         return frame[frame["feature"].isin(top_features)].sort_values(["period", "feature"]).reset_index(drop=True)
 
+    def _latest_quality_map(self, model_ids: list[str]) -> dict[str, dict[str, object]]:
+        if not model_ids:
+            return {}
+        placeholders = _sql_placeholders(len(model_ids))
+        frame = self._warehouse.query_params(
+            f"""
+            SELECT model_key, total_rows, min_date, max_date, prediction_mean, prediction_std, daily_volume, null_rates, computed_at
+            FROM (
+                SELECT
+                    *,
+                    ROW_NUMBER() OVER (PARTITION BY model_key ORDER BY computed_at DESC) AS row_num
+                FROM {self.repository.table_names.quality_metrics}
+                WHERE model_key IN ({placeholders})
+            ) latest_quality
+            WHERE row_num = 1
+            """,
+            tuple(model_ids),
+        )
+        if frame.empty:
+            return {}
+        quality_map: dict[str, dict[str, object]] = {}
+        for _, row in frame.iterrows():
+            model_key = str(row.get("model_key") or "").strip()
+            if not model_key:
+                continue
+            null_rates = _null_rate_dict(row.get("null_rates"))
+            quality_map[model_key] = {
+                "total_rows": _safe_int(row.get("total_rows")),
+                "min_date": str(row.get("min_date") or ""),
+                "max_date": str(row.get("max_date") or ""),
+                "prediction_mean": _safe_float(row.get("prediction_mean")),
+                "prediction_std": _safe_float(row.get("prediction_std")),
+                "daily_volume": _safe_json_dict(row.get("daily_volume")),
+                "null_rates": null_rates,
+                "max_null_rate": max(null_rates.values()) if null_rates else 0.0,
+                "computed_at": str(row.get("computed_at") or ""),
+            }
+        return quality_map
+
+    def _latest_drift_snapshot_map(self, model_ids: list[str], metric: str) -> dict[str, dict[str, object]]:
+        if not model_ids:
+            return {}
+        placeholders = _sql_placeholders(len(model_ids))
+        frame = self._warehouse.query_params(
+            f"""
+            WITH ranked_drift AS (
+                SELECT
+                    model_key,
+                    feature_name,
+                    metric_name,
+                    metric_value,
+                    window_end,
+                    computed_at,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY model_key, feature_name, metric_name
+                        ORDER BY window_end DESC, computed_at DESC
+                    ) AS row_num
+                FROM {self.repository.table_names.drift_metrics}
+                WHERE model_key IN ({placeholders})
+            )
+            SELECT model_key, feature_name, metric_name, metric_value, window_end, computed_at
+            FROM ranked_drift
+            WHERE row_num = 1
+            ORDER BY model_key, feature_name, metric_name
+            """,
+            tuple(model_ids),
+        )
+        if frame.empty:
+            return {}
+        working = frame.copy()
+        pivoted = (
+            working.pivot_table(
+                index=["model_key", "feature_name"],
+                columns="metric_name",
+                values="metric_value",
+                aggfunc="max",
+            )
+            .reset_index()
+        )
+        drift_map: dict[str, dict[str, object]] = {}
+        for model_key, group in pivoted.groupby("model_key", sort=False):
+            metric_series = (
+                pd.to_numeric(group[metric], errors="coerce").fillna(0.0)
+                if metric in group.columns
+                else pd.Series(dtype=float)
+            )
+            js_series = (
+                pd.to_numeric(group["js_divergence"], errors="coerce").fillna(0.0)
+                if "js_divergence" in group.columns
+                else pd.Series(dtype=float)
+            )
+            top_drifter = "N/A"
+            if not metric_series.empty:
+                top_index = metric_series.idxmax()
+                top_drifter = str(group.loc[top_index, "feature_name"])
+            drift_map[str(model_key)] = {
+                "max_metric": _safe_float(metric_series.max()) if not metric_series.empty else 0.0,
+                "avg_metric": _safe_float(metric_series.mean()) if not metric_series.empty else 0.0,
+                "avg_js": _safe_float(js_series.mean()) if not js_series.empty else 0.0,
+                "drifting_features": int((metric_series > 0.1).sum()) if not metric_series.empty else 0,
+                "total_features": int(len(group.index)),
+                "top_drifter": top_drifter,
+            }
+        return drift_map
+
     def get_overview_rows(self, metric: str = "psi") -> list[dict]:
+        models = self.list_models()
+        model_ids = [str(model["id"]) for model in models if str(model.get("id") or "").strip()]
+        quality_map = self._latest_quality_map(model_ids)
+        drift_map = self._latest_drift_snapshot_map(model_ids, metric)
         rows: list[dict] = []
-        for model in self.list_models():
-            drift = self.get_drift_results(model["id"])
-            latest = drift[drift["period"] == drift["period"].max()] if not drift.empty else pd.DataFrame()
-            quality = self.get_quality_stats(model["id"])
-            max_null = max(quality.get("null_rates", {}).values()) if quality.get("null_rates") else 0.0
+        for model in models:
+            drift = drift_map.get(model["id"], {})
+            quality = quality_map.get(model["id"], {})
             rows.append(
                 {
                     "model_id": model["id"],
                     "model_name": model["name"],
                     "description": model["description"],
                     "versions": model["versions"],
-                    "max_psi": _safe_float(latest[metric].max()) if not latest.empty and metric in latest else 0.0,
-                    "avg_psi": _safe_float(latest[metric].mean()) if not latest.empty and metric in latest else 0.0,
-                    "avg_js": _safe_float(latest["js_divergence"].mean()) if not latest.empty else 0.0,
-                    "drifting_features": int((latest[metric] > 0.1).sum()) if not latest.empty and metric in latest else 0,
-                    "total_features": len(latest),
-                    "top_drifter": latest.loc[latest[metric].idxmax(), "feature"] if not latest.empty and metric in latest else "N/A",
-                    "max_null_rate": max_null,
+                    "max_psi": _safe_float(drift.get("max_metric")),
+                    "avg_psi": _safe_float(drift.get("avg_metric")),
+                    "avg_js": _safe_float(drift.get("avg_js")),
+                    "drifting_features": int(drift.get("drifting_features") or 0),
+                    "total_features": int(drift.get("total_features") or 0),
+                    "top_drifter": str(drift.get("top_drifter") or "N/A"),
+                    "max_null_rate": _safe_float(quality.get("max_null_rate")),
                     "has_labels": model["has_labels"],
-                    "computing": drift.empty,
+                    "computing": not bool(drift),
                     "freshness_status": model["freshness_status"],
                     "last_run_status": model["last_run_status"],
                 }
@@ -474,6 +594,49 @@ class DashboardBackend:
         baseline, current = split_baseline_current(frame, config.contract.timestamp_col, config.baseline)
         return config, baseline, current
 
+    def _load_current_window_frame(
+        self,
+        model_id: str,
+        *,
+        feature_columns: tuple[str, ...] | None = None,
+    ) -> tuple[MonitorConfig | None, pd.DataFrame]:
+        config = self.get_monitor_config(model_id)
+        if not config:
+            return None, pd.DataFrame()
+        bounds = self._latest_window_bounds(model_id)
+        if not bounds:
+            fallback_config, _, current = self._load_baseline_current(model_id, feature_columns=feature_columns)
+            return fallback_config, current
+        start_date = bounds["window_start"] or None
+        end_date = bounds["window_end"] or None
+        try:
+            frame = self.repository.load_monitor_frame(
+                config,
+                start_date=start_date,
+                end_date=end_date,
+                feature_columns=feature_columns or config.contract.feature_columns,
+                sample_rows_per_day=settings.feature_detail_sample_rows_per_day,
+                max_total_rows=settings.feature_detail_max_rows,
+            )
+        except TypeError:
+            try:
+                frame = self.repository.load_monitor_frame(
+                    config,
+                    start_date=start_date,
+                    end_date=end_date,
+                    feature_columns=feature_columns or config.contract.feature_columns,
+                    max_total_rows=settings.feature_detail_max_rows,
+                )
+            except TypeError:
+                frame = self.repository.load_monitor_frame(config)
+                if config.contract.timestamp_col in frame.columns:
+                    timestamps = pd.to_datetime(frame[config.contract.timestamp_col], errors="coerce")
+                    if start_date:
+                        frame = frame.loc[timestamps >= pd.Timestamp(start_date)]
+                    if end_date:
+                        frame = frame.loc[timestamps < _inclusive_end_bound(end_date)]
+        return config, frame
+
     def _latest_window_bounds(self, model_id: str) -> dict[str, str] | None:
         comparison_windows = getattr(self.repository.table_names, "comparison_windows", "")
         if not comparison_windows:
@@ -505,14 +668,36 @@ class DashboardBackend:
         bounds = self._latest_window_bounds(model_id)
         if not bounds:
             return pd.Series(dtype=float), pd.Series(dtype=float)
+        min_profile_date = min(
+            value
+            for value in (
+                bounds["baseline_start"],
+                bounds["baseline_end"],
+                bounds["window_start"],
+                bounds["window_end"],
+            )
+            if value
+        )
+        max_profile_date = max(
+            value
+            for value in (
+                bounds["baseline_start"],
+                bounds["baseline_end"],
+                bounds["window_start"],
+                bounds["window_end"],
+            )
+            if value
+        )
         frame = self._warehouse.query_params(
             f"""
             SELECT profile_date, distribution_json
             FROM {daily_feature_profiles}
-            WHERE model_key = %s AND feature_name = %s
+            WHERE model_key = %s
+              AND feature_name = %s
+              AND profile_date BETWEEN CAST(%s AS DATE) AND CAST(%s AS DATE)
             ORDER BY profile_date
             """,
-            (model_id, feature),
+            (model_id, feature, min_profile_date, max_profile_date),
         )
         if frame.empty:
             return pd.Series(dtype=float), pd.Series(dtype=float)
@@ -548,7 +733,7 @@ class DashboardBackend:
         )
 
     def get_dimension_breakdown(self, model_id: str, feature: str, dimension: str) -> pd.DataFrame:
-        config, _, current = self._load_baseline_current(model_id, feature_columns=(feature, dimension))
+        config, current = self._load_current_window_frame(model_id, feature_columns=(feature, dimension))
         if not config or feature not in current.columns or dimension not in current.columns:
             return pd.DataFrame()
         working = current[[dimension, feature]].copy()
@@ -570,7 +755,7 @@ class DashboardBackend:
         return breakdown
 
     def get_prediction_distribution(self, model_id: str) -> pd.Series:
-        config, _, current = self._load_baseline_current(model_id)
+        config, current = self._load_current_window_frame(model_id, feature_columns=None)
         if not config or config.contract.prediction_col not in current.columns:
             return pd.Series(dtype=float)
         return pd.to_numeric(current[config.contract.prediction_col], errors="coerce").dropna()
@@ -662,6 +847,11 @@ class DashboardBackend:
             "recent_runs": (
                 self.repository.get_recent_refresh_runs(model_id, limit=8)
                 if hasattr(self.repository, "get_recent_refresh_runs")
+                else []
+            ),
+            "recent_incident_history": (
+                self.repository.get_recent_incident_history(model_id, limit=8)
+                if hasattr(self.repository, "get_recent_incident_history")
                 else []
             ),
             "settings": {

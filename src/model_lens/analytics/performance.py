@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import accuracy_score, f1_score, mean_absolute_error, mean_squared_error, precision_score, recall_score
 
+from model_lens.domain.performance_metrics import default_performance_metric_names, normalize_performance_metric_names
+
 
 def compute_bin_edges(values: np.ndarray, n_bins: int = 10) -> np.ndarray:
     return np.histogram_bin_edges(values[~np.isnan(values)], bins=n_bins)
@@ -55,12 +57,17 @@ def rank_degradation_contributors(
     feature_columns: list[str],
     prediction_col: str,
     label_col: str,
+    metric_names: tuple[str, ...] | list[str] | None = None,
     n_bins: int = 10,
     problem_type: str = "classification",
 ) -> pd.DataFrame:
     rows: list[dict] = []
     normalized_problem_type = (problem_type or "classification").strip().lower()
     regression_mode = normalized_problem_type == "regression"
+    selected_metric_names = normalize_performance_metric_names(
+        normalized_problem_type,
+        metric_names or default_performance_metric_names(normalized_problem_type),
+    )
     for feature in feature_columns:
         if feature not in baseline_df.columns or feature not in current_df.columns:
             continue
@@ -87,8 +94,7 @@ def rank_degradation_contributors(
             if not base_metrics or not cur_metrics:
                 continue
             volume_pct = round(float(len(cur_slice) / total_current * 100), 2)
-            metric_names = ("rmse", "mae") if regression_mode else ("f1",)
-            for metric_name in metric_names:
+            for metric_name in selected_metric_names:
                 if metric_name not in base_metrics or metric_name not in cur_metrics:
                     continue
                 baseline_metric = base_metrics[metric_name]

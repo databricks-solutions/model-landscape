@@ -115,6 +115,8 @@ def test_app_layout_exposes_slimmed_onboarding_flow() -> None:
         "save-monitor-btn",
         "review-drift-cadence-select",
         "review-performance-cadence-select",
+        "review-performance-metrics-dropdown",
+        "review-default-performance-metric-select",
         "review-schedule-enabled-toggle",
         "baseline-kind-input",
         "baseline-fixed-range-input",
@@ -181,6 +183,99 @@ def test_monitor_contract_ready_accepts_shared_labels_join_without_entity_id_col
         baseline_start=None,
         baseline_end=None,
     ) is True
+
+
+def test_save_monitor_allows_table_scoped_monitor_without_model_id_column(monkeypatch) -> None:
+    saved = {"validated": None, "upserted": None, "pending": None}
+
+    class _Repository:
+        def validate_monitor_source(self, config):
+            saved["validated"] = config
+
+        def upsert_monitor_config(self, config):
+            saved["upserted"] = config
+
+        def mark_monitor_bootstrap_pending(self, config):
+            saved["pending"] = config
+
+    class _FakeBackend:
+        def __init__(self):
+            self.repository = _Repository()
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    monkeypatch.setattr(
+        callbacks_module,
+        "trigger_refresh_job",
+        lambda **kwargs: (_ for _ in ()).throw(Exception("run-now denied")),
+    )
+    app = create_app()
+    fn = _find_callback_by_input_and_output(app, "save-monitor-btn", "action-status")
+
+    scan_data = {
+        "table_name": "main.demo.inference",
+        "columns": ["event_ts", "prediction", "label", "amount", "velocity_7d", "segment"],
+        "schema": [
+            {"col_name": "event_ts", "data_type": "timestamp"},
+            {"col_name": "prediction", "data_type": "double"},
+            {"col_name": "label", "data_type": "int"},
+            {"col_name": "amount", "data_type": "double"},
+            {"col_name": "velocity_7d", "data_type": "double"},
+            {"col_name": "segment", "data_type": "string"},
+        ],
+        "discovery": {},
+    }
+
+    result = fn(
+        1,
+        scan_data,
+        "Fraud Model Demo",
+        "fraud_model_demo",
+        "event_ts",
+        None,
+        "prediction",
+        "",
+        "",
+        None,
+        None,
+        None,
+        "label",
+        "",
+        "",
+        "",
+        "",
+        ["amount", "velocity_7d", "segment"],
+        ["segment"],
+        ["segment"],
+        "classification",
+        "rolling",
+        7,
+        None,
+        None,
+        "6h",
+        "daily_7d_repair",
+        ["enabled"],
+        ["f1", "precision", "recall"],
+        "f1",
+        "model_observability",
+        "control_plane",
+        "",
+        "",
+        "",
+        {
+            "control_plane_catalog": "model_observability",
+            "control_plane_schema": "control_plane",
+        },
+    )
+
+    assert saved["validated"] is not None
+    assert saved["upserted"] is not None
+    assert saved["pending"] is not None
+    assert saved["upserted"].contract.model_id_col is None
+    assert saved["upserted"].model_id_value is None
+    assert saved["upserted"].performance_metric_names == ("f1", "precision", "recall")
+    assert saved["upserted"].default_performance_metric == "f1"
+    assert "Initial refresh is pending on the shared refresh job" in str(result[0])
+    assert result[1]
 
 
 def test_workspace_lakebase_probe_is_skipped_outside_databricks_app(monkeypatch) -> None:
@@ -334,6 +429,8 @@ def test_render_onboarding_wizard_callback_executes_for_step_two() -> None:
         "6h",
         "disabled",
         ["enabled"],
+        ["f1", "precision", "recall"],
+        "f1",
         None,
         None,
         None,
@@ -346,6 +443,26 @@ def test_render_onboarding_wizard_callback_executes_for_step_two() -> None:
     assert len(result) == 12
     assert result[3] == {}
     assert result[2] == {"display": "none"}
+
+
+def test_performance_metric_selector_uses_monitor_configured_metrics(monkeypatch) -> None:
+    class _FakeBackend:
+        def get_monitor_config(self, model_id):
+            assert model_id == "fraud_model_demo"
+            return SimpleNamespace(
+                problem_type="classification",
+                performance_metric_names=("f1", "precision", "recall"),
+                default_performance_metric="precision",
+            )
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_output(app, "perf-metric-select")
+
+    options, value = fn("fraud_model_demo", {}, None)
+
+    assert [option["value"] for option in options] == ["f1", "precision", "recall"]
+    assert value == "precision"
 
 
 def test_render_drift_callback_reports_when_only_one_window_exists(monkeypatch) -> None:
@@ -540,6 +657,7 @@ def test_render_reference_callback_shows_archive_and_delete_actions(monkeypatch)
                 "summary": {},
                 "runtime_state": {},
                 "recent_runs": [],
+                "recent_incident_history": [],
                 "settings": {"refresh_job_id": "", "refresh_job_name": "model-lens-refresh"},
             }
 
@@ -552,6 +670,76 @@ def test_render_reference_callback_shows_archive_and_delete_actions(monkeypatch)
     assert "Archive Monitor" in str(result)
     assert "Delete Monitor And History" in str(result)
     assert "Monitor Lifecycle" in str(result)
+
+
+def test_render_reference_callback_shows_recent_incident_history(monkeypatch) -> None:
+    config = SimpleNamespace(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.demo.inference",
+        contract=SimpleNamespace(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            model_version_col=None,
+            label_col="label",
+            entity_id_col="entity_id",
+            feature_columns=("amount",),
+            categorical_columns=("segment",),
+            slice_columns=("segment",),
+        ),
+        model_id_value="fraud_model_v1",
+        model_version_value=None,
+        labels_table=None,
+        labels_join_col=None,
+        labels_order_col=None,
+        mlflow=SimpleNamespace(
+            experiment_name=None,
+            experiment_id=None,
+            run_id=None,
+            registered_model_name=None,
+            model_version=None,
+        ),
+        baseline=SimpleNamespace(kind="rolling", n_days=7, baseline_start=None, baseline_end=None),
+        problem_type="classification",
+        drift_cadence_preset="6h",
+        performance_cadence_preset="daily_7d_repair",
+        schedule_enabled=True,
+        status="active",
+    )
+
+    class _FakeBackend:
+        def get_reference_data(self, model_id):
+            assert model_id == "fraud_model_demo"
+            return {
+                "config": config,
+                "summary": {},
+                "runtime_state": {},
+                "recent_runs": [],
+                "recent_incident_history": [
+                    {
+                        "event_type": "opened",
+                        "feature_name": "amount",
+                        "metric_name": "psi",
+                        "severity": "warning",
+                        "status": "open",
+                        "metric_value": 0.12,
+                        "window_end": "2026-01-21",
+                        "observed_at": "2026-01-21T10:00:00",
+                    }
+                ],
+                "settings": {"refresh_job_id": "", "refresh_job_name": "model-lens-refresh"},
+            }
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_output(app, "reference-page-body")
+
+    result = fn("/reference", "fraud_model_demo", None, 0, {})
+
+    assert "Recent Incident History" in str(result)
+    assert "opened" in str(result)
+    assert "amount" in str(result)
 
 
 def test_archive_reference_monitor_callback_archives_selected_monitor(monkeypatch) -> None:

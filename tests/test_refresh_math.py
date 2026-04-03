@@ -9,6 +9,7 @@ from model_lens.services.refresh_engine import (
     build_daily_feature_profile_rows,
     build_daily_performance_profile_rows,
     build_daily_quality_profile_rows,
+    build_performance_bin_specs,
     derive_refresh_result_from_daily_profiles,
     generate_window_metadata,
     generate_window_pairs,
@@ -283,7 +284,76 @@ def test_daily_profile_builders_emit_quality_feature_and_performance_rows() -> N
     assert {row["feature_name"] for row in feature_rows} == {"amount", "segment"}
     assert {row["feature_kind"] for row in feature_rows} == {"numeric", "categorical"}
     assert performance_rows
-    assert {row["metric_name"] for row in performance_rows} == {"f1"}
+    assert {row["metric_name"] for row in performance_rows} == {"f1", "precision", "recall"}
+
+
+def test_daily_performance_profiles_reuse_canonical_bin_specs_across_runs() -> None:
+    bootstrap_frame = pd.DataFrame([
+        {
+            "event_ts": datetime(2026, 1, 1, hour=offset),
+            "model_id": "m1",
+            "prediction": 0.8 if offset % 2 else 0.2,
+            "label": offset % 2,
+            "amount": float(offset),
+        }
+        for offset in range(12)
+    ])
+    incremental_frame = pd.DataFrame([
+        {
+            "event_ts": datetime(2026, 1, 2, hour=offset),
+            "model_id": "m1",
+            "prediction": 0.8 if offset % 2 else 0.2,
+            "label": offset % 2,
+            "amount": float(100 + offset),
+        }
+        for offset in range(12)
+    ])
+    contract = build_contract(
+        columns=list(bootstrap_frame.columns),
+        timestamp_col="event_ts",
+        model_id_col="model_id",
+        prediction_col="prediction",
+        label_col="label",
+        feature_columns=["amount"],
+    )
+    config = MonitorConfig(
+        model_key="m1",
+        display_name="Model 1",
+        source_table="cat.sch.logs",
+        contract=contract,
+        baseline=build_default_baseline(),
+    )
+
+    bootstrap_specs = build_performance_bin_specs(
+        config=config,
+        inference_df=bootstrap_frame,
+        n_bins=4,
+    )
+    incremental_specs = build_performance_bin_specs(
+        config=config,
+        inference_df=incremental_frame,
+        existing_specs=bootstrap_specs,
+        n_bins=4,
+    )
+    reused_rows = build_daily_performance_profile_rows(
+        config=config,
+        inference_df=incremental_frame,
+        computed_at="2026-01-02T00:00:00Z",
+        bin_specs=incremental_specs,
+        n_bins=4,
+    )
+    ad_hoc_rows = build_daily_performance_profile_rows(
+        config=config,
+        inference_df=incremental_frame,
+        computed_at="2026-01-02T00:00:00Z",
+        n_bins=4,
+    )
+
+    assert incremental_specs == bootstrap_specs
+    assert reused_rows
+    assert ad_hoc_rows
+    assert {row["bin_label"] for row in reused_rows} != {row["bin_label"] for row in ad_hoc_rows}
+    assert all("100" not in row["bin_label"] for row in reused_rows)
 
 
 def test_daily_profiles_can_derive_window_history_without_raw_window_reloads() -> None:
@@ -342,5 +412,5 @@ def test_daily_profiles_can_derive_window_history_without_raw_window_reloads() -
     assert len(result.quality_history_rows) == 8
     assert len({row["window_end"] for row in result.drift_rows}) == 8
     assert any(row["feature_name"] == "segment" and row["metric_name"] == "psi" for row in result.drift_rows)
-    assert {row["metric_name"] for row in result.performance_rows} == {"f1"}
+    assert {row["metric_name"] for row in result.performance_rows} == {"f1", "precision", "recall"}
     assert all(row["window_id"] for row in result.incident_history_rows)

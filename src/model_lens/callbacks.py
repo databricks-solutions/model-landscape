@@ -19,6 +19,12 @@ from model_lens.domain.models import (
     MonitorRuntimeState,
     PERFORMANCE_CADENCE_PRESETS,
 )
+from model_lens.domain.performance_metrics import (
+    default_performance_metric_names,
+    default_primary_performance_metric,
+    performance_metric_label,
+    performance_metric_options,
+)
 from model_lens.pages import onboarding
 from model_lens.services.inference_contracts import build_inference_contract
 from model_lens.services.onboarding import baseline_label, build_default_baseline, build_fixed_baseline
@@ -81,11 +87,63 @@ def _comparison_history_message(window_count: int, granularity: str = "daily") -
 
 def _default_performance_metric(model_id: str | None, backend: DashboardBackend) -> str:
     if not model_id:
-        return "f1"
+        return default_primary_performance_metric("classification")
     config = backend.get_monitor_config(model_id)
-    if config and config.problem_type == "regression":
-        return "rmse"
-    return "f1"
+    return _configured_default_performance_metric(config)
+
+
+def _configured_performance_metric_names(config: object | None) -> list[str]:
+    if config is None:
+        return list(default_performance_metric_names("classification"))
+    problem_type = getattr(config, "problem_type", "classification")
+    allowed_values = {
+        option["value"]
+        for option in performance_metric_options(problem_type)
+    }
+    metric_names = [
+        str(metric_name).strip().lower()
+        for metric_name in (getattr(config, "performance_metric_names", ()) or ())
+        if str(metric_name).strip().lower() in allowed_values
+    ]
+    if metric_names:
+        return list(dict.fromkeys(metric_names))
+    return list(default_performance_metric_names(problem_type))
+
+
+def _configured_default_performance_metric(config: object | None) -> str:
+    problem_type = getattr(config, "problem_type", "classification") if config is not None else "classification"
+    metric_names = _configured_performance_metric_names(config)
+    requested_default = str(getattr(config, "default_performance_metric", "") or "").strip().lower()
+    if requested_default in metric_names:
+        return requested_default
+    preferred_default = default_primary_performance_metric(problem_type)
+    if preferred_default in metric_names:
+        return preferred_default
+    return metric_names[0]
+
+
+def _sync_performance_metric_selection(
+    *,
+    problem_type: str | None,
+    selected_metrics: list[str] | tuple[str, ...] | None,
+    current_default: str | None,
+) -> tuple[list[dict[str, str]], list[str], list[dict[str, str]], str | None]:
+    options = performance_metric_options(problem_type)
+    allowed_values = {option["value"] for option in options}
+    requested_metrics = [
+        str(metric_name).strip().lower()
+        for metric_name in (selected_metrics or [])
+        if str(metric_name).strip().lower() in allowed_values
+    ]
+    if not requested_metrics:
+        requested_metrics = list(default_performance_metric_names(problem_type))
+    selected = list(dict.fromkeys(requested_metrics))
+    default_options = [option for option in options if option["value"] in set(selected)]
+    default_value = str(current_default or "").strip().lower()
+    if default_value not in set(selected):
+        preferred_default = default_primary_performance_metric(problem_type)
+        default_value = preferred_default if preferred_default in set(selected) else selected[0]
+    return options, selected, default_options, default_value
 
 
 def _render_frame(frame: pd.DataFrame, empty_message: str, max_rows: int = 20) -> html.Div:
@@ -372,6 +430,8 @@ def _review_summary(
     baseline_start: str | None,
     baseline_end: str | None,
     problem_type: str | None,
+    performance_metric_names: list[str] | tuple[str, ...] | None,
+    default_performance_metric: str | None,
     drift_cadence_preset: str | None,
     performance_cadence_preset: str | None,
     schedule_enabled: bool,
@@ -382,6 +442,8 @@ def _review_summary(
 ) -> html.Div:
     label_source = str(labels_table or "").strip() if str(labels_table or "").strip() else (str(source_label_col or "").strip() or "none")
     problem_type_text = str(problem_type or "classification").strip() or "classification"
+    performance_metric_text = ", ".join(performance_metric_label(metric_name) for metric_name in (performance_metric_names or ())) or "Default"
+    default_performance_metric_text = performance_metric_label(default_performance_metric or default_primary_performance_metric(problem_type_text))
     drift_cadence_text = str(drift_cadence_preset or "6h").strip() or "6h"
     performance_cadence_text = str(performance_cadence_preset or "disabled").strip() or "disabled"
     baseline_policy = (
@@ -395,6 +457,8 @@ def _review_summary(
         ("Display Name", (display_name or "").strip() or "Not set"),
         ("Model Key", (model_key or "").strip() or "Not set"),
         ("Problem Type", problem_type_text.title()),
+        ("Tracked Performance Metrics", performance_metric_text),
+        ("Default Performance Metric", default_performance_metric_text),
         ("Baseline Policy", baseline_label(baseline_policy)),
         ("Scheduled Refreshes", "Enabled" if schedule_enabled else "Manual only"),
         ("Drift Cadence", drift_cadence_text),
@@ -604,6 +668,8 @@ def register_callbacks(app) -> None:
         Input("review-drift-cadence-select", "value"),
         Input("review-performance-cadence-select", "value"),
         Input("review-schedule-enabled-toggle", "value"),
+        Input("review-performance-metrics-dropdown", "value"),
+        Input("review-default-performance-metric-select", "value"),
         Input("mlflow-experiment-input", "value"),
         Input("mlflow-registered-model-input", "value"),
         Input("lakebase-instance-input", "value"),
@@ -641,6 +707,8 @@ def register_callbacks(app) -> None:
         review_drift_cadence,
         review_performance_cadence,
         review_schedule_enabled,
+        review_performance_metrics,
+        review_default_performance_metric,
         mlflow_experiment_name,
         mlflow_registered_model_name,
         lakebase_instance_name,
@@ -728,6 +796,8 @@ def register_callbacks(app) -> None:
             baseline_start=baseline_start,
             baseline_end=baseline_end,
             problem_type=problem_type,
+            performance_metric_names=review_performance_metrics,
+            default_performance_metric=review_default_performance_metric,
             drift_cadence_preset=review_drift_cadence,
             performance_cadence_preset=review_performance_cadence,
             schedule_enabled="enabled" in (review_schedule_enabled or []),
@@ -749,6 +819,22 @@ def register_callbacks(app) -> None:
             next_labels[step],
             not (workspace_ready and contract_ready),
             review,
+        )
+
+    @app.callback(
+        Output("review-performance-metrics-dropdown", "options"),
+        Output("review-performance-metrics-dropdown", "value"),
+        Output("review-default-performance-metric-select", "options"),
+        Output("review-default-performance-metric-select", "value"),
+        Input("problem-type-dropdown", "value"),
+        State("review-performance-metrics-dropdown", "value"),
+        State("review-default-performance-metric-select", "value"),
+    )
+    def sync_review_performance_metrics(problem_type, selected_metrics, current_default):
+        return _sync_performance_metric_selection(
+            problem_type=problem_type,
+            selected_metrics=selected_metrics,
+            current_default=current_default,
         )
 
     @app.callback(
@@ -1304,6 +1390,8 @@ def register_callbacks(app) -> None:
         State("review-drift-cadence-select", "value"),
         State("review-performance-cadence-select", "value"),
         State("review-schedule-enabled-toggle", "value"),
+        State("review-performance-metrics-dropdown", "value"),
+        State("review-default-performance-metric-select", "value"),
         State("control-plane-catalog-input", "value"),
         State("control-plane-schema-input", "value"),
         State("lakebase-instance-input", "value"),
@@ -1341,6 +1429,8 @@ def register_callbacks(app) -> None:
         review_drift_cadence,
         review_performance_cadence,
         review_schedule_enabled,
+        review_performance_metrics,
+        review_default_performance_metric,
         control_plane_catalog,
         control_plane_schema,
         lakebase_instance_name,
@@ -1407,6 +1497,8 @@ def register_callbacks(app) -> None:
                 labels_table=labels_table or None,
                 labels_join_col=labels_join_col or None,
                 labels_order_col=labels_order_col or None,
+                performance_metric_names=tuple(review_performance_metrics or ()),
+                default_performance_metric=review_default_performance_metric or None,
                 drift_cadence_preset=review_drift_cadence or "6h",
                 performance_cadence_preset=(
                     review_performance_cadence
@@ -1716,14 +1808,17 @@ def register_callbacks(app) -> None:
     def sync_performance_metric_options(model_id, session_data, current_metric):
         backend = _make_backend(session_data)
         default_metric = _default_performance_metric(model_id, backend)
-        options = (
-            [
-                {"label": "RMSE", "value": "rmse"},
-                {"label": "MAE", "value": "mae"},
+        config = backend.get_monitor_config(model_id) if model_id else None
+        if config:
+            options = [
+                {
+                    "label": performance_metric_label(metric_name),
+                    "value": metric_name,
+                }
+                for metric_name in _configured_performance_metric_names(config)
             ]
-            if default_metric == "rmse"
-            else [{"label": "F1 Score", "value": "f1"}]
-        )
+        else:
+            options = performance_metric_options("classification")
         valid_values = {option["value"] for option in options}
         value = current_metric if current_metric in valid_values else default_metric
         return options, value
@@ -1944,6 +2039,17 @@ def register_callbacks(app) -> None:
                 {"field": "baseline_start", "value": config.baseline.baseline_start or ""},
                 {"field": "baseline_end", "value": config.baseline.baseline_end or ""},
                 {"field": "problem_type", "value": config.problem_type},
+                {
+                    "field": "performance_metric_names",
+                    "value": ", ".join(
+                        performance_metric_label(metric_name)
+                        for metric_name in _configured_performance_metric_names(config)
+                    ),
+                },
+                {
+                    "field": "default_performance_metric",
+                    "value": performance_metric_label(_configured_default_performance_metric(config)),
+                },
                 {"field": "drift_cadence_preset", "value": config.drift_cadence_preset},
                 {"field": "performance_cadence_preset", "value": config.performance_cadence_preset},
                 {"field": "schedule_enabled", "value": config.schedule_enabled},
@@ -1974,6 +2080,27 @@ def register_callbacks(app) -> None:
                 ]
             ]
             if recent_runs
+            else pd.DataFrame()
+        )
+        recent_incident_history = data.get("recent_incident_history") or []
+        recent_incident_history_frame = (
+            pd.DataFrame(recent_incident_history)[
+                [
+                    column
+                    for column in (
+                        "event_type",
+                        "feature_name",
+                        "metric_name",
+                        "severity",
+                        "status",
+                        "metric_value",
+                        "window_end",
+                        "observed_at",
+                    )
+                    if recent_incident_history and column in recent_incident_history[0]
+                ]
+            ]
+            if recent_incident_history
             else pd.DataFrame()
         )
         settings_frame = pd.DataFrame(
@@ -2031,7 +2158,43 @@ def register_callbacks(app) -> None:
                         ],
                         className="g-3",
                     ),
-                    dbc.Button("Save Schedule", id="reference-save-schedule-btn", color="primary", className="mt-3"),
+                    html.H6("Performance Metrics", className="text-light mt-4 mb-3"),
+                    dbc.Row(
+                        [
+                            dbc.Col(
+                                [
+                                    dbc.Label("Tracked Performance Metrics"),
+                                    dcc.Dropdown(
+                                        id="reference-performance-metrics-select",
+                                        options=performance_metric_options(config.problem_type),
+                                        value=_configured_performance_metric_names(config),
+                                        multi=True,
+                                        className="dash-dropdown",
+                                    ),
+                                ],
+                                md=8,
+                            ),
+                            dbc.Col(
+                                [
+                                    dbc.Label("Default Performance Metric"),
+                                    dbc.Select(
+                                        id="reference-default-performance-metric-select",
+                                        options=[
+                                            {
+                                                "label": performance_metric_label(metric_name),
+                                                "value": metric_name,
+                                            }
+                                            for metric_name in _configured_performance_metric_names(config)
+                                        ],
+                                        value=_configured_default_performance_metric(config),
+                                    ),
+                                ],
+                                md=4,
+                            ),
+                        ],
+                        className="g-3",
+                    ),
+                    dbc.Button("Save Monitor Settings", id="reference-save-schedule-btn", color="primary", className="mt-3"),
                 ]
             ),
             className="mb-4",
@@ -2152,9 +2315,47 @@ def register_callbacks(app) -> None:
                 html.H6("Recent Refresh Runs", className="text-light mb-2"),
                 _render_frame(recent_runs_frame, "No refresh runs recorded yet."),
                 html.Hr(),
+                html.H6("Recent Incident History", className="text-light mb-2"),
+                _render_frame(recent_incident_history_frame, "No incident history recorded yet."),
+                html.Hr(),
                 html.H6("Runtime Settings", className="text-light mb-2"),
                 _render_frame(settings_frame, "No runtime settings."),
             ]
+        )
+
+    @app.callback(
+        Output("reference-performance-metrics-select", "options"),
+        Output("reference-performance-metrics-select", "value"),
+        Output("reference-default-performance-metric-select", "options"),
+        Output("reference-default-performance-metric-select", "value"),
+        Input("global-model-select", "value"),
+        Input("reference-monitor-select", "value"),
+        Input("reload-token", "data"),
+        Input("session-config-store", "data"),
+        State("reference-performance-metrics-select", "value"),
+        State("reference-default-performance-metric-select", "value"),
+    )
+    def sync_reference_performance_metrics(
+        global_model_id,
+        reference_model_id,
+        _,
+        session_data,
+        selected_metrics,
+        current_default,
+    ):
+        model_id = _resolve_reference_model_id(global_model_id, reference_model_id)
+        if not model_id:
+            return [], [], [], None
+        backend = _make_backend(session_data)
+        config = _get_monitor_config_for_reference(backend, model_id)
+        if not config:
+            return [], [], [], None
+        seed_metrics = selected_metrics if selected_metrics is not None else _configured_performance_metric_names(config)
+        seed_default = current_default if current_default is not None else _configured_default_performance_metric(config)
+        return _sync_performance_metric_selection(
+            problem_type=config.problem_type,
+            selected_metrics=seed_metrics,
+            current_default=seed_default,
         )
 
     @app.callback(
@@ -2166,10 +2367,22 @@ def register_callbacks(app) -> None:
         State("reference-drift-cadence-select", "value"),
         State("reference-performance-cadence-select", "value"),
         State("reference-schedule-enabled-toggle", "value"),
+        State("reference-performance-metrics-select", "value"),
+        State("reference-default-performance-metric-select", "value"),
         State("session-config-store", "data"),
         prevent_initial_call=True,
     )
-    def save_reference_schedule(_, global_model_id, reference_model_id, drift_cadence, performance_cadence, schedule_enabled, session_data):
+    def save_reference_schedule(
+        _,
+        global_model_id,
+        reference_model_id,
+        drift_cadence,
+        performance_cadence,
+        schedule_enabled,
+        performance_metric_names,
+        default_performance_metric,
+        session_data,
+    ):
         model_id = _resolve_reference_model_id(global_model_id, reference_model_id)
         if not model_id:
             return _status_alert("Select a monitor before updating cadence.", "warning"), no_update
@@ -2190,6 +2403,8 @@ def register_callbacks(app) -> None:
                 labels_table=config.labels_table,
                 labels_join_col=config.labels_join_col,
                 labels_order_col=config.labels_order_col,
+                performance_metric_names=tuple(performance_metric_names or ()),
+                default_performance_metric=default_performance_metric or None,
                 drift_cadence_preset=drift_cadence or config.drift_cadence_preset,
                 performance_cadence_preset=(
                     performance_cadence

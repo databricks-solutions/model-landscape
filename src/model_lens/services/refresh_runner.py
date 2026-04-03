@@ -14,6 +14,7 @@ from model_lens.services.refresh_engine import (
     build_daily_feature_profile_rows,
     build_daily_performance_profile_rows,
     build_daily_quality_profile_rows,
+    build_performance_bin_specs,
     build_quality_rows_from_profile,
     derive_refresh_result_from_daily_profiles,
     generate_window_metadata,
@@ -407,9 +408,18 @@ def _get_source_profile(
     }
 
 
-def _get_label_watermark(repository: ControlPlaneRepository, config: MonitorConfig) -> str | None:
+def _get_label_watermark(
+    repository: ControlPlaneRepository,
+    config: MonitorConfig,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> str | None:
     if hasattr(repository, "get_label_watermark"):
-        return repository.get_label_watermark(config)
+        try:
+            return repository.get_label_watermark(config, start_date=start_date, end_date=end_date)
+        except TypeError:
+            return repository.get_label_watermark(config)
     return None
 
 
@@ -478,6 +488,17 @@ def _start_refresh_run(repository: ControlPlaneRepository, **kwargs) -> str:
             "data_max_date": kwargs.get("data_max_date"),
         }
         return repository.start_refresh_run(**fallback)
+
+
+def _update_refresh_run_metadata(repository: ControlPlaneRepository, run_id: str, **kwargs) -> None:
+    if hasattr(repository, "update_refresh_run_metadata"):
+        repository.update_refresh_run_metadata(run_id, **kwargs)
+
+
+def _get_stale_running_refresh_runs(repository: ControlPlaneRepository, started_before: str) -> list[dict]:
+    if hasattr(repository, "get_stale_running_refresh_runs"):
+        return repository.get_stale_running_refresh_runs(started_before)
+    return []
 
 
 def _schedule_state_after_success(
@@ -615,6 +636,41 @@ def _schedule_state_after_failure(
     )
 
 
+def _reconcile_stale_running_runs(repository: ControlPlaneRepository, now: pd.Timestamp) -> None:
+    stale_before = (now - timedelta(minutes=settings.refresh_stale_run_minutes)).isoformat()
+    stale_runs = _get_stale_running_refresh_runs(repository, stale_before)
+    if not stale_runs:
+        return
+    for row in stale_runs:
+        run_id = str(row.get("run_id") or "").strip()
+        model_key = str(row.get("model_key") or "").strip()
+        if not run_id or not model_key:
+            continue
+        message = "Marked failed after exceeding stale-run timeout."
+        repository.complete_refresh_run(run_id, status="failed", error_message=message)
+        state = repository.get_monitor_runtime_state(model_key) if hasattr(repository, "get_monitor_runtime_state") else None
+        if state is None:
+            continue
+        _upsert_runtime_state(
+            repository,
+            _schedule_state_after_failure(
+                state,
+                completed_at=now,
+                error_message=message,
+            ),
+        )
+
+
+def _unexpected_failure_result(target: RefreshTarget, error: Exception) -> MonitorRefreshResult:
+    return MonitorRefreshResult(
+        model_key=target.config.model_key,
+        scope=target.scope,
+        status="failed",
+        counts=RefreshCounts(models=0, drift_rows=0, quality_rows=0, performance_rows=0, incident_rows=0),
+        error=str(error),
+    )
+
+
 def _load_window_frame(
     repository: ControlPlaneRepository,
     config: MonitorConfig,
@@ -661,23 +717,28 @@ def _execute_target(
     config = target.config
     state = _get_runtime_state(repository, config)
     scheduled_at_text = target.scheduled_at.isoformat()
-    data_min_date, data_max_date = _get_source_date_range(repository, config)
-    run_id: str | None = None
     started_at = _utc_now()
+    run_kind = "backfill" if target.scope == "bootstrap" else "incremental"
+    run_id: str | None = _start_refresh_run(
+        repository,
+        model_key=config.model_key,
+        requested_mode=requested_mode,
+        run_kind=run_kind,
+        scope=target.scope,
+        scheduled_at=scheduled_at_text,
+    )
+    running_state = _schedule_state_running(state, started_at=started_at)
+    _upsert_runtime_state(repository, running_state)
 
     try:
+        data_min_date, data_max_date = _get_source_date_range(repository, config)
         if not data_max_date:
-            run_id = _start_refresh_run(
+            _update_refresh_run_metadata(
                 repository,
-                model_key=config.model_key,
-                requested_mode=requested_mode,
-                run_kind="skipped",
-                scope=target.scope,
-                scheduled_at=scheduled_at_text,
+                run_id,
                 data_min_date=data_min_date,
                 data_max_date=data_max_date,
             )
-            _upsert_runtime_state(repository, _schedule_state_running(state, started_at=started_at))
             repository.complete_refresh_run(
                 run_id,
                 status="skipped",
@@ -687,7 +748,7 @@ def _execute_target(
                 repository,
                 _schedule_state_after_skip(
                     config,
-                    _schedule_state_running(state, started_at=started_at),
+                    running_state,
                     scope=target.scope,
                     completed_at=_utc_now(),
                     message="No source rows available for this monitor.",
@@ -700,42 +761,6 @@ def _execute_target(
                 counts=RefreshCounts(models=0, drift_rows=0, quality_rows=0, performance_rows=0, incident_rows=0),
             )
 
-        if target.scope == "performance_repair":
-            latest_watermark = _get_label_watermark(repository, config)
-            if latest_watermark and latest_watermark == state.last_label_watermark and state.last_performance_refresh_at:
-                run_id = _start_refresh_run(
-                    repository,
-                    model_key=config.model_key,
-                    requested_mode=requested_mode,
-                    run_kind="incremental",
-                    scope=target.scope,
-                    scheduled_at=scheduled_at_text,
-                    data_min_date=data_min_date,
-                    data_max_date=data_max_date,
-                )
-                _upsert_runtime_state(repository, _schedule_state_running(state, started_at=started_at))
-                repository.complete_refresh_run(
-                    run_id,
-                    status="skipped",
-                    error_message="Label watermark has not advanced since the previous performance refresh.",
-                )
-                _upsert_runtime_state(
-                    repository,
-                    _schedule_state_after_skip(
-                        config,
-                        _schedule_state_running(state, started_at=started_at),
-                        scope=target.scope,
-                        completed_at=_utc_now(),
-                        message="Label watermark has not advanced since the previous performance refresh.",
-                    )
-                )
-                return MonitorRefreshResult(
-                    model_key=config.model_key,
-                    scope=target.scope,
-                    status="skipped",
-                    counts=RefreshCounts(models=0, drift_rows=0, quality_rows=0, performance_rows=0, incident_rows=0),
-                )
-
         latest_date = pd.Timestamp(data_max_date)
         if target.scope == "bootstrap":
             range_start, range_end = _bootstrap_range(config, latest_date)
@@ -747,14 +772,9 @@ def _execute_target(
         profile = _get_source_profile(repository, config, start_date=range_start, end_date=range_end)
         bounded_min_date = str(profile.get("min_date") or "") or None
         bounded_max_date = str(profile.get("max_date") or "") or None
-        run_kind = "backfill" if target.scope == "bootstrap" else "incremental"
-        run_id = _start_refresh_run(
+        _update_refresh_run_metadata(
             repository,
-            model_key=config.model_key,
-            requested_mode=requested_mode,
-            run_kind=run_kind,
-            scope=target.scope,
-            scheduled_at=scheduled_at_text,
+            run_id,
             data_min_date=data_min_date,
             data_max_date=data_max_date,
             range_start=range_start,
@@ -762,8 +782,36 @@ def _execute_target(
             rows_scanned=int(profile.get("total_rows", 0) or 0),
             label_rows_scanned=int(profile.get("label_row_count", 0) or 0),
         )
-        running_state = _schedule_state_running(state, started_at=started_at)
-        _upsert_runtime_state(repository, running_state)
+
+        if target.scope == "performance_repair":
+            latest_watermark = _get_label_watermark(
+                repository,
+                config,
+                start_date=range_start,
+                end_date=range_end,
+            )
+            if latest_watermark and latest_watermark == state.last_label_watermark and state.last_performance_refresh_at:
+                repository.complete_refresh_run(
+                    run_id,
+                    status="skipped",
+                    error_message="Label watermark has not advanced since the previous performance refresh.",
+                )
+                _upsert_runtime_state(
+                    repository,
+                    _schedule_state_after_skip(
+                        config,
+                        running_state,
+                        scope=target.scope,
+                        completed_at=_utc_now(),
+                        message="Label watermark has not advanced since the previous performance refresh.",
+                    )
+                )
+                return MonitorRefreshResult(
+                    model_key=config.model_key,
+                    scope=target.scope,
+                    status="skipped",
+                    counts=RefreshCounts(models=0, drift_rows=0, quality_rows=0, performance_rows=0, incident_rows=0),
+                )
 
         if not bounded_max_date or int(profile.get("total_rows", 0) or 0) <= 0:
             repository.complete_refresh_run(run_id, status="skipped", error_message="No rows found inside the refresh range.")
@@ -851,8 +899,25 @@ def _execute_target(
             if include_drift_quality
             else []
         )
+        performance_bin_specs: dict[str, tuple[float, ...]] = {}
+        if include_performance:
+            existing_bin_specs = (
+                repository.get_performance_bin_specs(config.model_key)
+                if hasattr(repository, "get_performance_bin_specs") and target.scope != "bootstrap"
+                else {}
+            )
+            performance_bin_specs = build_performance_bin_specs(
+                config=config,
+                inference_df=range_frame,
+                existing_specs=existing_bin_specs,
+            )
         daily_performance_profile_rows = (
-            build_daily_performance_profile_rows(config=config, inference_df=range_frame, computed_at=computed_at_text)
+            build_daily_performance_profile_rows(
+                config=config,
+                inference_df=range_frame,
+                computed_at=computed_at_text,
+                bin_specs=performance_bin_specs,
+            )
             if include_performance
             else []
         )
@@ -931,6 +996,7 @@ def _execute_target(
             daily_quality_profile_rows=daily_quality_profile_rows,
             daily_feature_profile_rows=daily_feature_profile_rows,
             daily_performance_profile_rows=daily_performance_profile_rows,
+            performance_bin_specs=performance_bin_specs,
         )
 
         if target.scope == "bootstrap":
@@ -955,7 +1021,16 @@ def _execute_target(
                 running_state,
                 scope=target.scope,
                 completed_at=completed_at,
-                label_watermark=_get_label_watermark(repository, config),
+                label_watermark=(
+                    _get_label_watermark(
+                        repository,
+                        config,
+                        start_date=range_start,
+                        end_date=range_end,
+                    )
+                    if include_performance and config.has_labels
+                    else None
+                ),
             )
         )
         return MonitorRefreshResult(
@@ -999,6 +1074,7 @@ def run_refresh_cycle(
     mode: str = "auto",
     scope: RefreshScope = "scheduler",
 ) -> RefreshBatchResult:
+    _reconcile_stale_running_runs(repository, _utc_now())
     configs = repository.list_monitor_configs(status="active")
     targets = _select_targets(repository, configs, model_key=model_key, scope=scope)
 
@@ -1006,7 +1082,10 @@ def run_refresh_cycle(
     results: list[MonitorRefreshResult] = []
     if len(targets) <= 1 or max_workers <= 1 or not hasattr(repository, "fork_for_worker"):
         for target in targets:
-            results.append(_execute_target(repository, target, requested_mode=mode))
+            try:
+                results.append(_execute_target(repository, target, requested_mode=mode))
+            except Exception as error:
+                results.append(_unexpected_failure_result(target, error))
         batch = RefreshBatchResult(requested_scope=scope, requested_mode=mode, results=tuple(results))
         sync_read_model = getattr(repository, "_sync_read_model", None)
         if callable(sync_read_model) and batch.models > 0:
@@ -1014,7 +1093,6 @@ def run_refresh_cycle(
         return batch
 
     worker_count = min(max_workers, len(targets))
-    fatal_errors: list[Exception] = []
     with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="model-lens-refresh") as executor:
         future_map = {
             executor.submit(_execute_target, repository.fork_for_worker(), target, requested_mode=mode): target
@@ -1024,11 +1102,9 @@ def run_refresh_cycle(
             try:
                 results.append(future.result())
             except Exception as error:
-                fatal_errors.append(error)
+                results.append(_unexpected_failure_result(future_map[future], error))
     sync_read_model = getattr(repository, "_sync_read_model", None)
     batch = RefreshBatchResult(requested_scope=scope, requested_mode=mode, results=tuple(results))
     if callable(sync_read_model) and batch.models > 0:
         sync_read_model()
-    if fatal_errors:
-        raise fatal_errors[0]
     return batch

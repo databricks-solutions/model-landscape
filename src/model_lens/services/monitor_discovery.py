@@ -552,10 +552,6 @@ class MonitorDiscoveryService:
         if not timestamp_col or not prediction_col:
             confidence = "low"
             requires_review = True
-        elif not model_id_col:
-            warnings.append(
-                "No model ID column was detected. This draft will treat the inference table as one monitored model unless you map a model ID column manually."
-            )
         return MonitorDiscoveryResult(
             config=config,
             columns=tuple(columns),

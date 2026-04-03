@@ -3,6 +3,7 @@ from __future__ import annotations
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
+from model_lens.domain.performance_metrics import default_primary_performance_metric, performance_metric_options
 from model_lens.ui.styles import DROPDOWN_STYLE
 
 
@@ -19,12 +20,8 @@ def layout():
                             dbc.Label("Primary Metric", className="text-muted"),
                             dbc.Select(
                                 id="perf-metric-select",
-                                options=[
-                                    {"label": "F1 Score", "value": "f1"},
-                                    {"label": "RMSE", "value": "rmse"},
-                                    {"label": "MAE", "value": "mae"},
-                                ],
-                                value="f1",
+                                options=performance_metric_options("classification"),
+                                value=default_primary_performance_metric("classification"),
                                 style=DROPDOWN_STYLE,
                             ),
                         ],

@@ -5,6 +5,11 @@ from dash import dcc, html
 
 from model_lens.config import settings
 from model_lens.domain.models import DRIFT_CADENCE_PRESETS, PERFORMANCE_CADENCE_PRESETS
+from model_lens.domain.performance_metrics import (
+    default_performance_metric_names,
+    default_primary_performance_metric,
+    performance_metric_options,
+)
 from model_lens.ui.components import make_wizard_step
 
 
@@ -389,6 +394,7 @@ def _review_step() -> dbc.Row:
         "daily_7d_repair": "Daily (7-Day Repair)",
         "daily_14d_repair": "Daily (14-Day Repair)",
     }
+    default_metric_options = performance_metric_options("classification")
     return dbc.Row(
         [
             dbc.Col(
@@ -440,6 +446,36 @@ def _review_step() -> dbc.Row:
                                 value=["enabled"],
                                 switch=True,
                                 className="mb-3",
+                            ),
+                            html.H6("Performance Metrics", className="mt-4 mb-3"),
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        [
+                                            dbc.Label("Tracked Performance Metrics"),
+                                            dcc.Dropdown(
+                                                id="review-performance-metrics-dropdown",
+                                                options=default_metric_options,
+                                                value=list(default_performance_metric_names("classification")),
+                                                multi=True,
+                                                className="dash-dropdown",
+                                            ),
+                                        ],
+                                        md=8,
+                                    ),
+                                    dbc.Col(
+                                        [
+                                            dbc.Label("Default Performance Metric"),
+                                            dbc.Select(
+                                                id="review-default-performance-metric-select",
+                                                options=default_metric_options,
+                                                value=default_primary_performance_metric("classification"),
+                                            ),
+                                        ],
+                                        md=4,
+                                    ),
+                                ],
+                                className="g-3 mb-3",
                             ),
                             html.Div(id="onboarding-review-summary"),
                             dbc.Button(

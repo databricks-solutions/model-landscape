@@ -10,6 +10,8 @@ def monitor_config_migration_columns() -> dict[str, str]:
         "model_id_value": "STRING",
         "model_version_value": "STRING",
         "labels_order_col": "STRING",
+        "performance_metric_names": "ARRAY<STRING>",
+        "default_performance_metric": "STRING",
         "drift_cadence_preset": "STRING",
         "performance_cadence_preset": "STRING",
         "schedule_enabled": "BOOLEAN",
@@ -69,6 +71,8 @@ def ddl(table_names: TableNames) -> dict[str, str]:
                 labels_table STRING,
                 labels_join_col STRING,
                 labels_order_col STRING,
+                performance_metric_names ARRAY<STRING>,
+                default_performance_metric STRING,
                 drift_cadence_preset STRING,
                 performance_cadence_preset STRING,
                 schedule_enabled BOOLEAN,
@@ -190,6 +194,14 @@ def ddl(table_names: TableNames) -> dict[str, str]:
                 row_count BIGINT,
                 computed_at TIMESTAMP,
                 source_run_id STRING
+            ) USING DELTA
+        """.strip(),
+        "performance_bin_specs": f"""
+            CREATE TABLE IF NOT EXISTS {table_names.performance_bin_specs} (
+                model_key STRING,
+                feature_name STRING,
+                edges_json STRING,
+                computed_at TIMESTAMP
             ) USING DELTA
         """.strip(),
         "incidents": f"""

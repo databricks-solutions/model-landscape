@@ -11,6 +11,7 @@ Current local implementation status:
 - Phase 3 provenance hardening via `refresh_runs` and `comparison_windows` is implemented
 - Phase 4 quality-history rows, queries, and charts are implemented
 - Phase 5 incident-history rows and recovery lifecycle events are implemented in the warehouse path
+- shared refresh hardening is implemented: refresh audit rows are created before source-range discovery, `quality_metrics` is rebuilt from persisted `daily_quality_profiles`, stale `running` rows are reclaimed after a timeout, and canonical `performance_bin_specs` now keep incremental performance repair comparable to bootstrap
 
 The remaining work in this document is now primarily:
 
@@ -75,7 +76,7 @@ This staged approach shortened time-to-value materially: customers now get popul
 
 ### Quality
 
-- `quality_metrics` still exists as the latest-summary compatibility row
+- `quality_metrics` still exists as the latest-summary compatibility row, but it is now rebuilt from all persisted `daily_quality_profiles` rather than from only the latest bounded refresh slice
 - `quality_history` now stores one row per comparison window with row-count, prediction-stat, and null-rate trend data
 
 ### Incidents
@@ -90,7 +91,7 @@ The first multi-window implementation can use the current metric tables without 
 
 - `drift_metrics` stores many `window_start` / `window_end` pairs per model
 - `performance_metrics` stores many `window_start` / `window_end` pairs per model
-- `quality_metrics` remains as the latest-summary compatibility row
+- `quality_metrics` remains as the latest-summary compatibility row and is rebuilt from persisted daily profiles after each refresh write
 - `quality_history` stores many `window_start` / `window_end` pairs per model
 - `incidents` can stay as the current open-incident projection
 - `incident_history` stores lifecycle rows per feature / metric / comparison window
@@ -288,9 +289,11 @@ The frontend should remain thin:
 - persist `daily_quality_profiles`
 - persist `daily_feature_profiles`
 - persist `daily_performance_profiles`
+- persist `performance_bin_specs`
 - use bounded range reads and the shared refresh job to materialize those facts without requiring a full-table pandas load
 - derive the persisted comparison-window tables from that per-run daily-profile layer so refresh no longer reloads every logical window from the warehouse
 - on incremental runs, merge already-persisted daily facts for the affected date span so derivation can reuse prior history instead of depending entirely on the current bounded load
+- reuse persisted canonical performance-bin specs on incremental/performance-repair runs so daily performance profiles remain comparable across runs
 - keep the current window tables as the stable UI/read contract
 
 ### Phase 7: Operationalization

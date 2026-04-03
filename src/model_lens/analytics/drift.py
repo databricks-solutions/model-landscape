@@ -7,14 +7,37 @@ import pandas as pd
 EPSILON = 1e-10
 
 
+def _stable_histogram_edges(reference: np.ndarray, current: np.ndarray, n_bins: int) -> np.ndarray:
+    edges = np.histogram_bin_edges(reference, bins=n_bins).astype(float, copy=True)
+    if edges.ndim != 1 or len(edges) < 2:
+        return np.array([])
+    current_min = float(np.nanmin(current))
+    current_max = float(np.nanmax(current))
+    edges[0] = min(edges[0], current_min)
+    edges[-1] = max(edges[-1], current_max)
+    if np.all(np.diff(edges) > 0):
+        return edges
+    lower = float(min(np.nanmin(reference), current_min))
+    upper = float(max(np.nanmax(reference), current_max))
+    if lower == upper:
+        padding = max(abs(lower) * 0.01, 0.5)
+        lower -= padding
+        upper += padding
+    return np.linspace(lower, upper, num=max(2, n_bins + 1), dtype=float)
+
+
 def _histogram(reference: np.ndarray, current: np.ndarray, n_bins: int = 20) -> tuple[np.ndarray, np.ndarray]:
     ref = reference[~np.isnan(reference)]
     cur = current[~np.isnan(current)]
     if len(ref) == 0 or len(cur) == 0:
         return np.array([]), np.array([])
-    edges = np.histogram_bin_edges(ref, bins=n_bins)
+    edges = _stable_histogram_edges(ref, cur, n_bins)
+    if len(edges) == 0:
+        return np.array([]), np.array([])
     ref_counts, _ = np.histogram(ref, bins=edges)
     cur_counts, _ = np.histogram(cur, bins=edges)
+    if ref_counts.sum() == 0 or cur_counts.sum() == 0:
+        return np.array([]), np.array([])
     ref_props = ref_counts / ref_counts.sum() + EPSILON
     cur_props = cur_counts / cur_counts.sum() + EPSILON
     ref_props = ref_props / ref_props.sum()

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import replace
 from datetime import datetime, timedelta
 from threading import Lock
@@ -9,6 +11,7 @@ import pandas as pd
 
 from model_lens.config import settings
 from model_lens.domain.models import MLflowLineage, MonitorConfig, RefreshResult
+from model_lens.services import refresh_runner as refresh_runner_module
 from model_lens.services.contracts import build_contract
 from model_lens.services.control_plane import ControlPlaneRepository
 from model_lens.services.onboarding import build_default_baseline, build_fixed_baseline
@@ -17,7 +20,7 @@ from model_lens.services.refresh_engine import (
     build_daily_performance_profile_rows,
     build_daily_quality_profile_rows,
 )
-from model_lens.services.refresh_runner import run_refresh_cycle
+from model_lens.services.refresh_runner import MonitorRefreshResult, RefreshCounts, run_refresh_cycle
 from model_lens.services.table_names import TableNames
 
 
@@ -58,6 +61,8 @@ class FakeWarehouse:
             "labels_table": "",
             "labels_join_col": "",
             "labels_order_col": "",
+            "performance_metric_names": '["f1","precision","recall"]',
+            "default_performance_metric": "f1",
             "mlflow_experiment_name": "",
             "mlflow_experiment_id": "",
             "mlflow_run_id": "",
@@ -74,6 +79,15 @@ class FakeWarehouse:
     def execute_params(self, sql: str, params: tuple) -> None:
         self.executed_params.append((sql, params))
         if "INSERT INTO" in sql and "monitor_configs" in sql:
+            array_literals = re.findall(r"ARRAY\\(([^)]*)\\)", sql)
+            performance_metric_names = '[]'
+            if len(array_literals) >= 4:
+                values = [
+                    token.strip().strip("'")
+                    for token in array_literals[3].split(",")
+                    if token.strip()
+                ]
+                performance_metric_names = json.dumps(values)
             self.monitor_row = {
                 "model_key": params[0],
                 "display_name": params[1],
@@ -99,15 +113,17 @@ class FakeWarehouse:
                 "labels_table": params[18],
                 "labels_join_col": params[19],
                 "labels_order_col": params[20],
-                "drift_cadence_preset": params[21],
-                "performance_cadence_preset": params[22],
-                "schedule_enabled": params[23],
-                "mlflow_experiment_name": params[24],
-                "mlflow_experiment_id": params[25],
-                "mlflow_run_id": params[26],
-                "mlflow_registered_model_name": params[27],
-                "mlflow_model_version": params[28],
-                "created_by": params[29],
+                "performance_metric_names": performance_metric_names,
+                "default_performance_metric": params[21],
+                "drift_cadence_preset": params[22],
+                "performance_cadence_preset": params[23],
+                "schedule_enabled": params[24],
+                "mlflow_experiment_name": params[25],
+                "mlflow_experiment_id": params[26],
+                "mlflow_run_id": params[27],
+                "mlflow_registered_model_name": params[28],
+                "mlflow_model_version": params[29],
+                "created_by": params[30],
             }
 
     def execute_batch(self, insert_template: str, rows: list[tuple], batch_size: int = 200) -> None:
@@ -288,6 +304,7 @@ def test_upsert_monitor_config_keeps_full_feature_and_categorical_metadata() -> 
     insert_sql, insert_params = warehouse.executed_params[-1]
     assert "ARRAY('amount', 'segment')" in insert_sql
     assert "ARRAY('segment')" in insert_sql
+    assert "ARRAY('f1', 'precision', 'recall')" in insert_sql
     assert "CAST(%s AS DATE), CAST(%s AS DATE)" in insert_sql
     assert "VALUES (\n                %s, %s, %s, %s, %s," in insert_sql
     assert insert_params[0] == "payments_risk_v1"
@@ -295,11 +312,12 @@ def test_upsert_monitor_config_keeps_full_feature_and_categorical_metadata() -> 
     assert insert_params[12] == "rolling"
     assert insert_params[14] is None
     assert insert_params[15] is None
-    assert insert_params[21] == "6h"
-    assert insert_params[22] == "disabled"
-    assert insert_params[23] is True
-    assert insert_params[24] == "fraud_monitoring"
-    assert insert_params[28] == "7"
+    assert insert_params[21] == "f1"
+    assert insert_params[22] == "6h"
+    assert insert_params[23] == "disabled"
+    assert insert_params[24] is True
+    assert insert_params[25] == "fraud_monitoring"
+    assert insert_params[29] == "7"
 
 
 def test_upsert_monitor_config_accepts_hyphenated_feature_names() -> None:
@@ -485,6 +503,46 @@ def test_validate_monitor_source_requires_model_id_value_for_shared_tables() -> 
         assert "Monitored Model ID Value" in str(error)
     else:
         raise AssertionError("expected validation failure")
+
+
+def test_validate_monitor_source_allows_table_scoped_monitor_without_model_id_column() -> None:
+    class _TableScopedWarehouse(FakeWarehouse):
+        def describe_table(self, table_name: str) -> pd.DataFrame:
+            del table_name
+            return pd.DataFrame([
+                {"col_name": "event_ts", "data_type": "timestamp"},
+                {"col_name": "prediction", "data_type": "double"},
+                {"col_name": "label", "data_type": "int"},
+                {"col_name": "amount", "data_type": "double"},
+            ])
+
+        def get_columns(self, table_name: str) -> list[str]:
+            del table_name
+            return ["event_ts", "prediction", "label", "amount"]
+
+    warehouse = _TableScopedWarehouse()
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    contract = build_contract(
+        columns=["event_ts", "prediction", "label", "amount"],
+        timestamp_col="event_ts",
+        model_id_col=None,
+        prediction_col="prediction",
+        label_col="label",
+        feature_columns=["amount"],
+    )
+    config = MonitorConfig(
+        model_key="payments_risk_v1",
+        display_name="Payments Risk",
+        source_table="catalog.schema.inference_logs",
+        contract=contract,
+        baseline=build_default_baseline(),
+        problem_type="classification",
+        model_id_value=None,
+    )
+
+    repository.validate_monitor_source(config)
+
+    assert not any("COUNT(DISTINCT" in sql for sql in warehouse.queries)
 
 
 def test_validate_monitor_source_requires_label_order_column_when_join_keys_repeat() -> None:
@@ -732,6 +790,153 @@ def test_append_refresh_result_replaces_daily_profile_rows_by_profile_date() -> 
     assert any("INSERT INTO model_observability.control_plane.daily_performance_profiles" in sql for sql, _ in warehouse.batch_calls)
 
 
+def test_append_refresh_result_rebuilds_quality_summary_from_persisted_daily_profiles() -> None:
+    class _QualitySummaryWarehouse(FakeWarehouse):
+        def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
+            if "FROM model_observability.control_plane.daily_quality_profiles" in sql:
+                return pd.DataFrame([
+                    {
+                        "model_key": params[0],
+                        "profile_date": "2026-01-19",
+                        "row_count": 100,
+                        "prediction_mean": 0.2,
+                        "prediction_std": 0.1,
+                        "null_rates": '{"amount": 0.0}',
+                        "label_row_count": 90,
+                        "computed_at": "2026-01-19T00:00:00+00:00",
+                    },
+                    {
+                        "model_key": params[0],
+                        "profile_date": "2026-01-20",
+                        "row_count": 50,
+                        "prediction_mean": 0.6,
+                        "prediction_std": 0.2,
+                        "null_rates": '{"amount": 20.0}',
+                        "label_row_count": 40,
+                        "computed_at": "2026-01-20T00:00:00+00:00",
+                    },
+                ])
+            return super().query_params(sql, params)
+
+    warehouse = _QualitySummaryWarehouse()
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    repository.append_refresh_result(
+        "payments_risk_v1",
+        RefreshResult(
+            drift_rows=[],
+            quality_rows=[],
+            performance_rows=[],
+            incident_rows=[],
+            incident_history_rows=[],
+            quality_history_rows=[],
+            window_rows=[],
+            daily_quality_profile_rows=[
+                {
+                    "model_key": "payments_risk_v1",
+                    "profile_date": "2026-01-20",
+                    "row_count": 50,
+                    "prediction_mean": 0.6,
+                    "prediction_std": 0.2,
+                    "null_rates": '{"amount": 20.0}',
+                    "label_row_count": 40,
+                    "computed_at": "2026-01-20T00:00:00+00:00",
+                }
+            ],
+        ),
+        source_run_id="run-quality",
+    )
+
+    quality_insert_rows = next(
+        rows
+        for sql, rows in warehouse.batch_calls
+        if "INSERT INTO model_observability.control_plane.quality_metrics" in sql
+    )
+    payload = quality_insert_rows[0]
+    assert payload[1] == 150
+    assert payload[2] == "2026-01-19"
+    assert payload[3] == "2026-01-20"
+    assert round(float(payload[4]), 4) == 0.3333
+    assert json.loads(payload[6]) == {"2026-01-19": 100, "2026-01-20": 50}
+    assert json.loads(payload[7]) == {"amount": 6.67}
+
+
+def test_replace_performance_bin_specs_persists_canonical_edges() -> None:
+    warehouse = FakeWarehouse()
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    repository.replace_performance_bin_specs("payments_risk_v1", {"amount": (0.0, 1.5, 3.0)})
+
+    assert any(
+        "DELETE FROM model_observability.control_plane.performance_bin_specs" in sql
+        for sql, _ in warehouse.executed_params
+    )
+    insert_rows = next(
+        rows
+        for sql, rows in warehouse.batch_calls
+        if "INSERT INTO model_observability.control_plane.performance_bin_specs" in sql
+    )
+    assert json.loads(insert_rows[0][2]) == [0.0, 1.5, 3.0]
+
+
+def test_get_performance_bin_specs_parses_persisted_edges() -> None:
+    class _BinSpecWarehouse(FakeWarehouse):
+        def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
+            if "FROM model_observability.control_plane.performance_bin_specs" in sql:
+                return pd.DataFrame([{
+                    "feature_name": "amount",
+                    "edges_json": "[0.0, 1.5, 3.0]",
+                }])
+            return super().query_params(sql, params)
+
+    warehouse = _BinSpecWarehouse()
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    assert repository.get_performance_bin_specs("payments_risk_v1") == {"amount": (0.0, 1.5, 3.0)}
+
+
+def test_update_refresh_run_metadata_updates_range_and_row_counts() -> None:
+    warehouse = FakeWarehouse()
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    repository.update_refresh_run_metadata(
+        "run-1",
+        data_min_date="2026-01-01",
+        data_max_date="2026-01-21",
+        range_start="2026-01-15",
+        range_end="2026-01-21",
+        rows_scanned=123,
+        label_rows_scanned=45,
+    )
+
+    sql, params = warehouse.executed_params[-1]
+    assert "UPDATE model_observability.control_plane.refresh_runs" in sql
+    assert params == ("2026-01-01", "2026-01-21", "2026-01-15", "2026-01-21", 123, 45, "run-1")
+
+
+def test_get_label_watermark_uses_label_signature_for_in_source_labels() -> None:
+    class _LabelWatermarkWarehouse(FakeWarehouse):
+        def get_columns(self, table_name: str) -> list[str]:
+            del table_name
+            return ["event_ts", "model_id", "prediction", "entity_id", "label", "amount"]
+
+        def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
+            if "COUNT(*) AS label_count" in sql:
+                return pd.DataFrame([{"watermark": "2026-01-21T00:00:00", "label_count": 5}])
+            return super().query_params(sql, params)
+
+    warehouse = _LabelWatermarkWarehouse()
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    watermark = repository.get_label_watermark(
+        _monitor_config(with_external_labels=False),
+        start_date="2026-01-15",
+        end_date="2026-01-21",
+    )
+
+    assert watermark == "2026-01-21T00:00:00|5"
+
+
 def test_archive_monitor_marks_monitor_inactive_without_purging_history() -> None:
     warehouse = FakeWarehouse()
     read_model = FakeReadModel()
@@ -773,6 +978,7 @@ def test_delete_monitor_purges_all_monitor_scoped_tables() -> None:
         "model_observability.control_plane.daily_feature_profiles",
         "model_observability.control_plane.performance_metrics",
         "model_observability.control_plane.daily_performance_profiles",
+        "model_observability.control_plane.performance_bin_specs",
         "model_observability.control_plane.incidents",
         "model_observability.control_plane.incident_history",
         "model_observability.control_plane.monitor_configs",
@@ -1038,6 +1244,78 @@ def test_run_refresh_cycle_performance_repair_extends_range_for_baseline_lookbac
     assert len(repository.window_load_calls) == 1
     assert repository.window_load_calls[0]["start_date"] == "2026-01-02"
     assert repository.window_load_calls[0]["end_date"] == "2026-01-21"
+
+
+class LabelSignaturePerformanceRepairRepository(PerformanceRepairRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self._runtime_state = type("State", (), {
+            "model_key": self.config.model_key,
+            "bootstrap_status": "completed",
+            "last_drift_refresh_at": "2026-01-20T00:00:00+00:00",
+            "last_performance_refresh_at": "2026-01-20T00:00:00+00:00",
+            "next_drift_due_at": "2026-01-20T00:00:00+00:00",
+            "next_performance_due_at": "2026-01-20T00:00:00+00:00",
+            "last_label_watermark": "2026-01-21T00:00:00|4",
+            "last_run_status": "completed",
+            "last_run_error": None,
+            "last_run_started_at": "2026-01-20T00:00:00+00:00",
+            "last_run_completed_at": "2026-01-20T00:00:00+00:00",
+            "backoff_until": None,
+            "consecutive_failures": 0,
+        })()
+
+    def get_monitor_runtime_state(self, model_key: str):
+        assert model_key == self.config.model_key
+        return self._runtime_state
+
+    def get_label_watermark(
+        self,
+        config: MonitorConfig,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> str | None:
+        assert config.model_key == self.config.model_key
+        assert start_date is not None
+        assert end_date is not None
+        return "2026-01-21T00:00:00|5"
+
+
+def test_run_refresh_cycle_performance_repair_uses_label_signature_not_only_max_timestamp() -> None:
+    repository = LabelSignaturePerformanceRepairRepository()
+
+    counts = run_refresh_cycle(repository, mode="auto", scope="performance_repair")
+
+    assert counts.models == 1
+    assert repository.completed_runs[-1]["status"] == "completed"
+
+
+class RefreshMetadataRepository(BoundedWindowRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.metadata_updates: list[dict[str, object]] = []
+
+    def update_refresh_run_metadata(self, run_id: str, **kwargs) -> None:
+        payload = {"run_id": run_id}
+        payload.update(kwargs)
+        self.metadata_updates.append(payload)
+
+
+def test_run_refresh_cycle_updates_refresh_run_metadata_after_profile_discovery() -> None:
+    repository = RefreshMetadataRepository()
+
+    counts = run_refresh_cycle(repository, mode="auto")
+
+    assert counts.models == 1
+    assert repository.metadata_updates
+    update = repository.metadata_updates[0]
+    assert update["data_min_date"] == "2026-01-01"
+    assert update["data_max_date"] == "2026-01-21"
+    assert update["range_start"] == "2025-10-11"
+    assert update["range_end"] == "2026-01-21"
+    assert update["rows_scanned"] == 420
+    assert update["label_rows_scanned"] == 210
 
 
 class PersistedDailyFactRepository(BoundedWindowRepository):
@@ -1366,6 +1644,138 @@ def test_run_refresh_cycle_scheduler_parallelizes_across_monitors_with_one_scope
         "payments_risk_v3",
     }
     assert {run["scope"] for run in repository.started_runs} == {"drift_quality"}
+
+
+def test_run_refresh_cycle_scheduler_isolates_unexpected_worker_failure_in_parallel(monkeypatch) -> None:
+    repository = ParallelSchedulerRepository()
+    original_worker_cap = settings.max_parallel_refresh_workers
+    original_execute_target = refresh_runner_module._execute_target
+
+    def _patched_execute_target(repository_arg, target, *, requested_mode: str):
+        del repository_arg
+        del requested_mode
+        if target.config.model_key == "payments_risk_v2":
+            raise RuntimeError("boom")
+        return MonitorRefreshResult(
+            model_key=target.config.model_key,
+            scope=target.scope,
+            status="completed",
+            counts=RefreshCounts(models=1, drift_rows=1, quality_rows=0, performance_rows=0, incident_rows=0),
+        )
+
+    monkeypatch.setattr(refresh_runner_module, "_execute_target", _patched_execute_target)
+    object.__setattr__(settings, "max_parallel_refresh_workers", 2)
+    try:
+        counts = run_refresh_cycle(repository, mode="auto", scope="scheduler")
+    finally:
+        object.__setattr__(settings, "max_parallel_refresh_workers", original_worker_cap)
+        monkeypatch.setattr(refresh_runner_module, "_execute_target", original_execute_target)
+
+    assert counts.models == 2
+    assert len(counts.results) == 3
+    failure = next(result for result in counts.results if result.model_key == "payments_risk_v2")
+    assert failure.status == "failed"
+    assert failure.error == "boom"
+
+
+def test_run_refresh_cycle_scheduler_isolates_unexpected_worker_failure_in_serial(monkeypatch) -> None:
+    repository = ParallelSchedulerRepository()
+    original_worker_cap = settings.max_parallel_refresh_workers
+    original_execute_target = refresh_runner_module._execute_target
+
+    def _patched_execute_target(repository_arg, target, *, requested_mode: str):
+        del repository_arg
+        del requested_mode
+        if target.config.model_key == "payments_risk_v1":
+            raise RuntimeError("serial boom")
+        return MonitorRefreshResult(
+            model_key=target.config.model_key,
+            scope=target.scope,
+            status="completed",
+            counts=RefreshCounts(models=1, drift_rows=1, quality_rows=0, performance_rows=0, incident_rows=0),
+        )
+
+    monkeypatch.setattr(refresh_runner_module, "_execute_target", _patched_execute_target)
+    object.__setattr__(settings, "max_parallel_refresh_workers", 1)
+    try:
+        counts = run_refresh_cycle(repository, mode="auto", scope="scheduler")
+    finally:
+        object.__setattr__(settings, "max_parallel_refresh_workers", original_worker_cap)
+        monkeypatch.setattr(refresh_runner_module, "_execute_target", original_execute_target)
+
+    assert counts.models == 2
+    assert len(counts.results) == 3
+    failure = next(result for result in counts.results if result.model_key == "payments_risk_v1")
+    assert failure.status == "failed"
+    assert failure.error == "serial boom"
+
+
+class FailingSourceRangeRepository(StubRepository):
+    def get_source_date_range(self, config: MonitorConfig) -> tuple[str | None, str | None]:
+        assert config.model_key == self.config.model_key
+        raise ValueError("source lookup failed")
+
+
+def test_run_refresh_cycle_records_failed_run_when_source_range_lookup_errors() -> None:
+    repository = FailingSourceRangeRepository()
+
+    counts = run_refresh_cycle(repository, mode="auto")
+
+    assert counts.models == 0
+    assert repository.started_runs
+    assert repository.completed_runs[-1]["status"] == "failed"
+    assert "source lookup failed" in str(repository.completed_runs[-1]["error_message"])
+
+
+class StaleRunningRepository(StubRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.runtime_state = type("State", (), {
+            "model_key": self.config.model_key,
+            "bootstrap_status": "completed",
+            "last_drift_refresh_at": "2026-01-20T00:00:00+00:00",
+            "last_performance_refresh_at": None,
+            "next_drift_due_at": "2026-01-20T00:00:00+00:00",
+            "next_performance_due_at": None,
+            "last_label_watermark": None,
+            "last_run_status": "running",
+            "last_run_error": None,
+            "last_run_started_at": "2026-01-20T00:00:00+00:00",
+            "last_run_completed_at": None,
+            "backoff_until": None,
+            "consecutive_failures": 0,
+        })()
+        self.stale_runs = [{"run_id": "stale-run-1", "model_key": self.config.model_key}]
+        self.upserted_states: list[object] = []
+
+    def get_monitor_runtime_state(self, model_key: str):
+        assert model_key == self.config.model_key
+        return self.runtime_state
+
+    def upsert_monitor_runtime_state(self, state) -> None:
+        self.runtime_state = state
+        self.upserted_states.append(state)
+
+    def get_stale_running_refresh_runs(self, started_before: str) -> list[dict[str, object]]:
+        assert started_before
+        return list(self.stale_runs)
+
+    def get_latest_refresh_run(self, model_key: str, scope: str, statuses: tuple[str, ...] | None = None):
+        del model_key, scope, statuses
+        return None
+
+
+def test_run_refresh_cycle_reconciles_stale_running_runs_before_target_selection() -> None:
+    repository = StaleRunningRepository()
+
+    counts = run_refresh_cycle(repository, mode="auto")
+
+    assert counts.models == 0
+    assert repository.completed_runs[0]["run_id"] == "stale-run-1"
+    assert repository.completed_runs[0]["status"] == "failed"
+    assert "stale-run timeout" in str(repository.completed_runs[0]["error_message"]).lower()
+    assert repository.runtime_state.last_run_status == "failed"
+    assert repository.runtime_state.backoff_until is not None
 
 
 class FakeReadModel:

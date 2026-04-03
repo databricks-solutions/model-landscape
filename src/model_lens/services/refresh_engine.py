@@ -21,6 +21,7 @@ from model_lens.analytics.performance import (
     rank_degradation_contributors,
 )
 from model_lens.domain.models import BaselinePolicy, MonitorConfig, RefreshResult
+from model_lens.domain.performance_metrics import default_performance_metric_names
 from model_lens.services.incidents import build_incident_history, build_incidents
 
 
@@ -303,7 +304,7 @@ def _build_performance_rows(
         "delta": float(row["delta"]),
         "volume_pct": float(row["volume_pct"]),
         "contribution": float(row["contribution"]),
-        "metric_name": str(row.get("metric_name") or ("rmse" if config.problem_type == "regression" else "f1")),
+        "metric_name": str(row.get("metric_name") or config.default_performance_metric or default_performance_metric_names(config.problem_type)[0]),
         "window_start": metadata["window_start"],
         "window_end": metadata["window_end"],
         "computed_at": computed_at,
@@ -734,6 +735,31 @@ def _aggregate_performance_metric_rows(rows: list[dict[str, Any]]) -> dict[tuple
     return totals
 
 
+def build_performance_bin_specs(
+    *,
+    config: MonitorConfig,
+    inference_df: pd.DataFrame,
+    existing_specs: dict[str, tuple[float, ...]] | None = None,
+    n_bins: int = 10,
+) -> dict[str, tuple[float, ...]]:
+    specs = {
+        str(feature_name): tuple(float(value) for value in edges)
+        for feature_name, edges in (existing_specs or {}).items()
+        if feature_name and len(edges) >= 2
+    }
+    for feature in config.contract.feature_columns:
+        if feature not in inference_df.columns or feature in specs:
+            continue
+        numeric = pd.to_numeric(inference_df[feature], errors="coerce").dropna()
+        if len(numeric) < max(2, n_bins):
+            continue
+        edges = compute_bin_edges(numeric.to_numpy(dtype=float, copy=False), n_bins=n_bins)
+        if len(edges) < 2:
+            continue
+        specs[feature] = tuple(float(value) for value in edges.tolist())
+    return specs
+
+
 def _derive_performance_rows(
     *,
     config: MonitorConfig,
@@ -884,20 +910,32 @@ def build_daily_performance_profile_rows(
     config: MonitorConfig,
     inference_df: pd.DataFrame,
     computed_at: str,
+    bin_specs: dict[str, tuple[float, ...]] | None = None,
     n_bins: int = 10,
 ) -> list[dict[str, Any]]:
     if not config.contract.label_col:
         return []
     rows: list[dict[str, Any]] = []
     regression_mode = (config.problem_type or "classification").strip().lower() == "regression"
+    selected_metric_names = tuple(config.performance_metric_names or default_performance_metric_names(config.problem_type))
     feature_edges: dict[str, np.ndarray] = {}
-    for feature in config.contract.feature_columns:
+    if bin_specs is None:
+        resolved_bin_specs = build_performance_bin_specs(
+            config=config,
+            inference_df=inference_df,
+            existing_specs=None,
+            n_bins=n_bins,
+        )
+    else:
+        resolved_bin_specs = {
+            str(feature_name): tuple(float(value) for value in edges)
+            for feature_name, edges in bin_specs.items()
+            if feature_name and len(edges) >= 2
+        }
+    for feature, edges in resolved_bin_specs.items():
         if feature not in inference_df.columns:
             continue
-        numeric = pd.to_numeric(inference_df[feature], errors="coerce").dropna()
-        if len(numeric) < max(2, n_bins):
-            continue
-        feature_edges[feature] = compute_bin_edges(numeric.to_numpy(dtype=float, copy=False), n_bins=n_bins)
+        feature_edges[feature] = np.asarray(edges, dtype=float)
     for profile_date, day_frame in _daily_profile_groups(inference_df, config.contract.timestamp_col):
         total_rows = max(len(day_frame), 1)
         for feature, edges in feature_edges.items():
@@ -916,8 +954,7 @@ def build_daily_performance_profile_rows(
                 )
                 if not metrics:
                     continue
-                metric_names = ("rmse", "mae") if regression_mode else ("f1",)
-                for metric_name in metric_names:
+                for metric_name in selected_metric_names:
                     metric_value = metrics.get(metric_name)
                     if metric_value is None:
                         continue
@@ -1016,6 +1053,7 @@ def refresh_monitor_backfill(
                 feature_columns=list(config.contract.feature_columns),
                 prediction_col=config.contract.prediction_col,
                 label_col=config.contract.label_col,
+                metric_names=config.performance_metric_names,
                 problem_type=config.problem_type,
             )
             all_performance_rows.extend(
@@ -1211,6 +1249,7 @@ def refresh_monitor_window_frames(
             feature_columns=list(config.contract.feature_columns),
             prediction_col=config.contract.prediction_col,
             label_col=config.contract.label_col,
+            metric_names=config.performance_metric_names,
             problem_type=config.problem_type,
         )
         performance_rows = _build_performance_rows(

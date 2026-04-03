@@ -4,6 +4,13 @@ from datetime import date
 from dataclasses import dataclass, field
 from typing import Any
 
+from model_lens.domain.performance_metrics import (
+    default_primary_performance_metric,
+    normalize_performance_metric_names,
+    normalize_problem_type,
+    resolve_default_performance_metric,
+)
+
 
 REQUIRED_INFERENCE_COLUMNS = ("event_ts", "prediction")
 OPTIONAL_INFERENCE_COLUMNS = ("model_version", "prediction_proba", "label", "entity_id")
@@ -117,6 +124,8 @@ class MonitorConfig:
     labels_table: str | None = None
     labels_join_col: str | None = None
     labels_order_col: str | None = None
+    performance_metric_names: tuple[str, ...] = field(default_factory=tuple)
+    default_performance_metric: str | None = None
     drift_cadence_preset: str = "6h"
     performance_cadence_preset: str = "disabled"
     schedule_enabled: bool = True
@@ -125,6 +134,7 @@ class MonitorConfig:
     status: str = "active"
 
     def __post_init__(self) -> None:
+        problem_type = normalize_problem_type(self.problem_type)
         drift = (self.drift_cadence_preset or "6h").strip().lower()
         performance = (self.performance_cadence_preset or "disabled").strip().lower()
         status = (self.status or "active").strip().lower()
@@ -136,6 +146,11 @@ class MonitorConfig:
             raise ValueError(f"Unsupported monitor status: {self.status!r}")
         if self.model_id_value and not self.contract.model_id_col:
             raise ValueError("Monitored Model ID Value requires a mapped Model ID Column.")
+        normalized_metric_names = normalize_performance_metric_names(problem_type, self.performance_metric_names)
+        default_metric = resolve_default_performance_metric(problem_type, normalized_metric_names, self.default_performance_metric)
+        object.__setattr__(self, "problem_type", problem_type)
+        object.__setattr__(self, "performance_metric_names", normalized_metric_names)
+        object.__setattr__(self, "default_performance_metric", default_metric or default_primary_performance_metric(problem_type))
         object.__setattr__(self, "drift_cadence_preset", drift)
         object.__setattr__(self, "performance_cadence_preset", performance)
         object.__setattr__(self, "status", status)
@@ -213,3 +228,4 @@ class RefreshResult:
     daily_quality_profile_rows: list[dict[str, Any]] = field(default_factory=list)
     daily_feature_profile_rows: list[dict[str, Any]] = field(default_factory=list)
     daily_performance_profile_rows: list[dict[str, Any]] = field(default_factory=list)
+    performance_bin_specs: dict[str, tuple[float, ...]] = field(default_factory=dict)

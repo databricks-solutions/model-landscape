@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from datetime import timezone
 from functools import lru_cache
@@ -48,6 +49,101 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     if not text:
         return default
     return text in {"1", "true", "yes", "on"}
+
+
+def _as_float(value: Any) -> float | None:
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        return None
+    return float(numeric)
+
+
+def _safe_json_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return {str(key): inner for key, inner in value.items()}
+    text = str(value).strip()
+    if not text:
+        return {}
+    try:
+        loaded = json.loads(text)
+    except Exception:
+        return {}
+    if not isinstance(loaded, dict):
+        return {}
+    return {str(key): inner for key, inner in loaded.items()}
+
+
+def _combine_weighted_mean_std(parts: list[tuple[int, float | None, float | None]]) -> tuple[float | None, float | None]:
+    valid_parts = [(count, mean, std) for count, mean, std in parts if count > 0 and mean is not None]
+    if not valid_parts:
+        return None, None
+    total_count = sum(count for count, _, _ in valid_parts)
+    if total_count <= 0:
+        return None, None
+    combined_mean = sum(count * float(mean) for count, mean, _ in valid_parts) / total_count
+    if total_count <= 1:
+        return combined_mean, None
+    total_ss = 0.0
+    for count, mean, std in valid_parts:
+        local_ss = 0.0
+        if std is not None and count > 1:
+            local_ss = (count - 1) * (float(std) ** 2)
+        total_ss += local_ss + (count * ((float(mean) - combined_mean) ** 2))
+    combined_std = (total_ss / (total_count - 1)) ** 0.5 if total_ss > 0 else 0.0
+    return combined_mean, combined_std
+
+
+def _aggregate_quality_summary_rows(model_key: str, rows: list[dict[str, Any]], computed_at: str) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    normalized_rows = [dict(row) for row in rows]
+    dated_rows = [
+        row for row in normalized_rows
+        if _as_text(row.get("profile_date")).strip()
+    ]
+    if not dated_rows:
+        return []
+    total_rows = sum(int(row.get("row_count", 0) or 0) for row in dated_rows)
+    if total_rows <= 0:
+        return []
+    profile_dates = sorted(_as_text(row.get("profile_date")).strip() for row in dated_rows if _as_text(row.get("profile_date")).strip())
+    daily_volume = {
+        _as_text(row.get("profile_date")).strip(): int(row.get("row_count", 0) or 0)
+        for row in sorted(dated_rows, key=lambda item: _as_text(item.get("profile_date")).strip())
+    }
+    null_totals: dict[str, float] = {}
+    for row in dated_rows:
+        row_count = int(row.get("row_count", 0) or 0)
+        if row_count <= 0:
+            continue
+        for feature_name, null_pct in _safe_json_dict(row.get("null_rates")).items():
+            null_value = _as_float(null_pct)
+            if null_value is None:
+                continue
+            null_totals[str(feature_name)] = null_totals.get(str(feature_name), 0.0) + (null_value * row_count)
+    null_rates = {
+        feature_name: round(weighted_total / total_rows, 2)
+        for feature_name, weighted_total in sorted(null_totals.items())
+    }
+    prediction_mean, prediction_std = _combine_weighted_mean_std([
+        (
+            int(row.get("row_count", 0) or 0),
+            _as_float(row.get("prediction_mean")),
+            _as_float(row.get("prediction_std")),
+        )
+        for row in dated_rows
+    ])
+    return [{
+        "model_key": model_key,
+        "total_rows": total_rows,
+        "min_date": profile_dates[0],
+        "max_date": profile_dates[-1],
+        "prediction_mean": prediction_mean,
+        "prediction_std": prediction_std,
+        "daily_volume": json.dumps(daily_volume),
+        "null_rates": json.dumps(null_rates),
+        "computed_at": computed_at,
+    }]
 
 
 def _is_field_already_exists_error(error: Exception) -> bool:
@@ -295,6 +391,7 @@ class ControlPlaneRepository:
         feature_columns = array_literal(list(config.contract.feature_columns))
         slice_columns = array_literal(list(config.contract.slice_columns))
         categorical_columns = array_literal(list(config.contract.categorical_columns))
+        performance_metric_names = array_literal(list(config.performance_metric_names))
         self._warehouse.execute_params(
             f"DELETE FROM {self._table_names.monitor_configs} WHERE model_key = %s",
             (config.model_key,),
@@ -308,6 +405,7 @@ class ControlPlaneRepository:
                 feature_columns, slice_columns, categorical_columns,
                 baseline_kind, baseline_n_days, baseline_start, baseline_end, baseline_max_comparison_days,
                 problem_type, labels_table, labels_join_col, labels_order_col,
+                performance_metric_names, default_performance_metric,
                 drift_cadence_preset, performance_cadence_preset, schedule_enabled,
                 mlflow_experiment_name, mlflow_experiment_id, mlflow_run_id,
                 mlflow_registered_model_name, mlflow_model_version,
@@ -319,6 +417,7 @@ class ControlPlaneRepository:
                 {feature_columns}, {slice_columns}, {categorical_columns},
                 %s, %s, CAST(%s AS DATE), CAST(%s AS DATE), %s,
                 %s, %s, %s, %s,
+                {performance_metric_names}, %s,
                 %s, %s, %s,
                 %s, %s, %s, %s, %s,
                 %s, %s,
@@ -347,6 +446,7 @@ class ControlPlaneRepository:
                 config.labels_table or "",
                 config.labels_join_col or "",
                 config.labels_order_col or "",
+                config.default_performance_metric or "",
                 config.drift_cadence_preset,
                 config.performance_cadence_preset,
                 config.schedule_enabled,
@@ -408,6 +508,7 @@ class ControlPlaneRepository:
             self._table_names.daily_feature_profiles,
             self._table_names.performance_metrics,
             self._table_names.daily_performance_profiles,
+            self._table_names.performance_bin_specs,
             self._table_names.incidents,
             self._table_names.incident_history,
             self._table_names.monitor_configs,
@@ -450,6 +551,8 @@ class ControlPlaneRepository:
             labels_table=_as_text(row.get("labels_table")) or None,
             labels_join_col=_as_text(row.get("labels_join_col")) or None,
             labels_order_col=_as_text(row.get("labels_order_col")) or None,
+            performance_metric_names=parse_string_array(row.get("performance_metric_names")),
+            default_performance_metric=_as_text(row.get("default_performance_metric")) or None,
             drift_cadence_preset=_as_text(row.get("drift_cadence_preset")) or "6h",
             performance_cadence_preset=(
                 _as_text(row.get("performance_cadence_preset"))
@@ -931,7 +1034,13 @@ class ControlPlaneRepository:
         max_date = max_ts.split("T", 1)[0] if max_ts else None
         return min_date, max_date
 
-    def get_label_watermark(self, config: MonitorConfig) -> str | None:
+    def get_label_watermark(
+        self,
+        config: MonitorConfig,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> str | None:
         if config.labels_table and config.labels_order_col:
             frame = self._warehouse.query(
                 f"""
@@ -940,12 +1049,29 @@ class ControlPlaneRepository:
                 """
             )
         elif config.contract.label_col and config.contract.label_col in self._warehouse.get_columns(config.source_table):
-            frame = self._warehouse.query(
-                f"""
-                SELECT CAST(MAX({quote_column(validate_identifier(config.contract.timestamp_col))}) AS STRING) AS watermark
-                FROM {config.source_table}
-                """
+            filters, params = self._source_filters(
+                config,
+                start_date=start_date,
+                end_date=end_date,
+                alias="",
             )
+            filters.append(f"{quote_column(validate_identifier(config.contract.label_col))} IS NOT NULL")
+            where_sql = f"WHERE {' AND '.join(filters)}"
+            query = f"""
+                SELECT
+                    CAST(MAX({quote_column(validate_identifier(config.contract.timestamp_col))}) AS STRING) AS watermark,
+                    COUNT(*) AS label_count
+                FROM {config.source_table}
+                {where_sql}
+            """
+            frame = self._warehouse.query_params(query, tuple(params)) if params else self._warehouse.query(query)
+            if frame.empty:
+                return None
+            label_count = int(frame.iloc[0].get("label_count", 0) or 0)
+            if label_count <= 0:
+                return None
+            watermark = _as_text(frame.iloc[0].get("watermark")) or ""
+            return f"{watermark}|{label_count}"
         else:
             return None
         if frame.empty:
@@ -1098,6 +1224,40 @@ class ControlPlaneRepository:
             ),
         )
 
+    def update_refresh_run_metadata(
+        self,
+        run_id: str,
+        *,
+        data_min_date: str | None = None,
+        data_max_date: str | None = None,
+        range_start: str | None = None,
+        range_end: str | None = None,
+        rows_scanned: int = 0,
+        label_rows_scanned: int = 0,
+    ) -> None:
+        self._warehouse.execute_params(
+            f"""
+            UPDATE {self._table_names.refresh_runs}
+            SET
+                data_min_date = CAST(%s AS DATE),
+                data_max_date = CAST(%s AS DATE),
+                range_start = CAST(%s AS DATE),
+                range_end = CAST(%s AS DATE),
+                rows_scanned = %s,
+                label_rows_scanned = %s
+            WHERE run_id = %s
+            """,
+            (
+                data_min_date or None,
+                data_max_date or None,
+                range_start or None,
+                range_end or None,
+                int(rows_scanned or 0),
+                int(label_rows_scanned or 0),
+                run_id,
+            ),
+        )
+
     def get_recent_refresh_runs(self, model_key: str, limit: int = 10) -> list[dict[str, Any]]:
         frame = self._warehouse.query_params(
             f"""
@@ -1105,6 +1265,21 @@ class ControlPlaneRepository:
             FROM {self._table_names.refresh_runs}
             WHERE model_key = %s
             ORDER BY started_at DESC
+            LIMIT {max(1, limit)}
+            """,
+            (model_key,),
+        )
+        if frame.empty:
+            return []
+        return [row.to_dict() for _, row in frame.iterrows()]
+
+    def get_recent_incident_history(self, model_key: str, limit: int = 10) -> list[dict[str, Any]]:
+        frame = self._warehouse.query_params(
+            f"""
+            SELECT *
+            FROM {self._table_names.incident_history}
+            WHERE model_key = %s
+            ORDER BY observed_at DESC, window_end DESC
             LIMIT {max(1, limit)}
             """,
             (model_key,),
@@ -1133,6 +1308,22 @@ class ControlPlaneRepository:
         if frame.empty:
             return None
         return frame.iloc[0].to_dict()
+
+    def get_stale_running_refresh_runs(self, started_before: str) -> list[dict[str, Any]]:
+        frame = self._warehouse.query_params(
+            f"""
+            SELECT *
+            FROM {self._table_names.refresh_runs}
+            WHERE status = 'running'
+              AND completed_at IS NULL
+              AND started_at < CAST(%s AS TIMESTAMP)
+            ORDER BY started_at ASC
+            """,
+            (started_before,),
+        )
+        if frame.empty:
+            return []
+        return [row.to_dict() for _, row in frame.iterrows()]
 
     def get_daily_quality_profile_rows(
         self,
@@ -1212,6 +1403,71 @@ class ControlPlaneRepository:
         )
         return [row.to_dict() for _, row in frame.iterrows()] if not frame.empty else []
 
+    def get_performance_bin_specs(self, model_key: str) -> dict[str, tuple[float, ...]]:
+        frame = self._warehouse.query_params(
+            f"""
+            SELECT feature_name, edges_json
+            FROM {self._table_names.performance_bin_specs}
+            WHERE model_key = %s
+            ORDER BY feature_name
+            """,
+            (model_key,),
+        )
+        if frame.empty:
+            return {}
+        specs: dict[str, tuple[float, ...]] = {}
+        for _, row in frame.iterrows():
+            feature_name = _as_text(row.get("feature_name")).strip()
+            if not feature_name:
+                continue
+            try:
+                loaded = json.loads(_as_text(row.get("edges_json")))
+            except Exception:
+                continue
+            if not isinstance(loaded, list):
+                continue
+            edges = tuple(float(value) for value in loaded)
+            if len(edges) < 2:
+                continue
+            specs[feature_name] = edges
+        return specs
+
+    def replace_performance_bin_specs(self, model_key: str, specs: dict[str, tuple[float, ...]]) -> None:
+        self._warehouse.execute_params(
+            f"DELETE FROM {self._table_names.performance_bin_specs} WHERE model_key = %s",
+            (model_key,),
+        )
+        payload = [
+            (
+                model_key,
+                feature_name,
+                json.dumps([float(value) for value in edges]),
+                pd.Timestamp.now(tz=timezone.utc).isoformat(),
+            )
+            for feature_name, edges in sorted(specs.items())
+            if feature_name and len(edges) >= 2
+        ]
+        self._warehouse.execute_batch(
+            f"""
+            INSERT INTO {self._table_names.performance_bin_specs} (
+                model_key, feature_name, edges_json, computed_at
+            ) VALUES
+            """.strip(),
+            payload,
+        )
+
+    def _rewrite_quality_summary(self, model_key: str) -> None:
+        self._warehouse.execute_params(
+            f"DELETE FROM {self._table_names.quality_metrics} WHERE model_key = %s",
+            (model_key,),
+        )
+        quality_rows = _aggregate_quality_summary_rows(
+            model_key,
+            self.get_daily_quality_profile_rows(model_key),
+            pd.Timestamp.now(tz=timezone.utc).isoformat(),
+        )
+        self._insert_quality_rows(quality_rows)
+
     def replace_all_refresh_results(self, model_key: str, result: RefreshResult, source_run_id: str | None = None) -> None:
         for table_name in (
             self._table_names.drift_metrics,
@@ -1221,6 +1477,7 @@ class ControlPlaneRepository:
             self._table_names.daily_quality_profiles,
             self._table_names.daily_feature_profiles,
             self._table_names.daily_performance_profiles,
+            self._table_names.performance_bin_specs,
             self._table_names.incidents,
             self._table_names.incident_history,
             self._table_names.comparison_windows,
@@ -1231,14 +1488,15 @@ class ControlPlaneRepository:
             )
         self._insert_window_rows(result.window_rows, source_run_id=source_run_id)
         self._insert_drift_rows(result.drift_rows)
-        self._insert_quality_rows(result.quality_rows)
         self._insert_quality_history_rows(result.quality_history_rows)
         self._insert_daily_quality_profile_rows(result.daily_quality_profile_rows, source_run_id=source_run_id)
         self._insert_daily_feature_profile_rows(result.daily_feature_profile_rows, source_run_id=source_run_id)
         self._insert_performance_rows(result.performance_rows)
         self._insert_daily_performance_profile_rows(result.daily_performance_profile_rows, source_run_id=source_run_id)
+        self.replace_performance_bin_specs(model_key, result.performance_bin_specs)
         self._insert_incident_rows(result.incident_rows)
         self._insert_incident_history_rows(result.incident_history_rows)
+        self._rewrite_quality_summary(model_key)
         self._sync_read_model()
 
     def append_refresh_result(self, model_key: str, result: RefreshResult, source_run_id: str | None = None) -> None:
@@ -1324,11 +1582,6 @@ class ControlPlaneRepository:
                 (model_key, profile_date),
             )
 
-        if result.quality_rows:
-            self._warehouse.execute_params(
-                f"DELETE FROM {self._table_names.quality_metrics} WHERE model_key = %s",
-                (model_key,),
-            )
         if result.incident_rows:
             self._warehouse.execute_params(
                 f"DELETE FROM {self._table_names.incidents} WHERE model_key = %s",
@@ -1337,14 +1590,18 @@ class ControlPlaneRepository:
 
         self._insert_window_rows(result.window_rows, source_run_id=source_run_id)
         self._insert_drift_rows(result.drift_rows)
-        self._insert_quality_rows(result.quality_rows)
         self._insert_quality_history_rows(result.quality_history_rows)
         self._insert_daily_quality_profile_rows(result.daily_quality_profile_rows, source_run_id=source_run_id)
         self._insert_daily_feature_profile_rows(result.daily_feature_profile_rows, source_run_id=source_run_id)
         self._insert_performance_rows(result.performance_rows)
         self._insert_daily_performance_profile_rows(result.daily_performance_profile_rows, source_run_id=source_run_id)
+        if result.performance_bin_specs:
+            persisted_specs = self.get_performance_bin_specs(model_key)
+            persisted_specs.update(result.performance_bin_specs)
+            self.replace_performance_bin_specs(model_key, persisted_specs)
         self._insert_incident_rows(result.incident_rows)
         self._insert_incident_history_rows(result.incident_history_rows)
+        self._rewrite_quality_summary(model_key)
         self._sync_read_model()
 
     def _insert_drift_rows(self, rows: list[dict]) -> None:

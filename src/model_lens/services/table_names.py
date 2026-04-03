@@ -41,6 +41,10 @@ class TableNames:
         return f"{self.namespace}.daily_performance_profiles"
 
     @property
+    def performance_bin_specs(self) -> str:
+        return f"{self.namespace}.performance_bin_specs"
+
+    @property
     def performance_metrics(self) -> str:
         return f"{self.namespace}.performance_metrics"
 

@@ -11,10 +11,12 @@ from model_lens.domain.models import BaselinePolicy, InferenceContract, MonitorC
 class _FakeWarehouse:
     def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
         model_key = params[0]
+        metric_name = params[1] if len(params) > 1 else "f1"
         if "FROM drift_metrics" in sql:
             return pd.DataFrame(
                 [
                     {
+                        "model_key": model_key,
                         "feature_name": "amount",
                         "metric_name": "psi",
                         "metric_value": 0.12,
@@ -33,6 +35,7 @@ class _FakeWarehouse:
                         "computed_at": "2026-01-20T10:00:00",
                     },
                     {
+                        "model_key": model_key,
                         "feature_name": "amount",
                         "metric_name": "js_divergence",
                         "metric_value": 0.07,
@@ -51,6 +54,7 @@ class _FakeWarehouse:
                         "computed_at": "2026-01-20T10:00:00",
                     },
                     {
+                        "model_key": model_key,
                         "feature_name": "amount",
                         "metric_name": "psi",
                         "metric_value": 0.21,
@@ -69,6 +73,7 @@ class _FakeWarehouse:
                         "computed_at": "2026-01-21T10:00:00",
                     },
                     {
+                        "model_key": model_key,
                         "feature_name": "amount",
                         "metric_name": "js_divergence",
                         "metric_value": 0.11,
@@ -170,7 +175,7 @@ class _FakeWarehouse:
                         "delta": 0.0,
                         "volume_pct": 55.0,
                         "contribution": 0.0,
-                        "metric_name": "f1",
+                        "metric_name": metric_name,
                         "window_start": "2026-01-13",
                         "window_end": "2026-01-20",
                         "computed_at": "2026-01-20T10:00:00",
@@ -184,7 +189,7 @@ class _FakeWarehouse:
                         "delta": 0.0,
                         "volume_pct": 45.0,
                         "contribution": 0.0,
-                        "metric_name": "f1",
+                        "metric_name": metric_name,
                         "window_start": "2026-01-13",
                         "window_end": "2026-01-20",
                         "computed_at": "2026-01-20T10:00:00",
@@ -198,7 +203,7 @@ class _FakeWarehouse:
                         "delta": 0.0,
                         "volume_pct": 55.0,
                         "contribution": 0.0,
-                        "metric_name": "f1",
+                        "metric_name": metric_name,
                         "window_start": "2026-01-14",
                         "window_end": "2026-01-21",
                         "computed_at": "2026-01-21T10:00:00",
@@ -212,7 +217,7 @@ class _FakeWarehouse:
                         "delta": 0.0,
                         "volume_pct": 45.0,
                         "contribution": 0.0,
-                        "metric_name": "f1",
+                        "metric_name": metric_name,
                         "window_start": "2026-01-14",
                         "window_end": "2026-01-21",
                         "computed_at": "2026-01-21T10:00:00",
@@ -413,6 +418,16 @@ def test_get_performance_summary_keeps_zero_delta_rows_visible() -> None:
     assert performance["worst_weighted_delta"] == 0.0
 
 
+def test_get_performance_summary_supports_alternate_metric_names() -> None:
+    backend = _make_backend()
+
+    precision = backend.get_performance_summary("fraud_model_demo", metric_name="precision")
+    rmse = backend.get_performance_summary("fraud_model_demo", metric_name="rmse")
+
+    assert precision["timeline"][0]["precision"] == 0.813
+    assert rmse["timeline"][0]["rmse"] == 0.813
+
+
 def test_feature_detail_load_uses_bounded_sampled_frame() -> None:
     calls: list[dict[str, object]] = []
     config = MonitorConfig(
@@ -469,3 +484,465 @@ def test_feature_detail_load_uses_bounded_sampled_frame() -> None:
     assert calls[0]["feature_columns"] == ("amount",)
     assert calls[0]["sample_rows_per_day"] > 0
     assert calls[0]["max_total_rows"] > 0
+
+
+def test_current_window_detail_reads_use_current_window_bounds_only() -> None:
+    calls: list[dict[str, object]] = []
+    config = MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.model_lens_demo.inference_logs",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=("amount", "velocity_7d"),
+            slice_columns=("region",),
+            categorical_columns=("region",),
+        ),
+        baseline=BaselinePolicy(n_days=7),
+        model_id_value="fraud_model_v1",
+    )
+
+    class CurrentWindowWarehouse:
+        def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
+            if "FROM comparison_windows" in sql:
+                return pd.DataFrame(
+                    [
+                        {
+                            "baseline_start": "2026-01-07",
+                            "baseline_end": "2026-01-13",
+                            "window_start": "2026-01-14",
+                            "window_end": "2026-01-21",
+                        }
+                    ]
+                )
+            raise AssertionError(f"Unexpected query: {sql}")
+
+    def load_monitor_frame(config_arg, **kwargs):
+        del config_arg
+        calls.append(kwargs)
+        return pd.DataFrame(
+            [
+                {"event_ts": "2026-01-14T00:00:00", "amount": 10.0, "region": "west", "prediction": 0.2},
+                {"event_ts": "2026-01-21T00:00:00", "amount": 20.0, "region": "east", "prediction": 0.8},
+            ]
+        )
+
+    repository = SimpleNamespace(
+        _warehouse=CurrentWindowWarehouse(),
+        table_names=SimpleNamespace(
+            drift_metrics="drift_metrics",
+            quality_metrics="quality_metrics",
+            quality_history="quality_history",
+            performance_metrics="performance_metrics",
+            comparison_windows="comparison_windows",
+        ),
+        list_monitor_configs=lambda status="active": [config],
+        get_monitor_summary=lambda: pd.DataFrame(),
+        load_monitor_frame=load_monitor_frame,
+    )
+    backend = DashboardBackend(repository=repository)
+
+    breakdown = backend.get_dimension_breakdown("fraud_model_demo", "amount", "region")
+    prediction = backend.get_prediction_distribution("fraud_model_demo")
+
+    assert not breakdown.empty
+    assert prediction.tolist() == [0.2, 0.8]
+    assert len(calls) == 2
+    assert calls[0]["start_date"] == "2026-01-14"
+    assert calls[0]["end_date"] == "2026-01-21"
+    assert calls[0]["feature_columns"] == ("amount", "region")
+    assert calls[1]["start_date"] == "2026-01-14"
+    assert calls[1]["end_date"] == "2026-01-21"
+    assert calls[1]["sample_rows_per_day"] > 0
+    assert calls[1]["max_total_rows"] > 0
+
+
+def test_current_window_fallback_keeps_rows_later_on_window_end_date() -> None:
+    config = MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.model_lens_demo.inference_logs",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=("amount",),
+            slice_columns=("region",),
+            categorical_columns=("region",),
+        ),
+        baseline=BaselinePolicy(n_days=7),
+        model_id_value="fraud_model_v1",
+    )
+
+    class FallbackWindowWarehouse:
+        def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
+            if "FROM comparison_windows" in sql:
+                return pd.DataFrame(
+                    [
+                        {
+                            "baseline_start": "2026-01-07",
+                            "baseline_end": "2026-01-13",
+                            "window_start": "2026-01-14",
+                            "window_end": "2026-01-21",
+                        }
+                    ]
+                )
+            raise AssertionError(f"Unexpected query: {sql}")
+
+    def load_monitor_frame(config_arg):
+        del config_arg
+        return pd.DataFrame(
+            [
+                {"event_ts": "2026-01-13T23:59:59", "prediction": 0.1},
+                {"event_ts": "2026-01-14T00:00:00", "prediction": 0.2},
+                {"event_ts": "2026-01-21T18:45:00", "prediction": 0.8},
+                {"event_ts": "2026-01-22T00:00:00", "prediction": 0.9},
+            ]
+        )
+
+    repository = SimpleNamespace(
+        _warehouse=FallbackWindowWarehouse(),
+        table_names=SimpleNamespace(
+            drift_metrics="drift_metrics",
+            quality_metrics="quality_metrics",
+            quality_history="quality_history",
+            performance_metrics="performance_metrics",
+            comparison_windows="comparison_windows",
+        ),
+        list_monitor_configs=lambda status="active": [config],
+        get_monitor_summary=lambda: pd.DataFrame(),
+        load_monitor_frame=load_monitor_frame,
+    )
+    backend = DashboardBackend(repository=repository)
+
+    prediction = backend.get_prediction_distribution("fraud_model_demo")
+
+    assert prediction.tolist() == [0.2, 0.8]
+
+
+def test_feature_distribution_daily_profile_query_is_bounded_to_latest_window_dates() -> None:
+    queries: list[tuple[str, tuple]] = []
+    config = MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.model_lens_demo.inference_logs",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=("amount",),
+            slice_columns=("region",),
+            categorical_columns=("region",),
+        ),
+        baseline=BaselinePolicy(n_days=7),
+        model_id_value="fraud_model_v1",
+    )
+
+    class DailyFeatureWarehouse:
+        def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
+            queries.append((sql, params))
+            if "FROM comparison_windows" in sql:
+                return pd.DataFrame(
+                    [
+                        {
+                            "baseline_start": "2026-01-07",
+                            "baseline_end": "2026-01-13",
+                            "window_start": "2026-01-14",
+                            "window_end": "2026-01-21",
+                        }
+                    ]
+                )
+            if "FROM daily_feature_profiles" in sql:
+                return pd.DataFrame(
+                    [
+                        {
+                            "profile_date": "2026-01-10",
+                            "distribution_json": '{"sample_values":[1.0,2.0]}',
+                        },
+                        {
+                            "profile_date": "2026-01-20",
+                            "distribution_json": '{"sample_values":[3.0,4.0]}',
+                        },
+                    ]
+                )
+            raise AssertionError(f"Unexpected query: {sql}")
+
+    repository = SimpleNamespace(
+        _warehouse=DailyFeatureWarehouse(),
+        table_names=SimpleNamespace(
+            drift_metrics="drift_metrics",
+            quality_metrics="quality_metrics",
+            quality_history="quality_history",
+            performance_metrics="performance_metrics",
+            comparison_windows="comparison_windows",
+            daily_feature_profiles="daily_feature_profiles",
+        ),
+        list_monitor_configs=lambda status="active": [config],
+        get_monitor_summary=lambda: pd.DataFrame(),
+    )
+    backend = DashboardBackend(repository=repository)
+
+    baseline, current = backend.get_feature_distribution("fraud_model_demo", "amount")
+
+    assert baseline.tolist() == [1.0, 2.0]
+    assert current.tolist() == [3.0, 4.0]
+    profile_query = next(sql for sql, _ in queries if "FROM daily_feature_profiles" in sql)
+    profile_params = next(params for sql, params in queries if "FROM daily_feature_profiles" in sql)
+    assert "profile_date BETWEEN CAST(%s AS DATE) AND CAST(%s AS DATE)" in profile_query
+    assert profile_params == ("fraud_model_demo", "amount", "2026-01-07", "2026-01-21")
+
+
+def test_get_overview_rows_uses_bulk_latest_snapshot_queries() -> None:
+    queries: list[str] = []
+
+    class OverviewWarehouse:
+        def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
+            queries.append(sql)
+            if "ROW_NUMBER() OVER" in sql and "FROM quality_metrics" in sql:
+                return pd.DataFrame(
+                    [
+                        {
+                            "model_key": "fraud_model_demo",
+                            "total_rows": 840,
+                            "min_date": "2026-01-01",
+                            "max_date": "2026-01-21",
+                            "prediction_mean": 0.44,
+                            "prediction_std": 0.13,
+                            "daily_volume": '{"2026-01-21": 40}',
+                            "null_rates": '{"amount": 0.0, "velocity_7d": 1.2}',
+                            "computed_at": "2026-01-21T10:00:00",
+                        },
+                        {
+                            "model_key": "chargeback_model_demo",
+                            "total_rows": 420,
+                            "min_date": "2026-01-05",
+                            "max_date": "2026-01-21",
+                            "prediction_mean": 0.31,
+                            "prediction_std": 0.09,
+                            "daily_volume": '{"2026-01-21": 22}',
+                            "null_rates": '{"amount": 0.7}',
+                            "computed_at": "2026-01-21T10:00:00",
+                        },
+                    ]
+                )
+            if "WITH ranked_drift AS" in sql and "FROM drift_metrics" in sql:
+                return pd.DataFrame(
+                    [
+                        {
+                            "model_key": "fraud_model_demo",
+                            "feature_name": "amount",
+                            "metric_name": "psi",
+                            "metric_value": 0.21,
+                            "window_end": "2026-01-21",
+                            "computed_at": "2026-01-21T10:00:00",
+                        },
+                        {
+                            "model_key": "fraud_model_demo",
+                            "feature_name": "amount",
+                            "metric_name": "js_divergence",
+                            "metric_value": 0.11,
+                            "window_end": "2026-01-21",
+                            "computed_at": "2026-01-21T10:00:00",
+                        },
+                        {
+                            "model_key": "fraud_model_demo",
+                            "feature_name": "velocity_7d",
+                            "metric_name": "psi",
+                            "metric_value": 0.05,
+                            "window_end": "2026-01-21",
+                            "computed_at": "2026-01-21T10:00:00",
+                        },
+                        {
+                            "model_key": "fraud_model_demo",
+                            "feature_name": "velocity_7d",
+                            "metric_name": "js_divergence",
+                            "metric_value": 0.03,
+                            "window_end": "2026-01-21",
+                            "computed_at": "2026-01-21T10:00:00",
+                        },
+                        {
+                            "model_key": "chargeback_model_demo",
+                            "feature_name": "amount",
+                            "metric_name": "psi",
+                            "metric_value": 0.08,
+                            "window_end": "2026-01-21",
+                            "computed_at": "2026-01-21T10:00:00",
+                        },
+                        {
+                            "model_key": "chargeback_model_demo",
+                            "feature_name": "amount",
+                            "metric_name": "js_divergence",
+                            "metric_value": 0.04,
+                            "window_end": "2026-01-21",
+                            "computed_at": "2026-01-21T10:00:00",
+                        },
+                    ]
+                )
+            raise AssertionError(f"Unexpected overview query: {sql}")
+
+    fraud_config = MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.model_lens_demo.inference_logs",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=("amount", "velocity_7d"),
+            slice_columns=("region",),
+            categorical_columns=("region",),
+        ),
+        baseline=BaselinePolicy(n_days=7),
+        model_id_value="fraud_model_v1",
+    )
+    chargeback_config = MonitorConfig(
+        model_key="chargeback_model_demo",
+        display_name="Chargeback Model Demo",
+        source_table="main.model_lens_demo.chargebacks",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            model_id_col=None,
+            prediction_col="prediction",
+            label_col=None,
+            feature_columns=("amount",),
+            slice_columns=(),
+            categorical_columns=(),
+        ),
+        baseline=BaselinePolicy(n_days=7),
+        model_id_value=None,
+    )
+
+    repository = SimpleNamespace(
+        _warehouse=OverviewWarehouse(),
+        table_names=SimpleNamespace(
+            drift_metrics="drift_metrics",
+            quality_metrics="quality_metrics",
+            quality_history="quality_history",
+            performance_metrics="performance_metrics",
+        ),
+        list_monitor_configs=lambda status="active": [fraud_config, chargeback_config],
+        get_monitor_summary=lambda: pd.DataFrame(
+            [
+                {
+                    "model_key": "fraud_model_demo",
+                    "display_name": "Fraud Model Demo",
+                    "max_psi": 0.21,
+                    "feature_count": 2,
+                    "latest_window_end": "2026-01-21",
+                    "total_rows": 840,
+                    "latest_data_date": "2026-01-21",
+                    "last_refresh_at": "2026-01-21T10:00:00",
+                    "open_incident_count": 1,
+                },
+                {
+                    "model_key": "chargeback_model_demo",
+                    "display_name": "Chargeback Model Demo",
+                    "max_psi": 0.08,
+                    "feature_count": 1,
+                    "latest_window_end": "2026-01-21",
+                    "total_rows": 420,
+                    "latest_data_date": "2026-01-21",
+                    "last_refresh_at": "2026-01-21T10:00:00",
+                    "open_incident_count": 0,
+                },
+            ]
+        ),
+        get_open_incidents=lambda: pd.DataFrame(),
+    )
+    backend = DashboardBackend(repository=repository)
+
+    rows = backend.get_overview_rows()
+
+    assert len(rows) == 2
+    fraud_row = next(row for row in rows if row["model_id"] == "fraud_model_demo")
+    assert fraud_row["max_psi"] == 0.21
+    assert fraud_row["avg_psi"] == 0.13
+    assert fraud_row["avg_js"] == 0.07
+    assert fraud_row["drifting_features"] == 1
+    assert fraud_row["total_features"] == 2
+    assert fraud_row["top_drifter"] == "amount"
+    assert fraud_row["max_null_rate"] == 1.2
+
+    chargeback_row = next(row for row in rows if row["model_id"] == "chargeback_model_demo")
+    assert chargeback_row["max_psi"] == 0.08
+    assert chargeback_row["drifting_features"] == 0
+    assert chargeback_row["max_null_rate"] == 0.7
+    quality_query = next(sql for sql in queries if "ROW_NUMBER() OVER" in sql and "FROM quality_metrics" in sql)
+    normalized_quality_query = " ".join(quality_query.split())
+    assert ") latest_quality WHERE row_num = 1" in normalized_quality_query
+    drift_query = next(sql for sql in queries if "WITH ranked_drift AS" in sql and "FROM drift_metrics" in sql)
+    normalized_drift_query = " ".join(drift_query.split())
+    assert "ROW_NUMBER() OVER ( PARTITION BY model_key, feature_name, metric_name ORDER BY window_end DESC, computed_at DESC ) AS row_num" in normalized_drift_query
+    assert "FROM ranked_drift WHERE row_num = 1" in normalized_drift_query
+    assert not any("ORDER BY window_end, feature_name, metric_name" in sql for sql in queries)
+    assert "MAX(window_end)" not in normalized_drift_query
+    assert not any("ORDER BY computed_at DESC" in sql and "LIMIT 1" in sql for sql in queries)
+
+
+def test_get_reference_data_includes_recent_incident_history_when_available() -> None:
+    config = MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.model_lens_demo.inference_logs",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=("amount",),
+            slice_columns=("region",),
+            categorical_columns=("region",),
+        ),
+        baseline=BaselinePolicy(n_days=7),
+        model_id_value="fraud_model_v1",
+    )
+    repository = SimpleNamespace(
+        _warehouse=_FakeWarehouse(),
+        table_names=SimpleNamespace(
+            catalog="model_observability",
+            schema="control_plane",
+            drift_metrics="drift_metrics",
+            quality_metrics="quality_metrics",
+            quality_history="quality_history",
+            performance_metrics="performance_metrics",
+        ),
+        list_monitor_configs=lambda status="active": [config],
+        get_monitor_summary=lambda: pd.DataFrame([{"model_key": "fraud_model_demo", "total_rows": 840}]),
+        get_monitor_runtime_state=lambda model_id: None,
+        get_recent_refresh_runs=lambda model_id, limit=8: [{"scope": "bootstrap", "status": "completed"}],
+        get_recent_incident_history=lambda model_id, limit=8: [
+            {
+                "event_type": "opened",
+                "feature_name": "amount",
+                "metric_name": "psi",
+                "severity": "warning",
+                "status": "open",
+                "metric_value": 0.12,
+                "window_end": "2026-01-21",
+                "observed_at": "2026-01-21T10:00:00",
+            }
+        ],
+    )
+    backend = DashboardBackend(repository=repository)
+
+    reference = backend.get_reference_data("fraud_model_demo")
+
+    assert reference["recent_runs"] == [{"scope": "bootstrap", "status": "completed"}]
+    assert reference["recent_incident_history"] == [
+        {
+            "event_type": "opened",
+            "feature_name": "amount",
+            "metric_name": "psi",
+            "severity": "warning",
+            "status": "open",
+            "metric_value": 0.12,
+            "window_end": "2026-01-21",
+            "observed_at": "2026-01-21T10:00:00",
+        }
+    ]
