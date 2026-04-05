@@ -321,10 +321,12 @@ The app can accelerate the first refresh asynchronously during activation. It re
 - `REFRESH_JOB_ID` if you set it explicitly
 - otherwise `REFRESH_JOB_NAME`, which defaults to `model-lens-refresh`
 
-The shared refresh job itself is also scheduled hourly by default in both the bundle-managed path and the generated manual existing-app path, so saved monitors are not blocked forever when `run_now` permissions are unavailable.
+Those values are deploy-time app environment variables. Change them in the deployed app source `app.yaml` or in the generated manual existing-app `app.yaml`, then redeploy the app. They are not onboarding inputs inside the UI.
+
+The shared refresh job itself is also scheduled hourly by default in both the bundle-managed path and the generated manual existing-app path, so saved monitors are not blocked forever when `run_now` permissions are unavailable, as long as that shared workflow actually exists in the workspace.
 
 If you deploy with a custom bundle `app_name`, set `REFRESH_JOB_NAME=<app-name>-refresh` or set `REFRESH_JOB_ID=<job-id>` before `databricks apps deploy`.
-The current resolver also handles Databricks Asset Bundles development prefixes such as `[dev volo_vragov] model-lens-refresh` by falling back to a suffix match, but `REFRESH_JOB_ID` is still the safest option when multiple similarly named jobs exist.
+The current resolver now falls back from exact lookup to full-workspace exact, suffix, and substring matching, so Databricks Asset Bundles development names such as `[dev volo_vragov] model-lens-refresh` still resolve, but `REFRESH_JOB_ID` is still the safest option when multiple similarly named jobs exist.
 
 Lakebase-enabled:
 
@@ -370,7 +372,7 @@ After deploy:
 9. If the table contains more than one `model_id`, confirm or fill in `Monitored Model ID Value`.
 10. If external labels are not unique on the join key, confirm or fill in `External Labels Order Column`.
 11. Continue to `Activate`, then save the monitor.
-12. Confirm the app acknowledges that the monitor was saved. If `CAN MANAGE RUN` is configured, it should also say the shared refresh job was triggered for bootstrap; otherwise the shared hourly job can pick it up on its next run.
+12. Confirm the app acknowledges that the monitor was saved. If `CAN MANAGE RUN` is configured, it should also say the shared refresh job was triggered for bootstrap; otherwise the shared hourly job can pick it up on its next run only if that workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`.
 13. Open the overview and analysis pages after the workflow finishes to confirm the new monitor appears and the initial refresh populated historical readback immediately.
 
 ## Full Docs

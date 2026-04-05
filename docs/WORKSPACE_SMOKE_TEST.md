@@ -180,6 +180,7 @@ Check immediately:
 - the app title reads `Model Lens`
 - `SQL_WAREHOUSE_ID` is populated
 - `REFRESH_JOB_ID` is populated or `REFRESH_JOB_NAME` matches the deployed workflow name
+- if `REFRESH_JOB_ID` is blank, confirm you intentionally rely on name lookup; `REFRESH_JOB_ID` is safer for repeated customer deployments
 - `USE_LAKEBASE_READ_MODEL` is `false`
 - `Control Plane Catalog` and `Control Plane Schema` show the namespace you want to use
 - if Lakebase exists in the workspace and is visible to the app identity, an informational banner recommends Lakebase
@@ -310,7 +311,7 @@ Expected result:
 - success banner
 - the monitor is marked `pending bootstrap` in `monitor_runtime_state`
 - if the app has `CAN MANAGE RUN`, the success banner says the monitor was saved and the shared refresh job was triggered asynchronously
-- if the app cannot resolve the workflow or lacks `Run now` permission, the monitor is still saved and the shared hourly job remains the default pickup path
+- if the app cannot resolve the workflow or lacks `Run now` permission, the monitor is still saved; automatic pickup only happens if the shared hourly workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`
 - the monitor appears on the overview page
 - the `Reference` page shows the saved cadence, runtime state, and recent refresh-run history for the selected monitor
 - the `Reference` page also shows recent incident lifecycle rows for that monitor when drift/performance incidents have been opened, escalated, or recovered

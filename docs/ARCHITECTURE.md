@@ -131,9 +131,9 @@ The app uses Lakebase for hot UI reads when configured. If Lakebase is unavailab
 
 The refresh workflow is a serverless Databricks job.
 
-Model Lens uses one shared refresh workflow by default. The bundle-managed workflow and the generated manual existing-app workflow payload are both scheduled hourly, so saved monitors have a default pickup path even when the app cannot call `Run now`.
+Model Lens uses one shared refresh workflow by default. The bundle-managed workflow and the generated manual existing-app workflow payload are both scheduled hourly, so saved monitors have a default pickup path even when the app cannot call `Run now`, as long as that shared workflow already exists in the workspace and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`.
 
-The app does not run the heavy first refresh inline. During activation it saves the monitor config, resolves the workflow from `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`, and can trigger the job asynchronously so the UI stays responsive. `CAN MANAGE RUN` on the refresh job is therefore optional acceleration for the app service principal, while the job's Run as identity still needs the source-data and control-plane privileges required for the actual computation.
+The app does not run the heavy first refresh inline. During activation it saves the monitor config, resolves the workflow from `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`, and can trigger the job asynchronously so the UI stays responsive. Those are deploy-time app environment variables, not onboarding inputs. `CAN MANAGE RUN` on the refresh job is therefore optional acceleration for the app service principal, while the job's Run as identity still needs the source-data and control-plane privileges required for the actual computation.
 
 Responsibilities:
 
@@ -193,7 +193,7 @@ Primary code:
 8. The app writes one active row into `monitor_configs` and marks the monitor `pending` in `monitor_runtime_state`.
 9. If Lakebase mode is active, the repository syncs the projected monitor inventory into Lakebase.
 10. The app can immediately trigger the shared refresh job for bootstrap when `Run now` permissions are available.
-11. If that trigger is unavailable, the scheduled hourly shared job still picks up the pending bootstrap automatically.
+11. If that trigger is unavailable, the scheduled hourly shared job still picks up the pending bootstrap automatically, but only if that shared workflow already exists and the app points at it correctly.
 
 ### Refresh Flow
 

@@ -275,6 +275,7 @@ def test_save_monitor_allows_table_scoped_monitor_without_model_id_column(monkey
     assert saved["upserted"].performance_metric_names == ("f1", "precision", "recall")
     assert saved["upserted"].default_performance_metric == "f1"
     assert "Initial refresh is pending on the shared refresh job" in str(result[0])
+    assert "The shared workflow can still pick it up on its next hourly run" in str(result[0])
     assert result[1]
 
 
@@ -670,6 +671,7 @@ def test_render_reference_callback_shows_archive_and_delete_actions(monkeypatch)
     assert "Archive Monitor" in str(result)
     assert "Delete Monitor And History" in str(result)
     assert "Monitor Lifecycle" in str(result)
+    assert "REFRESH_JOB_ID is preferred" in str(result)
 
 
 def test_render_reference_callback_shows_recent_incident_history(monkeypatch) -> None:

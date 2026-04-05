@@ -28,7 +28,7 @@ from model_lens.domain.performance_metrics import (
 from model_lens.pages import onboarding
 from model_lens.services.inference_contracts import build_inference_contract
 from model_lens.services.onboarding import baseline_label, build_default_baseline, build_fixed_baseline
-from model_lens.services.refresh_jobs import trigger_refresh_job
+from model_lens.services.refresh_jobs import is_refresh_job_configuration_error, trigger_refresh_job
 from model_lens.ui import charts
 from model_lens.ui.components import (
     get_thresholds,
@@ -68,6 +68,22 @@ def _status_alert(message: str, color: str = "info") -> dbc.Alert:
 
 def _setup_retry_message(error: object) -> str:
     return f"Setup failed. Fix the issue and click Setup Control Plane again to retry. Details: {error}"
+
+
+def _refresh_job_unavailable_message(model_key: str, error: Exception) -> str:
+    detail = (
+        "If the shared refresh workflow already exists and is scheduled, it can still pick up this pending monitor on its next hourly run. "
+        "If no shared refresh workflow exists yet, deploy or create it first, then set REFRESH_JOB_ID (preferred) or REFRESH_JOB_NAME in the app environment and redeploy the app."
+    )
+    if is_refresh_job_configuration_error(error):
+        return (
+            f"Saved monitor {model_key}. Initial refresh is pending on the shared refresh job; automatic trigger was unavailable: {error}. "
+            f"{detail}"
+        )
+    return (
+        f"Saved monitor {model_key}. Initial refresh is pending on the shared refresh job; automatic trigger was unavailable: {error}. "
+        "The shared workflow can still pick it up on its next hourly run, or you can run it manually once job permissions are fixed."
+    )
 
 
 def _status_block(items: list[tuple[str, str]]) -> html.Div:
@@ -1538,12 +1554,7 @@ def register_callbacks(app) -> None:
                 "success",
             ))
         except Exception as error:
-            messages.append((
-                "Saved monitor "
-                f"{config.model_key}. Initial refresh is pending on the shared refresh job; automatic trigger was unavailable: {error}. "
-                "The hourly scheduler will pick it up, or you can run the shared refresh workflow manually.",
-                "success",
-            ))
+            messages.append((_refresh_job_unavailable_message(config.model_key, error), "success"))
         non_numeric = _non_numeric_features(feature_columns or [], scan_data)
         if non_numeric:
             messages.append((
@@ -2109,6 +2120,21 @@ def register_callbacks(app) -> None:
                 for field, value in data["settings"].items()
             ]
         )
+        configured_refresh_job_id = str(data["settings"].get("refresh_job_id") or "").strip()
+        configured_refresh_job_name = str(data["settings"].get("refresh_job_name") or "").strip()
+        if configured_refresh_job_id:
+            refresh_job_wiring_text = (
+                f"This app is configured to trigger shared refresh job ID {configured_refresh_job_id}. "
+                "REFRESH_JOB_ID and REFRESH_JOB_NAME are deploy-time app environment variables, not onboarding inputs. "
+                "To change them, update app.yaml or the generated manual existing-app app.yaml and redeploy the app."
+            )
+        else:
+            configured_job_name = configured_refresh_job_name or "<unset>"
+            refresh_job_wiring_text = (
+                f"This app currently resolves the shared refresh workflow by name using REFRESH_JOB_NAME={configured_job_name!r}. "
+                "REFRESH_JOB_ID is preferred because it avoids name-matching issues. "
+                "To change either value, update app.yaml or the generated manual existing-app app.yaml and redeploy the app."
+            )
         schedule_card = dbc.Card(
             dbc.CardBody(
                 [
@@ -2319,6 +2345,10 @@ def register_callbacks(app) -> None:
                 _render_frame(recent_incident_history_frame, "No incident history recorded yet."),
                 html.Hr(),
                 html.H6("Runtime Settings", className="text-light mb-2"),
+                html.P(
+                    refresh_job_wiring_text,
+                    className="text-muted mb-2",
+                ),
                 _render_frame(settings_frame, "No runtime settings."),
             ]
         )

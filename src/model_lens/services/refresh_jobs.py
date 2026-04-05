@@ -7,6 +7,14 @@ from uuid import uuid4
 from model_lens.config import settings
 
 
+class RefreshJobConfigError(RuntimeError):
+    pass
+
+
+class RefreshJobLookupError(RuntimeError):
+    pass
+
+
 def _clean(value: object) -> str:
     if value is None:
         return ""
@@ -37,6 +45,19 @@ def _jobs_with_suffix_name(jobs: list[object], refresh_job_name: str) -> list[ob
         for job in jobs
         if getattr(job, "job_id", None) and _normalized_job_name(_job_name(job)).endswith(normalized_target)
     ]
+
+
+def _jobs_with_contains_name(jobs: list[object], refresh_job_name: str) -> list[object]:
+    normalized_target = _normalized_job_name(refresh_job_name)
+    return [
+        job
+        for job in jobs
+        if getattr(job, "job_id", None) and normalized_target in _normalized_job_name(_job_name(job))
+    ]
+
+
+def is_refresh_job_configuration_error(error: Exception) -> bool:
+    return isinstance(error, (RefreshJobConfigError, RefreshJobLookupError))
 
 
 def build_refresh_job_params(
@@ -97,33 +118,54 @@ def resolve_refresh_job_id(workspace_client=None) -> int:
         try:
             return int(configured_job_id)
         except ValueError as error:
-            raise RuntimeError(f"REFRESH_JOB_ID must be an integer, got {configured_job_id!r}.") from error
+            raise RefreshJobConfigError(f"REFRESH_JOB_ID must be an integer, got {configured_job_id!r}.") from error
 
     refresh_job_name = _clean(settings.refresh_job_name)
     if not refresh_job_name:
-        raise RuntimeError("Neither REFRESH_JOB_ID nor REFRESH_JOB_NAME is configured.")
+        raise RefreshJobConfigError("Neither REFRESH_JOB_ID nor REFRESH_JOB_NAME is configured.")
 
     client = workspace_client or _workspace_client()
     exact_matches = _jobs_with_exact_name(list(client.jobs.list(name=refresh_job_name, limit=25)), refresh_job_name)
-    if not exact_matches:
-        suffix_matches = _jobs_with_suffix_name(list(client.jobs.list(limit=100)), refresh_job_name)
-        if len(suffix_matches) == 1:
-            return int(suffix_matches[0].job_id)
-        if len(suffix_matches) > 1:
-            raise RuntimeError(
-                f"Multiple refresh jobs end with {refresh_job_name!r}. "
-                "Set REFRESH_JOB_ID explicitly so the app triggers the correct workflow."
-            )
-        raise RuntimeError(
-            f"Could not find a refresh job named {refresh_job_name!r}. "
-            "Set REFRESH_JOB_ID or REFRESH_JOB_NAME to the deployed workflow."
-        )
     if len(exact_matches) > 1:
-        raise RuntimeError(
+        raise RefreshJobLookupError(
             f"Multiple refresh jobs are named {refresh_job_name!r}. "
             "Set REFRESH_JOB_ID explicitly so the app triggers the correct workflow."
         )
-    return int(exact_matches[0].job_id)
+    if len(exact_matches) == 1:
+        return int(exact_matches[0].job_id)
+
+    all_jobs = list(client.jobs.list())
+    all_exact_matches = _jobs_with_exact_name(all_jobs, refresh_job_name)
+    if len(all_exact_matches) > 1:
+        raise RefreshJobLookupError(
+            f"Multiple refresh jobs are named {refresh_job_name!r}. "
+            "Set REFRESH_JOB_ID explicitly so the app triggers the correct workflow."
+        )
+    if len(all_exact_matches) == 1:
+        return int(all_exact_matches[0].job_id)
+
+    suffix_matches = _jobs_with_suffix_name(all_jobs, refresh_job_name)
+    if len(suffix_matches) == 1:
+        return int(suffix_matches[0].job_id)
+    if len(suffix_matches) > 1:
+        raise RefreshJobLookupError(
+            f"Multiple refresh jobs end with {refresh_job_name!r}. "
+            "Set REFRESH_JOB_ID explicitly so the app triggers the correct workflow."
+        )
+
+    contains_matches = _jobs_with_contains_name(all_jobs, refresh_job_name)
+    if len(contains_matches) == 1:
+        return int(contains_matches[0].job_id)
+    if len(contains_matches) > 1:
+        raise RefreshJobLookupError(
+            f"Multiple refresh jobs contain {refresh_job_name!r}. "
+            "Set REFRESH_JOB_ID explicitly so the app triggers the correct workflow."
+        )
+
+    raise RefreshJobLookupError(
+        f"Could not find a refresh job matching {refresh_job_name!r}. "
+        "The app only triggers an existing shared workflow; set REFRESH_JOB_ID or REFRESH_JOB_NAME to the deployed workflow and redeploy the app."
+    )
 
 
 @dataclass(frozen=True)

@@ -232,6 +232,8 @@ At this point, the generated `app.yaml` uses:
 - `SQL_WAREHOUSE_ID=<literal warehouse id>`
 - `REFRESH_JOB_NAME=<existing-app-name>-refresh`
 
+`REFRESH_JOB_ID` and `REFRESH_JOB_NAME` are app environment variables in that generated `app.yaml`. They are not configured from the onboarding wizard. To change refresh-job wiring later, regenerate or edit that `app.yaml`, re-import the prepared source tree, and redeploy the app.
+
 If the app will monitor very large tables, set these environment variables in the generated `app.yaml` and shared refresh job before deploy:
 
 - `REFRESH_SAMPLE_ROWS_PER_DAY`
@@ -644,7 +646,7 @@ Expected result:
 - the monitor saves immediately
 - the monitor is marked `pending bootstrap` in the control plane
 - if the app has `CAN MANAGE RUN`, it reports that the shared refresh job was triggered
-- if it does not, the shared hourly job still remains the default pickup path
+- if it does not, the shared hourly job still remains the default pickup path only if that workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`
 - the cadence chosen during activation is stored with the monitor and can be edited later from the `Reference` page
 - the Overview page shows the monitor after the workflow finishes
 
@@ -672,7 +674,7 @@ Check:
 - the app service principal has `CAN MANAGE RUN` on the refresh job
 - if using `REFRESH_JOB_NAME`, the configured value matches the real deployed workflow name for this app
 
-If `CAN MANAGE RUN` is intentionally unavailable, the app can still save the monitor and the shared hourly job can pick it up on its next run. In that operating mode, treat the missing `Run now` permission as lost acceleration, not lost functionality.
+If `CAN MANAGE RUN` is intentionally unavailable, the app can still save the monitor and the shared hourly job can pick it up on its next run, but only if that workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`. In that operating mode, treat the missing `Run now` permission as lost acceleration, not lost functionality.
 
 ### The App Opens But Cannot Query The Warehouse
 

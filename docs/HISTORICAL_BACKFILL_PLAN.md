@@ -270,7 +270,7 @@ The frontend should remain thin:
   - latest label watermark
   - latest run status/error
 - treat app-side `Run now` as optional acceleration only
-- let the shared hourly workflow pick up pending bootstraps and overdue monitors even when the app cannot trigger runs directly
+- let the shared hourly workflow pick up pending bootstraps and overdue monitors even when the app cannot trigger runs directly, but only after that shared workflow has been created in the workspace and the app has been wired to it with `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`
 
 ### Phase 4: Repository / Backend Queries
 

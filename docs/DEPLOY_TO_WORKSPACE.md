@@ -44,13 +44,16 @@ On Databricks CLI `v0.260.0`, the bundle can bind the SQL warehouse to the app b
 - the bundle-managed refresh workflow is one shared job (`<app-name>-refresh`) scheduled hourly by default
 - each monitor stores its own drift/performance cadence in the control plane, so one shared job can service many monitors without creating one Databricks job per model
 - the app can accelerate onboarding refreshes asynchronously by resolving `REFRESH_JOB_ID` first, then falling back to `REFRESH_JOB_NAME` (default `model-lens-refresh`)
-- when `REFRESH_JOB_NAME` is used, the resolver now also accepts Databricks Asset Bundles development job names that end with the configured base name, such as `[dev user] model-lens-refresh`
+- when `REFRESH_JOB_NAME` is used, the resolver now falls back to full-workspace exact, suffix, and substring matching, so Databricks Asset Bundles development job names such as `[dev user] model-lens-refresh` still resolve reliably
+- `REFRESH_JOB_ID` and `REFRESH_JOB_NAME` are deploy-time app environment variables in `app.yaml`; they are not values the operator edits during onboarding inside the app
 
 The commands below assume the default bundle variable `app_name=model-lens`.
 If you override `app_name`, replace the app name in every `databricks apps ...` command and either:
 
 - set `REFRESH_JOB_ID=<job-id>` before `databricks apps deploy`, or
 - set `REFRESH_JOB_NAME=<app-name>-refresh`
+
+If no shared refresh workflow exists in the workspace yet, onboarding can still save the monitor config, but no scheduled pickup can happen until that shared workflow is created and the app points at it.
 
 ## Permission Matrix
 
@@ -237,7 +240,7 @@ Then grant the app identity all of the following:
 - if Model Lens should create the control-plane tables itself, `CREATE TABLE` in the control-plane schema
 
 Treat the warehouse grant as a post-deploy check, not a one-time assumption. After every `databricks apps start model-lens` + `databricks apps deploy model-lens ...` cycle, verify the same app identity still has `CAN_USE` on the configured SQL warehouse and regrant it if the app shows warehouse-access errors.
-If you want the app to accelerate onboarding with `Run now`, also verify `CAN MANAGE RUN` on the refresh workflow. If that permission is unavailable, the shared hourly job still remains the default pickup path.
+If you want the app to accelerate onboarding with `Run now`, also verify `CAN MANAGE RUN` on the refresh workflow. If that permission is unavailable, the shared hourly job still remains the default pickup path only if that workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`.
 
 For large-table customers, also verify that the deployed app and shared refresh workflow environment include the intended row-cap settings:
 
@@ -376,7 +379,7 @@ Expected result:
 - the monitor is marked `pending bootstrap` in `monitor_runtime_state`
 - the app returns immediately instead of blocking on the refresh computation
 - if the app has `CAN MANAGE RUN`, the shared refresh job is triggered asynchronously for bootstrap
-- if the app cannot resolve the workflow or lacks `Run now` permission, the monitor is still saved and the shared hourly job remains the default pickup path
+- if the app cannot resolve the workflow or lacks `Run now` permission, the monitor is still saved; automatic pickup only happens if the shared hourly workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`
 - inside the shared job, monitor refreshes can run concurrently, but only up to the configured `MAX_PARALLEL_REFRESH_WORKERS` cap and never with two scopes for the same model in one scheduler pass
 - if one monitor hits an unexpected worker-level exception, that result is recorded as a failed monitor refresh instead of aborting the whole shared batch
 - each monitor scope is processed from one bounded projected source-range load, and the workflow derives the persisted window/history rows from the daily profile layer built for that range instead of re-querying every comparison window
