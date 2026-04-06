@@ -464,8 +464,8 @@ def test_validate_workspace_readiness_reports_scheduler_only_when_run_now_is_unc
     assert readiness.refresh_workflow_resolved is True
     assert readiness.scheduler_path_available is True
     assert readiness.run_now_available is None
-    assert any("scheduler-only mode assumed" in warning for warning in readiness.warnings)
-    assert any("CAN_MANAGE_RUN on job 321" in warning for warning in readiness.warnings)
+    assert any("Direct trigger may still work" in warning for warning in readiness.warnings)
+    assert not any("CAN_MANAGE_RUN on job 321" in warning for warning in readiness.warnings)
 
 
 def test_validate_workspace_readiness_reports_explicit_run_now_grant_when_manage_run_is_missing(monkeypatch) -> None:
@@ -594,7 +594,8 @@ def test_validate_workspace_readiness_treats_separate_bootstrap_lane_as_optional
     assert readiness.bootstrap_workflow_id == 654
     assert readiness.bootstrap_run_now_available is None
     assert not any("no schedule or trigger configured" in issue.lower() for issue in readiness.blocking_issues)
-    assert any("CAN_MANAGE_RUN on job 654" in warning for warning in readiness.warnings)
+    assert any("Direct trigger may still work" in warning for warning in readiness.warnings)
+    assert not any("CAN_MANAGE_RUN on job 654" in warning for warning in readiness.warnings)
 
 
 def test_validate_workspace_readiness_reports_fully_ready_with_direct_manage_run_access(monkeypatch) -> None:

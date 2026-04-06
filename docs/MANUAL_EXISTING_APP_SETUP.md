@@ -54,7 +54,7 @@ This track lets you:
 
 - bind the bundle app resource to the existing app
 - let the bundle continue managing the refresh workflow
-- keep the repo root [app.yaml](/Users/volo.vragov/Desktop/work/model-lens/app.yaml) unchanged with `valueFrom: sql_warehouse`
+- keep the repo root [app.yaml](/Users/volo.vragov/Desktop/work/model-lens/app.yaml) environment-neutral in git, then deploy app source with a literal `SQL_WAREHOUSE_ID` for that workspace
 
 ### Track B: Existing App Without App-Resource Management
 
@@ -699,6 +699,7 @@ Check:
 
 If `REFRESH_JOB_ID` is set and the app still reports scheduler-only mode, the expected operator fix is explicit: grant the app service principal `CAN_MANAGE_RUN` on that job ID.
 If `BOOTSTRAP_REFRESH_JOB_ID` is set and `Run First Refresh` still cannot trigger directly, the expected operator fix is explicit: grant the app service principal `CAN_MANAGE_RUN` on that bootstrap job ID, or leave the monitor in `pending bootstrap` and let the shared scheduled job pick it up.
+If the Setup card instead shows `Verification unavailable`, the app could not inspect the job ACLs with its current privileges. Direct trigger may still work, so test `Run First Refresh` or `jobs run-now` before assuming the permission grant is missing.
 
 If `CAN MANAGE RUN` is intentionally unavailable, the app can still save the monitor and the shared hourly job can pick it up on its next run, but only if that workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`. In that operating mode, treat the missing `Run now` permission as lost acceleration, not lost functionality.
 

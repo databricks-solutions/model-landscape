@@ -191,7 +191,7 @@ def _direct_run_now_permission(workspace_client, job_id: int) -> tuple[bool | No
     try:
         identity = workspace_client.current_user.me()
     except Exception:
-        return None, "Could not confirm immediate Run now permission; scheduler-only mode assumed."
+        return None, "Could not verify immediate Run now permission. Direct trigger may still work, but the app could not inspect the current principal."
 
     principal_candidates = {
         _normalized_job_name(getattr(identity, "user_name", None)),
@@ -200,12 +200,12 @@ def _direct_run_now_permission(workspace_client, job_id: int) -> tuple[bool | No
     principal_candidates.discard("")
 
     if not principal_candidates:
-        return None, "Could not identify the current app principal; scheduler-only mode assumed."
+        return None, "Could not identify the current app principal to verify immediate Run now permission. Direct trigger may still work."
 
     try:
         permissions = workspace_client.jobs.get_permissions(str(job_id))
     except Exception:
-        return None, "Could not read refresh workflow permissions; scheduler-only mode assumed."
+        return None, "Could not read refresh workflow permissions to verify immediate Run now access. Direct trigger may still work."
 
     for acl in getattr(permissions, "access_control_list", None) or []:
         principal_names = {
@@ -224,7 +224,7 @@ def _direct_run_now_permission(workspace_client, job_id: int) -> tuple[bool | No
             return True, None
         return False, None
 
-    return None, "Could not confirm immediate Run now permission from the refresh workflow ACL; scheduler-only mode assumed."
+    return None, "Could not confirm immediate Run now permission from the refresh workflow ACL. Direct trigger may still work."
 
 
 def resolve_refresh_workflow_status(
@@ -299,7 +299,7 @@ def resolve_refresh_workflow_status(
     run_now_available, run_now_warning = _direct_run_now_permission(client, int(job_id))
     if run_now_warning:
         warnings.append(run_now_warning)
-    if run_now_available is not True:
+    if run_now_available is False:
         guidance = run_now_permission_guidance(int(job_id))
         if guidance:
             warnings.append(guidance)
@@ -351,7 +351,9 @@ def validate_workspace_readiness(
     if not control_plane_ready:
         blocking_issues.append("Run Setup Control Plane successfully before onboarding a monitor.")
     if not warehouse_ready:
-        blocking_issues.append("SQL_WAREHOUSE_ID is not configured for this app.")
+        blocking_issues.append(
+            "SQL_WAREHOUSE_ID is not configured for this app. For Git-based app deploys, set a literal SQL_WAREHOUSE_ID value in app.yaml."
+        )
     blocking_issues.extend(workflow_status.blocking_issues)
     if bootstrap_status is not None:
         warnings.extend(bootstrap_status.blocking_issues)
@@ -425,7 +427,9 @@ def build_refresh_job_named_params(
 ) -> dict[str, str]:
     warehouse_id = _clean(settings.sql_warehouse_id)
     if not warehouse_id:
-        raise RuntimeError("SQL_WAREHOUSE_ID is not configured for refresh job execution.")
+        raise RuntimeError(
+            "SQL_WAREHOUSE_ID is not configured for refresh job execution. For Git-based app deploys, set a literal SQL_WAREHOUSE_ID value in app.yaml."
+        )
 
     params: dict[str, str] = {
         "warehouse_id": warehouse_id,

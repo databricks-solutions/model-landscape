@@ -289,6 +289,7 @@ If you override `app_name`, replace the app name in every `databricks apps ...` 
 - set `REFRESH_JOB_NAME=<app-name>-refresh`
 
 Keep the checked-in `app.yaml` template environment-neutral. Set `REFRESH_JOB_ID` in the deployed app source for each workspace, but do not commit a real workspace job ID back into the repo template.
+For Git-based app deployments, also replace the blank `SQL_WAREHOUSE_ID` in the deployed `app.yaml` with a literal warehouse ID because Git deploys do not get the bundle-managed `sql_warehouse` binding automatically.
 
 If you are reusing an existing Databricks App instead of letting the bundle create one, stop here and use [Manual Setup With An Existing Databricks App](/Users/volo.vragov/Desktop/work/model-lens/docs/MANUAL_EXISTING_APP_SETUP.md). That guide now covers both:
 

@@ -316,6 +316,7 @@ Expected readiness modes:
 - `scheduler_only`: the app can save monitors and rely on the scheduled shared workflow pickup path
 
 When the readiness card shows `Immediate Bootstrap: Grant CAN_MANAGE_RUN on job <id>`, the workflow wiring is fine and the missing step is the Databricks job permission grant for the app service principal.
+When the readiness card shows `Immediate Bootstrap: Verification unavailable`, the app could not inspect the workflow ACL. Direct trigger may still work, so test `Run First Refresh` before assuming the grant is missing.
 
 If the readiness card stays `not ready`, onboarding is intentionally blocked until the shared workflow wiring is fixed.
 

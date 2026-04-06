@@ -562,8 +562,7 @@ def test_validate_workspace_wiring_callback_renders_readiness_card(monkeypatch) 
             "lakebase_ready": True,
             "blocking_issues": [],
             "warnings": [
-                "Could not confirm immediate Run now permission; scheduler-only mode assumed.",
-                "Grant the app service principal CAN_MANAGE_RUN on job 123.",
+                "Could not read refresh workflow permissions to verify immediate Run now access. Direct trigger may still work.",
             ],
         },
     )
@@ -581,9 +580,55 @@ def test_validate_workspace_wiring_callback_renders_readiness_card(monkeypatch) 
     )
 
     assert "Workspace Readiness" in str(result[0])
-    assert "scheduler-only mode" in str(result[0]).lower()
-    assert "Grant CAN_MANAGE_RUN on job 123" in str(result[0])
+    assert "Verification unavailable" in str(result[0])
+    assert "Direct trigger may still work" in str(result[0])
     assert result[1]["overall_mode"] == "scheduler_only"
+
+
+def test_validate_workspace_wiring_callback_distinguishes_unknown_bootstrap_acl(monkeypatch) -> None:
+    monkeypatch.setattr(
+        callbacks_module,
+        "_workspace_readiness_for_session",
+        lambda ready_state, session: {
+            "overall_mode": "scheduler_only",
+            "control_plane_ready": True,
+            "warehouse_ready": True,
+            "refresh_workflow_resolved": True,
+            "refresh_workflow_configured_via": "id",
+            "refresh_workflow_configured_value": "123",
+            "refresh_workflow_name": "model-lens-refresh",
+            "refresh_workflow_id": 123,
+            "scheduler_path_available": True,
+            "scheduler_mode": "schedule",
+            "run_now_available": True,
+            "bootstrap_workflow_mode": "separate",
+            "bootstrap_workflow_resolved": True,
+            "bootstrap_workflow_name": "model-lens-bootstrap",
+            "bootstrap_workflow_id": 456,
+            "bootstrap_run_now_available": None,
+            "lakebase_ready": True,
+            "blocking_issues": [],
+            "warnings": [
+                "Could not read refresh workflow permissions to verify immediate Run now access. Direct trigger may still work.",
+            ],
+        },
+    )
+    app = create_app()
+    fn = _find_callback_by_input_and_output(app, "validate-workspace-wiring-btn", "workspace-readiness-status")
+
+    result = fn(
+        1,
+        "model_observability",
+        "control_plane",
+        "",
+        "",
+        "",
+        {"control_plane_catalog": "model_observability", "control_plane_schema": "control_plane"},
+    )
+
+    assert "Bootstrap Trigger" in str(result[0])
+    assert "Verification unavailable" in str(result[0])
+    assert "Grant CAN_MANAGE_RUN on job 456" not in str(result[0])
 
 
 def test_refresh_job_unavailable_message_includes_explicit_grant_for_configured_job_id(monkeypatch) -> None:
@@ -610,7 +655,22 @@ def test_render_overview_shows_empty_state_when_no_monitors_exist(monkeypatch) -
 
     result = fn("/", None, {})
 
-    assert "No monitors onboarded yet." in str(result)
+    assert "No monitors onboarded yet. Go to Onboarding to add your first model." in str(result)
+
+
+def test_populate_model_selector_returns_empty_when_no_monitors_exist(monkeypatch) -> None:
+    class _FakeBackend:
+        def list_models(self):
+            return []
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_output(app, "global-model-select")
+
+    options, value = fn("/", "", None, {}, None)
+
+    assert options == []
+    assert value is None
 
 
 def test_performance_metric_selector_uses_monitor_configured_metrics(monkeypatch) -> None:

@@ -184,11 +184,12 @@ Open the `model-lens` Databricks App.
 Check immediately:
 
 - the app title reads `Model Lens`
-- if no monitors exist yet, `Overview` renders a clean empty state that says `No monitors onboarded yet.` instead of returning a 500
+- if no monitors exist yet, `Overview` renders a clean empty state that says `No monitors onboarded yet. Go to Onboarding to add your first model.` instead of returning a 500
 - `SQL_WAREHOUSE_ID` is populated
 - `REFRESH_JOB_ID` is populated or `REFRESH_JOB_NAME` matches the deployed workflow name
 - if `REFRESH_JOB_ID` is blank, confirm you intentionally rely on name lookup; `REFRESH_JOB_ID` is safer for repeated customer deployments
 - if `REFRESH_JOB_ID` is populated and the setup card shows `Grant CAN_MANAGE_RUN on job <id>`, grant the app service principal `CAN_MANAGE_RUN` on that job before expecting immediate bootstrap from the UI
+- if the setup card shows `Immediate Bootstrap: Verification unavailable`, the app could not inspect workflow ACLs; direct trigger may still work, so test `Run First Refresh` before assuming the grant is missing
 - if you intentionally enabled the optional bootstrap lane, verify `BOOTSTRAP_REFRESH_JOB_ID` or `BOOTSTRAP_REFRESH_JOB_NAME` is populated too; otherwise the app should show that bootstrap uses the shared refresh workflow by default
 - `USE_LAKEBASE_READ_MODEL` is `false`
 - `Control Plane Catalog` and `Control Plane Schema` show the namespace you want to use

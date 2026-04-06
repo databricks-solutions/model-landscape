@@ -426,8 +426,10 @@ def _render_workspace_readiness(readiness_state: dict | None) -> html.Div:
     run_now_available = readiness.get("run_now_available")
     if run_now_available is True:
         immediate_text = "Available"
-    elif resolved_id is not None:
+    elif run_now_available is False and resolved_id is not None:
         immediate_text = f"Grant CAN_MANAGE_RUN on job {resolved_id}"
+    elif run_now_available is None and readiness.get("scheduler_path_available"):
+        immediate_text = "Verification unavailable"
     elif readiness.get("scheduler_path_available"):
         immediate_text = "Scheduler only"
     else:
@@ -438,8 +440,10 @@ def _render_workspace_readiness(readiness_state: dict | None) -> html.Div:
         bootstrap_immediate_text = "Uses shared refresh workflow permissions"
     elif bootstrap_run_now_available is True:
         bootstrap_immediate_text = "Available"
-    elif bootstrap_id is not None:
+    elif bootstrap_run_now_available is False and bootstrap_id is not None:
         bootstrap_immediate_text = f"Grant CAN_MANAGE_RUN on job {bootstrap_id}"
+    elif bootstrap_run_now_available is None and bootstrap_id is not None:
+        bootstrap_immediate_text = "Verification unavailable"
     else:
         bootstrap_immediate_text = "Unavailable"
 
@@ -1839,7 +1843,7 @@ def register_callbacks(app) -> None:
         backend = _make_backend(session_data)
         overview_data = backend.get_overview_rows(metric="psi")
         if not overview_data:
-            return make_empty_state("No monitors onboarded yet.", icon="fas fa-plus-circle")
+            return make_empty_state("No monitors onboarded yet. Go to Onboarding to add your first model.", icon="fas fa-plus-circle")
 
         psi_warning, psi_critical = get_thresholds("psi")
         healthy = sum(1 for row in overview_data if row["max_psi"] <= psi_warning)

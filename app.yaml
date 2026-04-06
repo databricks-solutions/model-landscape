@@ -13,12 +13,16 @@ env:
   - name: CONTROL_PLANE_SCHEMA
     value: control_plane
   - name: SQL_WAREHOUSE_ID
-    value: "148ccb90800933a1"
+    value: ""
   - name: LAKEBASE_SCHEMA
     value: model_lens_ui
   - name: REFRESH_JOB_ID
-    value: "269057874681965"
+    value: ""
   - name: REFRESH_JOB_NAME
     value: model-lens-refresh
+  - name: BOOTSTRAP_REFRESH_JOB_ID
+    value: ""
+  - name: BOOTSTRAP_REFRESH_JOB_NAME
+    value: ""
   - name: GENIE_SPACE_ID
-    value: "269057874681965"
+    value: ""
