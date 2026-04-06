@@ -636,11 +636,13 @@ If `SQL_WAREHOUSE_ID` is blank in Track B, the most common cause is that you dep
 From the app:
 
 1. click `Setup Control Plane`
-2. continue to `Discover`
-3. enter the source table
-4. optionally enter the labels table and MLflow metadata
-5. confirm the inferred draft
-6. click `Save Monitor And Trigger Refresh`
+2. click `Validate Workspace Wiring`
+3. confirm `Workspace Readiness` shows either `fully_ready` or `scheduler_only`
+4. continue to `Discover`
+5. enter the source table
+6. optionally enter the labels table and MLflow metadata
+7. confirm the inferred draft
+8. click `Save Monitor And Trigger Refresh`
 
 Expected result:
 
@@ -648,6 +650,7 @@ Expected result:
 - the monitor is marked `pending bootstrap` in the control plane
 - if the app has `CAN MANAGE RUN`, it reports that the shared refresh job was triggered
 - if it does not, the shared hourly job still remains the default pickup path only if that workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`
+- if the workflow wiring is missing, ambiguous, paused, or unscheduled, setup now keeps onboarding blocked instead of allowing a dead-end monitor save
 - if the monitor stays `pending bootstrap`, the `Reference` page exposes `Run Initial Refresh Now` so the operator can retry the selected monitor after fixing workflow wiring or permissions
 - the cadence chosen during activation is stored with the monitor and can be edited later from the `Reference` page
 - the Overview page shows the monitor after the workflow finishes

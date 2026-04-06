@@ -83,7 +83,26 @@ def _workspace_step(form_style: dict) -> dbc.Row:
                                 ],
                                 className="mb-3",
                             ),
-                            dbc.Button("Setup Control Plane", id="setup-control-plane-btn", color="primary", className="mt-2"),
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        dbc.Button("Setup Control Plane", id="setup-control-plane-btn", color="primary", className="mt-2"),
+                                        width="auto",
+                                    ),
+                                    dbc.Col(
+                                        dbc.Button(
+                                            "Validate Workspace Wiring",
+                                            id="validate-workspace-wiring-btn",
+                                            color="secondary",
+                                            outline=True,
+                                            className="mt-2",
+                                        ),
+                                        width="auto",
+                                    ),
+                                ],
+                                className="g-2",
+                            ),
+                            html.Div(id="workspace-readiness-status", className="mt-3"),
                             dbc.Accordion(
                                 [
                                     dbc.AccordionItem(
@@ -521,6 +540,7 @@ def layout():
             dcc.Store(id="scan-data"),
             dcc.Store(id="onboarding-current-step", data=1),
             dcc.Store(id="control-plane-ready-store", data={}),
+            dcc.Store(id="workspace-readiness-store", data={}),
             html.H4("Add Monitor", className="text-light mb-1"),
             html.P(
                 "Set up the workspace once, discover a monitor draft, confirm it, and activate monitoring.",

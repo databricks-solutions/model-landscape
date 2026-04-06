@@ -193,6 +193,17 @@ In the app `Setup` step, click `Setup Control Plane`.
 
 The wizard should keep `Continue to Discover` disabled until setup succeeds for the current control-plane namespace. If setup fails, fix the underlying issue and click `Setup Control Plane` again to retry.
 
+Then click `Validate Workspace Wiring`.
+
+Expected readiness modes:
+
+- `fully_ready`: the app can trigger bootstrap immediately
+- `scheduler_only`: the app can onboard monitors and rely on the scheduled shared workflow
+
+Expected blocked state:
+
+- `not_ready`: the card should show the exact missing workflow, warehouse, or permission-adjacent wiring issue and `Continue to Discover` should stay disabled
+
 Recommended:
 
 - pre-create the target namespace outside the app
@@ -204,6 +215,8 @@ Expected result:
 
 - success banner
 - control-plane tables are created under your chosen `<control-plane-catalog>.<control-plane-schema>`
+- `Workspace Readiness` resolves to either `fully_ready` or `scheduler_only`
+- if you intentionally test a missing or wrong workflow config, the readiness card should stay `not ready` and block onboarding
 
 Verify in SQL:
 

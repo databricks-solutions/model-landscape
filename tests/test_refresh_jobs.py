@@ -349,3 +349,170 @@ def test_resolve_refresh_job_id_reports_missing_shared_job_clearly(monkeypatch) 
         assert "redeploy the app" in message
     else:
         raise AssertionError("Expected missing refresh job lookup to raise")
+
+
+def test_validate_workspace_readiness_reports_missing_workflow_configuration(monkeypatch) -> None:
+    monkeypatch.setattr(
+        refresh_jobs,
+        "settings",
+        SimpleNamespace(
+            sql_warehouse_id="wh-123",
+            refresh_job_id="",
+            refresh_job_name="",
+            lakebase_instance_name="",
+            lakebase_database_name="",
+            lakebase_host="",
+            lakebase_port=5432,
+            lakebase_pguser="",
+            lakebase_sslmode="require",
+            lakebase_schema="model_lens_ui",
+        ),
+    )
+
+    readiness = refresh_jobs.validate_workspace_readiness(control_plane_ready=True, workspace_client=SimpleNamespace())
+
+    assert readiness.overall_mode == "not_ready"
+    assert readiness.refresh_workflow_configured is False
+    assert any("REFRESH_JOB_ID" in issue for issue in readiness.blocking_issues)
+
+
+def test_validate_workspace_readiness_reports_scheduler_only_when_run_now_is_unconfirmed(monkeypatch) -> None:
+    monkeypatch.setattr(
+        refresh_jobs,
+        "settings",
+        SimpleNamespace(
+            sql_warehouse_id="wh-123",
+            refresh_job_id="321",
+            refresh_job_name="model-lens-refresh",
+            lakebase_instance_name="",
+            lakebase_database_name="",
+            lakebase_host="",
+            lakebase_port=5432,
+            lakebase_pguser="",
+            lakebase_sslmode="require",
+            lakebase_schema="model_lens_ui",
+        ),
+    )
+
+    fake_job = SimpleNamespace(
+        job_id=321,
+        settings=SimpleNamespace(
+            name="model-lens-refresh",
+            schedule=SimpleNamespace(pause_status="UNPAUSED"),
+            trigger=None,
+            continuous=None,
+            queue=SimpleNamespace(enabled=True),
+            max_concurrent_runs=1,
+        ),
+    )
+    fake_workspace = SimpleNamespace(
+        jobs=SimpleNamespace(
+            get=lambda **_: fake_job,
+            get_permissions=lambda *_: (_ for _ in ()).throw(RuntimeError("permission read denied")),
+        ),
+        current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name="svc@app", display_name="svc@app")),
+    )
+
+    readiness = refresh_jobs.validate_workspace_readiness(control_plane_ready=True, workspace_client=fake_workspace)
+
+    assert readiness.overall_mode == "scheduler_only"
+    assert readiness.refresh_workflow_resolved is True
+    assert readiness.scheduler_path_available is True
+    assert readiness.run_now_available is None
+    assert any("scheduler-only mode assumed" in warning for warning in readiness.warnings)
+
+
+def test_validate_workspace_readiness_reports_fully_ready_with_direct_manage_run_access(monkeypatch) -> None:
+    monkeypatch.setattr(
+        refresh_jobs,
+        "settings",
+        SimpleNamespace(
+            sql_warehouse_id="wh-123",
+            refresh_job_id="321",
+            refresh_job_name="model-lens-refresh",
+            lakebase_instance_name="",
+            lakebase_database_name="",
+            lakebase_host="",
+            lakebase_port=5432,
+            lakebase_pguser="",
+            lakebase_sslmode="require",
+            lakebase_schema="model_lens_ui",
+        ),
+    )
+
+    fake_job = SimpleNamespace(
+        job_id=321,
+        settings=SimpleNamespace(
+            name="model-lens-refresh",
+            schedule=SimpleNamespace(pause_status="UNPAUSED"),
+            trigger=None,
+            continuous=None,
+            queue=SimpleNamespace(enabled=True),
+            max_concurrent_runs=1,
+        ),
+    )
+    fake_workspace = SimpleNamespace(
+        jobs=SimpleNamespace(
+            get=lambda **_: fake_job,
+            get_permissions=lambda *_: SimpleNamespace(
+                access_control_list=[
+                    SimpleNamespace(
+                        user_name="svc@app",
+                        service_principal_name=None,
+                        display_name="svc@app",
+                        all_permissions=[SimpleNamespace(permission_level="CAN_MANAGE_RUN")],
+                    )
+                ]
+            ),
+        ),
+        current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name="svc@app", display_name="svc@app")),
+    )
+
+    readiness = refresh_jobs.validate_workspace_readiness(control_plane_ready=True, workspace_client=fake_workspace)
+
+    assert readiness.overall_mode == "fully_ready"
+    assert readiness.run_now_available is True
+
+
+def test_validate_workspace_readiness_blocks_paused_shared_schedule(monkeypatch) -> None:
+    monkeypatch.setattr(
+        refresh_jobs,
+        "settings",
+        SimpleNamespace(
+            sql_warehouse_id="wh-123",
+            refresh_job_id="321",
+            refresh_job_name="model-lens-refresh",
+            lakebase_instance_name="",
+            lakebase_database_name="",
+            lakebase_host="",
+            lakebase_port=5432,
+            lakebase_pguser="",
+            lakebase_sslmode="require",
+            lakebase_schema="model_lens_ui",
+        ),
+    )
+
+    fake_job = SimpleNamespace(
+        job_id=321,
+        settings=SimpleNamespace(
+            name="model-lens-refresh",
+            schedule=SimpleNamespace(pause_status="PAUSED"),
+            trigger=None,
+            continuous=None,
+            queue=SimpleNamespace(enabled=True),
+            max_concurrent_runs=1,
+        ),
+    )
+    fake_workspace = SimpleNamespace(
+        jobs=SimpleNamespace(
+            get=lambda **_: fake_job,
+            get_permissions=lambda *_: SimpleNamespace(access_control_list=[]),
+        ),
+        current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name="svc@app", display_name="svc@app")),
+    )
+
+    readiness = refresh_jobs.validate_workspace_readiness(control_plane_ready=True, workspace_client=fake_workspace)
+
+    assert readiness.overall_mode == "not_ready"
+    assert readiness.scheduler_path_available is False
+    assert any("paused" in issue.lower() for issue in readiness.blocking_issues)

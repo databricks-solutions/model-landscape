@@ -103,6 +103,9 @@ def test_app_layout_exposes_slimmed_onboarding_flow() -> None:
         "lakebase-schema-input",
         "onboarding-current-step",
         "control-plane-ready-store",
+        "workspace-readiness-store",
+        "workspace-readiness-status",
+        "validate-workspace-wiring-btn",
         "wizard-back-btn",
         "wizard-next-btn",
         "wizard-step-guidance",
@@ -138,6 +141,7 @@ def test_app_layout_exposes_slimmed_onboarding_flow() -> None:
     assert "Permission checklist" in layout_text
     assert "CAN_USE on the SQL warehouse" in layout_text
     assert "CAN MANAGE RUN on the refresh workflow" in layout_text
+    assert "Validate Workspace Wiring" in layout_text
     assert "Save Monitor And Trigger Refresh" in layout_text
 
 
@@ -265,6 +269,11 @@ def test_save_monitor_allows_table_scoped_monitor_without_model_id_column(monkey
             "control_plane_catalog": "model_observability",
             "control_plane_schema": "control_plane",
         },
+        {
+            "overall_mode": "scheduler_only",
+            "blocking_issues": [],
+            "warnings": [],
+        },
     )
 
     assert saved["validated"] is not None
@@ -277,6 +286,91 @@ def test_save_monitor_allows_table_scoped_monitor_without_model_id_column(monkey
     assert "Initial refresh is pending on the shared refresh job" in str(result[0])
     assert "The shared workflow can still pick it up on its next hourly run" in str(result[0])
     assert result[1]
+
+
+def test_save_monitor_blocks_when_workspace_wiring_is_not_ready(monkeypatch) -> None:
+    saved = {"validated": None}
+
+    class _Repository:
+        def validate_monitor_source(self, config):
+            saved["validated"] = config
+
+        def upsert_monitor_config(self, config):
+            raise AssertionError("should not save when workspace readiness is blocked")
+
+        def mark_monitor_bootstrap_pending(self, config):
+            raise AssertionError("should not mark bootstrap pending when workspace readiness is blocked")
+
+    class _FakeBackend:
+        def __init__(self):
+            self.repository = _Repository()
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_input_and_output(app, "save-monitor-btn", "action-status")
+
+    scan_data = {
+        "table_name": "main.demo.inference",
+        "columns": ["event_ts", "prediction", "label", "amount"],
+        "schema": [
+            {"col_name": "event_ts", "data_type": "timestamp"},
+            {"col_name": "prediction", "data_type": "double"},
+            {"col_name": "label", "data_type": "int"},
+            {"col_name": "amount", "data_type": "double"},
+        ],
+        "discovery": {},
+    }
+
+    result = fn(
+        1,
+        scan_data,
+        "Fraud Model Demo",
+        "fraud_model_demo",
+        "event_ts",
+        None,
+        "prediction",
+        "",
+        "",
+        None,
+        None,
+        None,
+        "label",
+        "",
+        "",
+        "",
+        "",
+        ["amount"],
+        [],
+        [],
+        "classification",
+        "rolling",
+        7,
+        None,
+        None,
+        "6h",
+        "daily_7d_repair",
+        ["enabled"],
+        ["f1", "precision", "recall"],
+        "f1",
+        "model_observability",
+        "control_plane",
+        "",
+        "",
+        "",
+        {
+            "control_plane_catalog": "model_observability",
+            "control_plane_schema": "control_plane",
+        },
+        {
+            "overall_mode": "not_ready",
+            "blocking_issues": ["Shared refresh workflow is missing."],
+            "warnings": [],
+        },
+    )
+
+    assert saved["validated"] is None
+    assert "Validate Workspace Wiring successfully before saving a monitor." in str(result[0])
+    assert "Shared refresh workflow is missing." in str(result[0])
 
 
 def test_workspace_lakebase_probe_is_skipped_outside_databricks_app(monkeypatch) -> None:
@@ -401,49 +495,91 @@ def test_render_onboarding_wizard_callback_executes_for_step_two() -> None:
     callback = app.callback_map[RENDER_WIZARD_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn(
-        2,
-        {"control_plane_catalog": "model_observability", "control_plane_schema": "control_plane"},
-        "model_observability",
-        "control_plane",
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        "entity_id",
-        "label",
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        "rolling",
-        7,
-        None,
-        None,
-        "6h",
-        "disabled",
-        ["enabled"],
-        ["f1", "precision", "recall"],
-        "f1",
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-    )
+    args = [None] * 38
+    args[0] = 2
+    args[1] = {"control_plane_catalog": "model_observability", "control_plane_schema": "control_plane"}
+    args[2] = {"overall_mode": "scheduler_only", "blocking_issues": [], "warnings": []}
+    args[3] = "model_observability"
+    args[4] = "control_plane"
+    args[15] = "entity_id"
+    args[16] = "label"
+    args[24] = "rolling"
+    args[25] = 7
+    args[28] = "6h"
+    args[29] = "disabled"
+    args[30] = ["enabled"]
+    args[31] = ["f1", "precision", "recall"]
+    args[32] = "f1"
+
+    result = fn(*args)
 
     assert len(result) == 12
     assert result[3] == {}
     assert result[2] == {"display": "none"}
+
+
+def test_render_onboarding_wizard_blocks_when_workspace_wiring_is_not_ready() -> None:
+    app = create_app()
+    callback = app.callback_map[RENDER_WIZARD_CALLBACK]["callback"]
+    fn = getattr(callback, "__wrapped__", callback)
+
+    args = [None] * 38
+    args[0] = 1
+    args[1] = {"control_plane_catalog": "model_observability", "control_plane_schema": "control_plane"}
+    args[2] = {"overall_mode": "not_ready", "blocking_issues": ["Shared refresh workflow is missing."], "warnings": []}
+    args[3] = "model_observability"
+    args[4] = "control_plane"
+    args[24] = "rolling"
+    args[25] = 7
+    args[28] = "6h"
+    args[29] = "disabled"
+    args[30] = ["enabled"]
+    args[31] = ["f1", "precision", "recall"]
+    args[32] = "f1"
+
+    result = fn(*args)
+
+    assert result[8] is True
+    assert "Shared refresh workflow is missing." in str(result[1])
+
+
+def test_validate_workspace_wiring_callback_renders_readiness_card(monkeypatch) -> None:
+    monkeypatch.setattr(
+        callbacks_module,
+        "_workspace_readiness_for_session",
+        lambda ready_state, session: {
+            "overall_mode": "scheduler_only",
+            "control_plane_ready": True,
+            "warehouse_ready": True,
+            "refresh_workflow_resolved": True,
+            "refresh_workflow_configured_via": "id",
+            "refresh_workflow_configured_value": "123",
+            "refresh_workflow_name": "model-lens-refresh",
+            "refresh_workflow_id": 123,
+            "scheduler_path_available": True,
+            "scheduler_mode": "schedule",
+            "run_now_available": None,
+            "lakebase_ready": True,
+            "blocking_issues": [],
+            "warnings": ["Could not confirm immediate Run now permission; scheduler-only mode assumed."],
+        },
+    )
+    app = create_app()
+    fn = _find_callback_by_input_and_output(app, "validate-workspace-wiring-btn", "workspace-readiness-status")
+
+    result = fn(
+        1,
+        "model_observability",
+        "control_plane",
+        "",
+        "",
+        "",
+        {"control_plane_catalog": "model_observability", "control_plane_schema": "control_plane"},
+    )
+
+    assert "Workspace Readiness" in str(result[0])
+    assert "scheduler-only mode" in str(result[0]).lower()
+    assert result[1]["overall_mode"] == "scheduler_only"
 
 
 def test_performance_metric_selector_uses_monitor_configured_metrics(monkeypatch) -> None:

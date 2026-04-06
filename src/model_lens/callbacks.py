@@ -28,7 +28,12 @@ from model_lens.domain.performance_metrics import (
 from model_lens.pages import onboarding
 from model_lens.services.inference_contracts import build_inference_contract
 from model_lens.services.onboarding import baseline_label, build_default_baseline, build_fixed_baseline
-from model_lens.services.refresh_jobs import is_refresh_job_configuration_error, trigger_refresh_job
+from model_lens.services.refresh_jobs import (
+    is_refresh_job_configuration_error,
+    trigger_refresh_job,
+    validate_workspace_readiness,
+    workspace_readiness_payload,
+)
 from model_lens.ui import charts
 from model_lens.ui.components import (
     get_thresholds,
@@ -317,6 +322,125 @@ def _control_plane_ready(
     recorded_catalog = str(ready_state.get("control_plane_catalog") or "").strip()
     recorded_schema = str(ready_state.get("control_plane_schema") or "").strip()
     return bool(recorded_catalog and recorded_schema)
+
+
+def _workspace_readiness_mode(readiness_state: dict | None) -> str:
+    return str((readiness_state or {}).get("overall_mode") or "not_ready").strip().lower() or "not_ready"
+
+
+def _workspace_ready_for_onboarding(
+    ready_state: dict | None,
+    readiness_state: dict | None,
+    session_data: dict | None,
+) -> bool:
+    return _ready_for_session(ready_state, session_data) and _workspace_readiness_mode(readiness_state) in {
+        "scheduler_only",
+        "fully_ready",
+    }
+
+
+def _workspace_readiness_for_session(ready_state: dict | None, session_data: dict | None) -> dict[str, object]:
+    session = _session_config(session_data)
+    readiness = validate_workspace_readiness(
+        control_plane_ready=_ready_for_session(ready_state, session),
+        lakebase_requested=bool(session["lakebase_instance_name"] or session["lakebase_database_name"]),
+    )
+    return workspace_readiness_payload(readiness)
+
+
+def _render_workspace_readiness(readiness_state: dict | None) -> html.Div:
+    readiness = readiness_state or {}
+    mode = _workspace_readiness_mode(readiness)
+    mode_message = {
+        "fully_ready": "Workspace readiness is green. The app can save a monitor and trigger bootstrap immediately.",
+        "scheduler_only": "Workspace readiness is good enough for onboarding. The app will save monitors and the scheduled shared workflow will pick them up.",
+        "not_ready": "Workspace readiness is blocked. Fix the missing wiring below before onboarding a monitor.",
+    }.get(mode, "Workspace readiness is blocked. Fix the missing wiring below before onboarding a monitor.")
+    mode_color = {
+        "fully_ready": "success",
+        "scheduler_only": "secondary",
+        "not_ready": "danger",
+    }.get(mode, "danger")
+
+    configured_via = str(readiness.get("refresh_workflow_configured_via") or "none").strip() or "none"
+    configured_value = str(readiness.get("refresh_workflow_configured_value") or "").strip()
+    if configured_via == "id":
+        wiring_text = f"REFRESH_JOB_ID={configured_value or '(unset)'}"
+    elif configured_via == "name":
+        wiring_text = f"REFRESH_JOB_NAME={configured_value or '(unset)'}"
+    else:
+        wiring_text = "(not configured)"
+
+    resolved_name = str(readiness.get("refresh_workflow_name") or "").strip()
+    resolved_id = readiness.get("refresh_workflow_id")
+    resolved_text = (
+        f"{resolved_name or '(unnamed workflow)'} (job_id={resolved_id})"
+        if resolved_id is not None
+        else "Not resolved"
+    )
+
+    scheduled_text = "Available"
+    if not readiness.get("scheduler_path_available"):
+        scheduled_text = "Unavailable"
+    elif str(readiness.get("scheduler_mode") or "").strip():
+        scheduled_text = f"Available ({str(readiness.get('scheduler_mode')).strip()})"
+
+    run_now_available = readiness.get("run_now_available")
+    if run_now_available is True:
+        immediate_text = "Available"
+    elif readiness.get("scheduler_path_available"):
+        immediate_text = "Scheduler only"
+    else:
+        immediate_text = "Unavailable"
+
+    lakebase_text = "Warehouse-only"
+    if readiness.get("lakebase_ready") is False:
+        lakebase_text = "Incomplete optional config"
+    elif settings.use_lakebase_read_model:
+        lakebase_text = "Configured"
+
+    checks = pd.DataFrame(
+        [
+            {"check": "Control Plane", "status": "Ready" if readiness.get("control_plane_ready") else "Blocked"},
+            {"check": "SQL Warehouse", "status": "Ready" if readiness.get("warehouse_ready") else "Missing"},
+            {
+                "check": "Shared Refresh Workflow",
+                "status": "Ready" if readiness.get("refresh_workflow_resolved") else "Missing",
+            },
+            {"check": "App Workflow Wiring", "status": wiring_text},
+            {"check": "Resolved Workflow", "status": resolved_text},
+            {"check": "Scheduled Bootstrap", "status": scheduled_text},
+            {"check": "Immediate Bootstrap", "status": immediate_text},
+            {"check": "Optional Lakebase", "status": lakebase_text},
+        ]
+    )
+
+    blocking_issues = [str(item) for item in readiness.get("blocking_issues", []) if str(item).strip()]
+    warnings = [str(item) for item in readiness.get("warnings", []) if str(item).strip()]
+    issue_block = html.Div(
+        [
+            *[
+                dbc.Alert(message, color="danger", className="py-2 mb-2")
+                for message in blocking_issues
+            ],
+            *[
+                dbc.Alert(message, color="warning", className="py-2 mb-2")
+                for message in warnings
+            ],
+        ]
+    )
+
+    return dbc.Card(
+        dbc.CardBody(
+            [
+                html.H6("Workspace Readiness", className="mb-3"),
+                dbc.Alert(mode_message, color=mode_color, className="py-2 mb-3"),
+                _render_frame(checks, "No readiness checks available.", max_rows=12),
+                html.Div(issue_block, className="mt-3"),
+            ]
+        ),
+        className="border-secondary",
+    )
 
 
 def _selected_model_from_search(search: str | None) -> str | None:
@@ -672,6 +796,7 @@ def register_callbacks(app) -> None:
         Output("onboarding-review-summary", "children"),
         Input("onboarding-current-step", "data"),
         Input("control-plane-ready-store", "data"),
+        Input("workspace-readiness-store", "data"),
         Input("control-plane-catalog-input", "value"),
         Input("control-plane-schema-input", "value"),
         Input("source-table-input", "value"),
@@ -711,6 +836,7 @@ def register_callbacks(app) -> None:
     def render_onboarding_wizard(
         current_step,
         control_plane_ready_state,
+        workspace_readiness_state,
         control_plane_catalog,
         control_plane_schema,
         source_table,
@@ -748,7 +874,7 @@ def register_callbacks(app) -> None:
         lakebase_schema,
     ):
         step = max(1, min(int(current_step or 1), len(onboarding.STEP_LABELS)))
-        workspace_ready = _control_plane_ready(
+        control_plane_ready = _control_plane_ready(
             control_plane_ready_state,
             control_plane_catalog=control_plane_catalog,
             control_plane_schema=control_plane_schema,
@@ -756,6 +882,8 @@ def register_callbacks(app) -> None:
             lakebase_database_name=lakebase_database_name,
             lakebase_schema=lakebase_schema,
         )
+        readiness_mode = _workspace_readiness_mode(workspace_readiness_state)
+        workspace_ready = control_plane_ready and readiness_mode in {"scheduler_only", "fully_ready"}
         source_ready = bool(scan_data and scan_data.get("columns"))
         contract_ready = _monitor_contract_ready(
             scan_data=scan_data,
@@ -784,10 +912,23 @@ def register_callbacks(app) -> None:
             3: not contract_ready,
             4: True,
         }.get(step, False)
+        readiness_issues = [str(item) for item in (workspace_readiness_state or {}).get("blocking_issues", []) if str(item).strip()]
+        primary_readiness_issue = readiness_issues[0] if readiness_issues else ""
         guidance = {
             1: (
-                "Confirm the control-plane namespace, verify the warehouse, job-run, and Unity Catalog grants in the setup checklist, and run setup. If setup fails, fix the issue and click Setup Control Plane again to retry. If you change the catalog or schema later, run setup again before saving the monitor.",
-                "info" if workspace_ready else "secondary",
+                (
+                    "Workspace setup is fully ready. The app can save a monitor and trigger bootstrap immediately."
+                    if readiness_mode == "fully_ready"
+                    else (
+                        "Workspace setup is ready in scheduler-only mode. The app can save monitors, and the scheduled shared refresh workflow will pick them up."
+                        if readiness_mode == "scheduler_only"
+                        else (
+                            primary_readiness_issue
+                            or "Confirm the control-plane namespace, verify the warehouse and shared refresh workflow, and use Validate Workspace Wiring before onboarding a monitor."
+                        )
+                    )
+                ),
+                "success" if readiness_mode == "fully_ready" else ("info" if readiness_mode == "scheduler_only" else "secondary"),
             ),
             2: (
                 "Enter the inference table and click Discover. Optional labels and MLflow inputs help Model Lens infer a better draft.",
@@ -798,8 +939,16 @@ def register_callbacks(app) -> None:
                 "success" if contract_ready else "secondary",
             ),
             4: (
-                "Activate the monitor. Model Lens saves the config, marks bootstrap pending, and asks the shared refresh workflow to pick it up.",
-                "primary",
+                (
+                    "Activate the monitor. Model Lens saves the config and triggers bootstrap immediately through the shared refresh workflow."
+                    if readiness_mode == "fully_ready"
+                    else (
+                        "Activate the monitor. Model Lens saves the config, marks bootstrap pending, and the scheduled shared refresh workflow picks it up."
+                        if readiness_mode == "scheduler_only"
+                        else "Activation is blocked until the workspace readiness checks pass."
+                    )
+                ),
+                "primary" if readiness_mode == "fully_ready" else ("secondary" if readiness_mode == "scheduler_only" else "warning"),
             ),
         }
         next_labels = {
@@ -1350,6 +1499,8 @@ def register_callbacks(app) -> None:
         Output("reload-token", "data", allow_duplicate=True),
         Output("session-config-store", "data", allow_duplicate=True),
         Output("control-plane-ready-store", "data", allow_duplicate=True),
+        Output("workspace-readiness-status", "children", allow_duplicate=True),
+        Output("workspace-readiness-store", "data", allow_duplicate=True),
         Input("setup-control-plane-btn", "n_clicks"),
         State("control-plane-catalog-input", "value"),
         State("control-plane-schema-input", "value"),
@@ -1379,7 +1530,8 @@ def register_callbacks(app) -> None:
         try:
             backend.repository.ensure_control_plane(create_catalog="create_catalog" in (create_catalog_value or []))
         except Exception as error:
-            return _status_alert(_setup_retry_message(error), "danger"), no_update, no_update, no_update
+            return _status_alert(_setup_retry_message(error), "danger"), no_update, no_update, no_update, no_update, no_update
+        readiness_state = _workspace_readiness_for_session(session, session)
         return (
             _status_alert(
                 f"Control plane ready at {backend.repository.table_names.catalog}.{backend.repository.table_names.schema}.",
@@ -1388,7 +1540,40 @@ def register_callbacks(app) -> None:
             datetime.now(timezone.utc).isoformat(timespec="seconds"),
             session,
             session,
+            _render_workspace_readiness(readiness_state),
+            readiness_state,
         )
+
+    @app.callback(
+        Output("workspace-readiness-status", "children", allow_duplicate=True),
+        Output("workspace-readiness-store", "data", allow_duplicate=True),
+        Input("validate-workspace-wiring-btn", "n_clicks"),
+        State("control-plane-catalog-input", "value"),
+        State("control-plane-schema-input", "value"),
+        State("lakebase-instance-input", "value"),
+        State("lakebase-database-input", "value"),
+        State("lakebase-schema-input", "value"),
+        State("control-plane-ready-store", "data"),
+        prevent_initial_call=True,
+    )
+    def validate_workspace_wiring(
+        _,
+        control_plane_catalog,
+        control_plane_schema,
+        lakebase_instance_name,
+        lakebase_database_name,
+        lakebase_schema,
+        ready_state,
+    ):
+        session = {
+            "control_plane_catalog": (control_plane_catalog or "").strip(),
+            "control_plane_schema": (control_plane_schema or "").strip(),
+            "lakebase_instance_name": (lakebase_instance_name or "").strip(),
+            "lakebase_database_name": (lakebase_database_name or "").strip(),
+            "lakebase_schema": (lakebase_schema or "").strip(),
+        }
+        readiness_state = _workspace_readiness_for_session(ready_state, session)
+        return _render_workspace_readiness(readiness_state), readiness_state
 
     @app.callback(
         Output("action-status", "children", allow_duplicate=True),
@@ -1430,6 +1615,7 @@ def register_callbacks(app) -> None:
         State("lakebase-database-input", "value"),
         State("lakebase-schema-input", "value"),
         State("control-plane-ready-store", "data"),
+        State("workspace-readiness-store", "data"),
         prevent_initial_call=True,
     )
     def save_monitor(
@@ -1469,6 +1655,7 @@ def register_callbacks(app) -> None:
         lakebase_database_name,
         lakebase_schema,
         ready_state,
+        workspace_readiness_state,
     ):
         if not scan_data:
             return _status_alert("Scan a source table before saving a monitor.", "warning"), no_update, no_update
@@ -1490,6 +1677,14 @@ def register_callbacks(app) -> None:
         }
         if not _ready_for_session(ready_state, session):
             return _status_alert("Run Setup Control Plane successfully before saving a monitor.", "warning"), no_update, no_update
+        if _workspace_readiness_mode(workspace_readiness_state) not in {"scheduler_only", "fully_ready"}:
+            issues = [str(item) for item in (workspace_readiness_state or {}).get("blocking_issues", []) if str(item).strip()]
+            detail = f" {issues[0]}" if issues else ""
+            return _status_alert(
+                "Validate Workspace Wiring successfully before saving a monitor."
+                f"{detail}",
+                "warning",
+            ), no_update, no_update
         label_col = external_label_col or source_label_col or None
         source_join_col = _source_labels_join_col(scan_data, entity_id_col, labels_join_col)
         if labels_table and (not source_join_col or not labels_join_col or not label_col):

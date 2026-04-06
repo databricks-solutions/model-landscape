@@ -282,12 +282,22 @@ In the app `Setup` step, click `Setup Control Plane`.
 
 The wizard does not unlock the `Discover` step until setup succeeds for the current control-plane namespace. If setup fails, fix the underlying issue and click `Setup Control Plane` again to retry.
 
+Then click `Validate Workspace Wiring`.
+
+Expected readiness modes:
+
+- `fully_ready`: the app can save monitors and trigger bootstrap immediately
+- `scheduler_only`: the app can save monitors and rely on the scheduled shared workflow pickup path
+
+If the readiness card stays `not ready`, onboarding is intentionally blocked until the shared workflow wiring is fixed.
+
 Recommended:
 
 - point the app at a pre-created namespace
 - leave `Create catalog if missing` off unless you are using an admin identity and intentionally want Model Lens to create the catalog
 - keep the app namespace fields aligned with the bundle `control_plane_catalog` / `control_plane_schema` vars so the workflow and the app write to the same place
 - if you want app-side Lakebase reads immediately, fill in `Lakebase Instance Name` and `Lakebase Database Name` first
+- prefer `REFRESH_JOB_ID` over `REFRESH_JOB_NAME`; name lookup is still supported but treated as a fallback
 
 Expected result:
 

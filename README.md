@@ -367,15 +367,19 @@ After deploy:
 3. In the `Setup` step, confirm the `Control Plane Catalog` and `Control Plane Schema` fields match your deployment target.
 4. Open `Advanced workspace options` only if you want Lakebase-backed reads or need catalog creation during setup.
 5. Click `Setup Control Plane`. The `Setup` step only unlocks after setup succeeds for the current namespace values. If setup fails, fix the issue and click `Setup Control Plane` again to retry.
-6. Continue to `Discover`.
-7. In the `Discover` step, enter the inference table. Optionally add a labels table and MLflow experiment or registered model, then click `Discover`.
-8. In the `Confirm` step, review the inferred display name, model key, problem type, and feature set. Use `Advanced` only if the draft needs overrides.
-9. If the table contains more than one `model_id`, confirm or fill in `Monitored Model ID Value`.
-10. If external labels are not unique on the join key, confirm or fill in `External Labels Order Column`.
-11. Continue to `Activate`, then save the monitor.
-12. Confirm the app acknowledges that the monitor was saved. If `CAN MANAGE RUN` is configured, it should also say the shared refresh job was triggered for bootstrap; otherwise the shared hourly job can pick it up on its next run only if that workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`.
-13. If the monitor is still `pending bootstrap`, open `Reference` and use `Run Initial Refresh Now` after fixing job wiring or permissions. That retry path triggers the shared workflow again for the selected monitor only, using bootstrap scope.
-14. Open the overview and analysis pages after the workflow finishes to confirm the new monitor appears and the initial refresh populated historical readback immediately.
+6. Click `Validate Workspace Wiring`.
+7. Confirm the `Workspace Readiness` card shows one of these supported modes:
+   - `Fully ready`: the shared workflow resolves and the app can trigger bootstrap immediately
+   - `Scheduler only`: the shared workflow resolves and is scheduled, but immediate `Run now` could not be confirmed
+8. Continue to `Discover`. If the readiness card stays `not ready`, onboarding remains blocked until you fix the workflow wiring.
+9. In the `Discover` step, enter the inference table. Optionally add a labels table and MLflow experiment or registered model, then click `Discover`.
+10. In the `Confirm` step, review the inferred display name, model key, problem type, and feature set. Use `Advanced` only if the draft needs overrides.
+11. If the table contains more than one `model_id`, confirm or fill in `Monitored Model ID Value`.
+12. If external labels are not unique on the join key, confirm or fill in `External Labels Order Column`.
+13. Continue to `Activate`, then save the monitor.
+14. Confirm the app acknowledges that the monitor was saved. If `CAN MANAGE RUN` is configured, it should also say the shared refresh job was triggered for bootstrap; otherwise the shared hourly job can pick it up on its next run only if that workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`.
+15. If the monitor is still `pending bootstrap`, open `Reference` and use `Run Initial Refresh Now` after fixing job wiring or permissions. That retry path triggers the shared workflow again for the selected monitor only, using bootstrap scope.
+16. Open the overview and analysis pages after the workflow finishes to confirm the new monitor appears and the initial refresh populated historical readback immediately.
 
 ## Full Docs
 

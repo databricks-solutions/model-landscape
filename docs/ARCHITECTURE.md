@@ -135,6 +135,14 @@ Model Lens uses one shared refresh workflow by default. The bundle-managed workf
 
 The app does not run the heavy first refresh inline. During activation it saves the monitor config, resolves the workflow from `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`, and can trigger the job asynchronously so the UI stays responsive. Those are deploy-time app environment variables, not onboarding inputs. The shared wheel task is configured with `named_parameters`, and the app triggers it with `python_named_params`, so targeted overrides such as `catalog`, `schema`, `scope=bootstrap`, and `model_key` reach the workflow correctly. `CAN MANAGE RUN` on the refresh job is therefore optional acceleration for the app service principal, while the job's Run as identity still needs the source-data and control-plane privileges required for the actual computation.
 
+The `Setup` step now validates more than the control-plane namespace. `Validate Workspace Wiring` computes a workspace-readiness state with three modes:
+
+- `not_ready`: onboarding is blocked because the warehouse or shared workflow path is missing, ambiguous, paused, or unscheduled
+- `scheduler_only`: the shared workflow resolves and is scheduled, so onboarding can proceed even if immediate `Run now` could not be confirmed
+- `fully_ready`: the shared workflow resolves, is scheduled, and the app can confirm direct bootstrap triggering
+
+That readiness model is intentionally strict: a monitor cannot be onboarded into a workspace that has no viable refresh path.
+
 Responsibilities:
 
 - enumerate active monitors
