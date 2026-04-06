@@ -48,6 +48,8 @@ On Databricks CLI `v0.260.0`, the bundle can bind the SQL warehouse to the app b
 - the shared refresh job now uses job-level parameters that are pushed into the wheel task's named arguments, and the app triggers `jobs/run-now` with `job_parameters`, so `catalog`, `schema`, `scope`, and `model_key` overrides now reach the deployed workflow correctly. The workflow entrypoint also upgrades `scope=scheduler` plus a single `model_key` to `bootstrap` as a safety fallback
 - when `REFRESH_JOB_NAME` is used, the resolver now falls back to full-workspace exact, suffix, and substring matching, so Databricks Asset Bundles development job names such as `[dev user] model-lens-refresh` still resolve reliably
 - `REFRESH_JOB_ID` and `REFRESH_JOB_NAME` are deploy-time app environment variables in `app.yaml`; they are not values the operator edits during onboarding inside the app
+- one shared refresh job remains the default deployment shape; a second bootstrap/backfill job is an optional large-tenant extension only
+- if you explicitly set `BOOTSTRAP_REFRESH_JOB_ID` or `BOOTSTRAP_REFRESH_JOB_NAME`, direct bootstrap/backfill triggers use that optional second workflow, but readiness and scheduler-only fallback still depend on the main shared workflow
 
 The commands below assume the default bundle variable `app_name=model-lens`.
 If you override `app_name`, replace the app name in every `databricks apps ...` command and either:
@@ -265,6 +267,7 @@ Then grant the app identity all of the following:
 Treat the warehouse grant as a post-deploy check, not a one-time assumption. After every `databricks apps start model-lens` + `databricks apps deploy model-lens ...` cycle, verify the same app identity still has `CAN_USE` on the configured SQL warehouse and regrant it if the app shows warehouse-access errors.
 If you want the app to accelerate onboarding with `Run now`, also verify `CAN MANAGE RUN` on the refresh workflow. If that permission is unavailable, the shared hourly job still remains the default pickup path only if that workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`.
 If `REFRESH_JOB_ID` is set, use that exact job as the permission target and grant the app service principal `CAN_MANAGE_RUN` on job `<REFRESH_JOB_ID>`.
+If you configure `BOOTSTRAP_REFRESH_JOB_ID` for the optional second lane, grant the app service principal `CAN_MANAGE_RUN` on that second job too if you expect direct `Run First Refresh` acceleration through it. Without that grant, onboarding should still work in scheduler-only mode through the main shared workflow.
 
 For large-table customers, also verify that the deployed app and shared refresh workflow configuration include the intended readback/fallback settings:
 

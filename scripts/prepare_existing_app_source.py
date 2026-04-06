@@ -33,6 +33,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--refresh-job-id", default="")
     parser.add_argument("--refresh-job-name", default="")
+    parser.add_argument("--bootstrap-refresh-job-id", default="")
+    parser.add_argument("--bootstrap-refresh-job-name", default="")
     parser.add_argument("--workspace-source-path", default="")
     parser.add_argument("--lakebase-instance-name", default="")
     parser.add_argument("--lakebase-database-name", default="")
@@ -66,6 +68,8 @@ def _write_manual_app_yaml(output_dir: Path, args: argparse.Namespace) -> None:
         control_plane_schema=args.control_plane_schema,
         refresh_job_id=args.refresh_job_id,
         refresh_job_name=args.refresh_job_name,
+        bootstrap_refresh_job_id=args.bootstrap_refresh_job_id,
+        bootstrap_refresh_job_name=args.bootstrap_refresh_job_name,
         lakebase_instance_name=args.lakebase_instance_name,
         lakebase_database_name=args.lakebase_database_name,
         lakebase_schema=args.lakebase_schema,

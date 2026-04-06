@@ -19,6 +19,8 @@ class Settings:
     sql_warehouse_id: str = os.getenv("SQL_WAREHOUSE_ID", "")
     refresh_job_id: str = os.getenv("REFRESH_JOB_ID", "")
     refresh_job_name: str = os.getenv("REFRESH_JOB_NAME", "model-lens-refresh")
+    bootstrap_refresh_job_id: str = os.getenv("BOOTSTRAP_REFRESH_JOB_ID", "")
+    bootstrap_refresh_job_name: str = os.getenv("BOOTSTRAP_REFRESH_JOB_NAME", "")
     genie_space_id: str = os.getenv("GENIE_SPACE_ID", "")
     lakebase_instance_name: str = os.getenv("LAKEBASE_INSTANCE_NAME", "")
     lakebase_database_name: str = os.getenv("LAKEBASE_DATABASE_NAME", os.getenv("PGDATABASE", ""))

@@ -347,8 +347,18 @@ The app can accelerate the first refresh asynchronously during activation. It re
 - otherwise `REFRESH_JOB_NAME`, which defaults to `model-lens-refresh`
 
 Those values are deploy-time app environment variables. Change them in the deployed app source `app.yaml` or in the generated manual existing-app `app.yaml`, then redeploy the app. They are not onboarding inputs inside the UI.
+One shared refresh job remains the default deployment model.
+
+For very large tenants, you can optionally split direct bootstrap/backfill triggers onto a second workflow by setting:
+
+- `BOOTSTRAP_REFRESH_JOB_ID=<job-id>`, or
+- `BOOTSTRAP_REFRESH_JOB_NAME=<job-name>`
+
+That optional override only affects direct bootstrap/backfill triggers such as activation-time `Run First Refresh`. If it is not configured, bootstrap uses the shared refresh job by default. Scheduled pickup and readiness still depend on the main shared workflow.
+
 The shared wheel task now uses named parameters, and the app triggers it with named overrides for `catalog`, `schema`, `scope=bootstrap`, and `model_key`, so the first refresh no longer falls back silently to the job’s hardcoded scheduler defaults when `Run now` is available.
 When Setup or activation reports scheduler-only mode and `REFRESH_JOB_ID` is set, the operator fix should be explicit: grant the app service principal `CAN_MANAGE_RUN` on that job ID.
+If you configure `BOOTSTRAP_REFRESH_JOB_ID`, treat that as a second explicit grant target for direct bootstrap acceleration only. Missing `CAN MANAGE RUN` on the optional bootstrap job should not block onboarding; it only removes the fast path and leaves scheduled pickup on the shared job.
 
 The shared refresh job itself is also scheduled hourly by default in both the bundle-managed path and the generated manual existing-app path, so saved monitors are not blocked forever when `run_now` permissions are unavailable, as long as that shared workflow actually exists in the workspace.
 

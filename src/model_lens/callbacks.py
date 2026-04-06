@@ -72,8 +72,14 @@ def _status_alert(message: str, color: str = "info") -> dbc.Alert:
     return dbc.Alert(message, color=color, className="py-2 mb-3")
 
 
-def _configured_run_now_permission_hint() -> str:
-    configured_job_id = str(getattr(settings, "refresh_job_id", "") or "").strip()
+def _configured_run_now_permission_hint(*, workflow_kind: str = "shared") -> str:
+    configured_job_id = ""
+    if workflow_kind == "bootstrap":
+        configured_job_id = str(getattr(settings, "bootstrap_refresh_job_id", "") or "").strip()
+        if not configured_job_id:
+            configured_job_id = str(getattr(settings, "refresh_job_id", "") or "").strip()
+    else:
+        configured_job_id = str(getattr(settings, "refresh_job_id", "") or "").strip()
     if configured_job_id.isdigit():
         guidance = run_now_permission_guidance(int(configured_job_id))
         if guidance:
@@ -98,7 +104,7 @@ def _refresh_job_unavailable_message(model_key: str, error: Exception) -> str:
     return (
         f"Saved monitor {model_key}. Initial refresh is pending on the shared refresh job; automatic trigger was unavailable: {error}. "
         "The shared workflow can still pick it up on its next hourly run, or you can run it manually once job permissions are fixed."
-        f"{_configured_run_now_permission_hint()}"
+        f"{_configured_run_now_permission_hint(workflow_kind='bootstrap')}"
     )
 
 
@@ -115,7 +121,7 @@ def _manual_refresh_unavailable_message(model_key: str, error: Exception) -> str
     return (
         f"Could not trigger the initial refresh for {model_key}: {error}. "
         "The shared workflow can still pick it up on its next hourly run once job permissions are fixed."
-        f"{_configured_run_now_permission_hint()}"
+        f"{_configured_run_now_permission_hint(workflow_kind='bootstrap')}"
     )
 
 
@@ -391,6 +397,26 @@ def _render_workspace_readiness(readiness_state: dict | None) -> html.Div:
         else "Not resolved"
     )
 
+    bootstrap_mode = str(readiness.get("bootstrap_workflow_mode") or "shared_default").strip() or "shared_default"
+    bootstrap_resolved = bool(readiness.get("bootstrap_workflow_resolved"))
+    bootstrap_name = str(readiness.get("bootstrap_workflow_name") or "").strip()
+    bootstrap_id = readiness.get("bootstrap_workflow_id")
+    if bootstrap_mode == "shared_default":
+        bootstrap_text = "Uses shared refresh workflow (default)"
+    elif bootstrap_resolved and bootstrap_id is not None:
+        bootstrap_text = f"{bootstrap_name or '(unnamed workflow)'} (job_id={bootstrap_id})"
+    elif bootstrap_resolved:
+        bootstrap_text = bootstrap_name or "Ready"
+    else:
+        bootstrap_configured_via = str(readiness.get("bootstrap_workflow_configured_via") or "none").strip() or "none"
+        bootstrap_configured_value = str(readiness.get("bootstrap_workflow_configured_value") or "").strip()
+        if bootstrap_configured_via == "id":
+            bootstrap_text = f"Configured via BOOTSTRAP_REFRESH_JOB_ID={bootstrap_configured_value or '(unset)'} but not resolved"
+        elif bootstrap_configured_via == "name":
+            bootstrap_text = f"Configured via BOOTSTRAP_REFRESH_JOB_NAME={bootstrap_configured_value or '(unset)'} but not resolved"
+        else:
+            bootstrap_text = "Not configured"
+
     scheduled_text = "Available"
     if not readiness.get("scheduler_path_available"):
         scheduled_text = "Unavailable"
@@ -406,6 +432,16 @@ def _render_workspace_readiness(readiness_state: dict | None) -> html.Div:
         immediate_text = "Scheduler only"
     else:
         immediate_text = "Unavailable"
+
+    bootstrap_run_now_available = readiness.get("bootstrap_run_now_available")
+    if bootstrap_mode == "shared_default":
+        bootstrap_immediate_text = "Uses shared refresh workflow permissions"
+    elif bootstrap_run_now_available is True:
+        bootstrap_immediate_text = "Available"
+    elif bootstrap_id is not None:
+        bootstrap_immediate_text = f"Grant CAN_MANAGE_RUN on job {bootstrap_id}"
+    else:
+        bootstrap_immediate_text = "Unavailable"
 
     lakebase_text = "Warehouse-only"
     if readiness.get("lakebase_ready") is False:
@@ -423,8 +459,10 @@ def _render_workspace_readiness(readiness_state: dict | None) -> html.Div:
             },
             {"check": "App Workflow Wiring", "status": wiring_text},
             {"check": "Resolved Workflow", "status": resolved_text},
+            {"check": "Optional Bootstrap Lane", "status": bootstrap_text},
             {"check": "Scheduled Bootstrap", "status": scheduled_text},
             {"check": "Immediate Bootstrap", "status": immediate_text},
+            {"check": "Bootstrap Trigger", "status": bootstrap_immediate_text},
             {"check": "Optional Lakebase", "status": lakebase_text},
         ]
     )
@@ -449,7 +487,7 @@ def _render_workspace_readiness(readiness_state: dict | None) -> html.Div:
             [
                 html.H6("Workspace Readiness", className="mb-3"),
                 dbc.Alert(mode_message, color=mode_color, className="py-2 mb-3"),
-                _render_frame(checks, "No readiness checks available.", max_rows=12),
+                _render_frame(checks, "No readiness checks available.", max_rows=14),
                 html.Div(issue_block, className="mt-3"),
             ]
         ),
@@ -1801,7 +1839,7 @@ def register_callbacks(app) -> None:
         backend = _make_backend(session_data)
         overview_data = backend.get_overview_rows(metric="psi")
         if not overview_data:
-            return make_empty_state("No monitors configured. Use Onboarding to add a model.", icon="fas fa-plus-circle")
+            return make_empty_state("No monitors onboarded yet.", icon="fas fa-plus-circle")
 
         psi_warning, psi_critical = get_thresholds("psi")
         healthy = sum(1 for row in overview_data if row["max_psi"] <= psi_warning)
@@ -2348,6 +2386,8 @@ def register_callbacks(app) -> None:
         )
         configured_refresh_job_id = str(data["settings"].get("refresh_job_id") or "").strip()
         configured_refresh_job_name = str(data["settings"].get("refresh_job_name") or "").strip()
+        configured_bootstrap_job_id = str(data["settings"].get("bootstrap_refresh_job_id") or "").strip()
+        configured_bootstrap_job_name = str(data["settings"].get("bootstrap_refresh_job_name") or "").strip()
         if configured_refresh_job_id:
             refresh_job_wiring_text = (
                 f"This app is configured to trigger shared refresh job ID {configured_refresh_job_id}. "
@@ -2361,6 +2401,16 @@ def register_callbacks(app) -> None:
                 "REFRESH_JOB_ID is preferred because it avoids name-matching issues. "
                 "To change either value, update app.yaml or the generated manual existing-app app.yaml and redeploy the app."
             )
+        if configured_bootstrap_job_id:
+            refresh_job_wiring_text += (
+                f" Bootstrap and backfill triggers are routed to BOOTSTRAP_REFRESH_JOB_ID={configured_bootstrap_job_id} when that optional override is configured."
+            )
+        elif configured_bootstrap_job_name:
+            refresh_job_wiring_text += (
+                f" Bootstrap and backfill triggers are routed to BOOTSTRAP_REFRESH_JOB_NAME={configured_bootstrap_job_name!r} when that optional override is configured."
+            )
+        else:
+            refresh_job_wiring_text += " Bootstrap and backfill triggers use the shared refresh workflow by default."
         show_bootstrap_retry = config_status == "active" and str(runtime_state.get("bootstrap_status") or "pending") != "completed"
         schedule_card = dbc.Card(
             dbc.CardBody(

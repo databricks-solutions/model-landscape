@@ -98,9 +98,54 @@ def test_trigger_refresh_job_uses_configured_job_id(monkeypatch) -> None:
 
     assert trigger.job_id == 321
     assert trigger.run_id == 999
+    assert trigger.workflow_kind == "shared"
+    assert trigger.used_shared_fallback is True
     assert fake_jobs.run_call["job_id"] == 321
     assert fake_jobs.run_call["job_parameters"]["scope"] == "bootstrap"
     assert fake_jobs.run_call["job_parameters"]["model_key"] == "fraud_model_demo"
+
+
+def test_trigger_refresh_job_uses_separate_bootstrap_job_when_configured(monkeypatch) -> None:
+    monkeypatch.setattr(
+        refresh_jobs,
+        "settings",
+        SimpleNamespace(
+            sql_warehouse_id="wh-123",
+            refresh_job_id="321",
+            refresh_job_name="model-lens-refresh",
+            bootstrap_refresh_job_id="654",
+            bootstrap_refresh_job_name="model-lens-bootstrap-refresh",
+            lakebase_host="",
+            lakebase_port=5432,
+            lakebase_pguser="",
+            lakebase_sslmode="require",
+            lakebase_schema="model_lens_ui",
+        ),
+    )
+
+    class FakeJobs:
+        def __init__(self) -> None:
+            self.run_call = None
+
+        def run_now(self, **kwargs):
+            self.run_call = kwargs
+            return refresh_jobs.make_fake_run_response(222)
+
+    fake_jobs = FakeJobs()
+    fake_workspace = SimpleNamespace(jobs=fake_jobs)
+
+    trigger = refresh_jobs.trigger_refresh_job(
+        model_key="fraud_model_demo",
+        control_plane_catalog="model_observability",
+        control_plane_schema="control_plane",
+        workspace_client=fake_workspace,
+    )
+
+    assert trigger.job_id == 654
+    assert trigger.run_id == 222
+    assert trigger.workflow_kind == "bootstrap"
+    assert trigger.used_shared_fallback is False
+    assert fake_jobs.run_call["job_id"] == 654
 
 
 def test_trigger_refresh_job_falls_back_to_named_lookup(monkeypatch) -> None:
@@ -474,6 +519,82 @@ def test_validate_workspace_readiness_reports_explicit_run_now_grant_when_manage
     assert readiness.overall_mode == "scheduler_only"
     assert readiness.run_now_available is False
     assert any("Grant the app service principal CAN_MANAGE_RUN on job 321." == warning for warning in readiness.warnings)
+
+
+def test_validate_workspace_readiness_treats_separate_bootstrap_lane_as_optional(monkeypatch) -> None:
+    monkeypatch.setattr(
+        refresh_jobs,
+        "settings",
+        SimpleNamespace(
+            sql_warehouse_id="wh-123",
+            refresh_job_id="321",
+            refresh_job_name="model-lens-refresh",
+            bootstrap_refresh_job_id="654",
+            bootstrap_refresh_job_name="model-lens-bootstrap-refresh",
+            lakebase_instance_name="",
+            lakebase_database_name="",
+            lakebase_host="",
+            lakebase_port=5432,
+            lakebase_pguser="",
+            lakebase_sslmode="require",
+            lakebase_schema="model_lens_ui",
+        ),
+    )
+
+    shared_job = SimpleNamespace(
+        job_id=321,
+        settings=SimpleNamespace(
+            name="model-lens-refresh",
+            schedule=SimpleNamespace(pause_status="UNPAUSED"),
+            trigger=None,
+            continuous=None,
+            queue=SimpleNamespace(enabled=True),
+            max_concurrent_runs=1,
+        ),
+    )
+    bootstrap_job = SimpleNamespace(
+        job_id=654,
+        settings=SimpleNamespace(
+            name="model-lens-bootstrap-refresh",
+            schedule=None,
+            trigger=None,
+            continuous=None,
+            queue=SimpleNamespace(enabled=True),
+            max_concurrent_runs=1,
+        ),
+    )
+
+    def get_job(*, job_id):
+        return {321: shared_job, 654: bootstrap_job}[job_id]
+
+    def get_permissions(job_id):
+        if str(job_id) == "321":
+            return SimpleNamespace(
+                access_control_list=[
+                    SimpleNamespace(
+                        user_name="svc@app",
+                        service_principal_name=None,
+                        display_name="svc@app",
+                        all_permissions=[SimpleNamespace(permission_level="CAN_MANAGE_RUN")],
+                    )
+                ]
+            )
+        return SimpleNamespace(access_control_list=[])
+
+    fake_workspace = SimpleNamespace(
+        jobs=SimpleNamespace(get=get_job, get_permissions=get_permissions),
+        current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name="svc@app", display_name="svc@app")),
+    )
+
+    readiness = refresh_jobs.validate_workspace_readiness(control_plane_ready=True, workspace_client=fake_workspace)
+
+    assert readiness.overall_mode == "fully_ready"
+    assert readiness.bootstrap_workflow_mode == "separate"
+    assert readiness.bootstrap_workflow_resolved is True
+    assert readiness.bootstrap_workflow_id == 654
+    assert readiness.bootstrap_run_now_available is None
+    assert not any("no schedule or trigger configured" in issue.lower() for issue in readiness.blocking_issues)
+    assert any("CAN_MANAGE_RUN on job 654" in warning for warning in readiness.warnings)
 
 
 def test_validate_workspace_readiness_reports_fully_ready_with_direct_manage_run_access(monkeypatch) -> None:

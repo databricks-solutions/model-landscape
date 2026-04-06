@@ -598,6 +598,21 @@ def test_refresh_job_unavailable_message_includes_explicit_grant_for_configured_
     assert "Grant the app service principal CAN_MANAGE_RUN on job 321." in message
 
 
+def test_render_overview_shows_empty_state_when_no_monitors_exist(monkeypatch) -> None:
+    class _FakeBackend:
+        def get_overview_rows(self, metric="psi"):
+            assert metric == "psi"
+            return []
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_output(app, "overview-page-body")
+
+    result = fn("/", None, {})
+
+    assert "No monitors onboarded yet." in str(result)
+
+
 def test_performance_metric_selector_uses_monitor_configured_metrics(monkeypatch) -> None:
     class _FakeBackend:
         def get_monitor_config(self, model_id):

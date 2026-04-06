@@ -235,6 +235,13 @@ At this point, the generated `app.yaml` uses:
 - `REFRESH_JOB_NAME=<existing-app-name>-refresh`
 
 `REFRESH_JOB_ID` and `REFRESH_JOB_NAME` are app environment variables in that generated `app.yaml`. They are not configured from the onboarding wizard. To change refresh-job wiring later, regenerate or edit that `app.yaml`, re-import the prepared source tree, and redeploy the app.
+If you want a separate large-tenant bootstrap/backfill lane later, the same generated `app.yaml` can also carry:
+
+- `BOOTSTRAP_REFRESH_JOB_ID`
+- `BOOTSTRAP_REFRESH_JOB_NAME`
+
+Those optional values only affect direct bootstrap/backfill triggers. The default product shape remains one shared scheduled job.
+
 The generated shared job payload now declares job-level parameters and pushes them into the wheel task's named arguments. The app triggers `jobs/run-now` with `job_parameters`, which is the override path Databricks currently honors for targeted bootstrap runs.
 
 If the app will monitor very large tables, set these environment variables in the generated `app.yaml` and shared refresh job before deploy:
@@ -594,6 +601,7 @@ Important:
 
 - `CAN MANAGE RUN` is required because onboarding triggers the initial refresh asynchronously
 - if the generated `app.yaml` sets `REFRESH_JOB_ID`, grant `CAN_MANAGE_RUN` on that exact job ID; the Setup readiness card now points to that concrete grant when immediate bootstrap is unavailable
+- if the generated `app.yaml` also sets `BOOTSTRAP_REFRESH_JOB_ID`, grant `CAN_MANAGE_RUN` on that second job only if you expect direct `Run First Refresh` acceleration through the optional bootstrap lane
 - the app identity triggers the job
 - the job's Run as identity performs the actual refresh work
 
@@ -628,6 +636,7 @@ In the `Monitor Settings` page, verify:
 
 - `SQL_WAREHOUSE_ID` is populated
 - `REFRESH_JOB_ID` or `REFRESH_JOB_NAME` is populated
+- if you intentionally enabled the optional bootstrap lane, `BOOTSTRAP_REFRESH_JOB_ID` or `BOOTSTRAP_REFRESH_JOB_NAME` is populated too
 - the control-plane namespace matches your intended destination
 - if you are using `REFRESH_JOB_NAME`, it matches the real workflow you intend to trigger
 
@@ -686,8 +695,10 @@ Check:
 - `REFRESH_JOB_ID` or `REFRESH_JOB_NAME` is set correctly
 - the app service principal has `CAN MANAGE RUN` on the refresh job
 - if using `REFRESH_JOB_NAME`, the configured value matches the real deployed workflow name for this app
+- if you configured `BOOTSTRAP_REFRESH_JOB_ID` or `BOOTSTRAP_REFRESH_JOB_NAME`, verify that optional bootstrap lane separately; otherwise direct bootstrap falls back to the shared job by default
 
 If `REFRESH_JOB_ID` is set and the app still reports scheduler-only mode, the expected operator fix is explicit: grant the app service principal `CAN_MANAGE_RUN` on that job ID.
+If `BOOTSTRAP_REFRESH_JOB_ID` is set and `Run First Refresh` still cannot trigger directly, the expected operator fix is explicit: grant the app service principal `CAN_MANAGE_RUN` on that bootstrap job ID, or leave the monitor in `pending bootstrap` and let the shared scheduled job pick it up.
 
 If `CAN MANAGE RUN` is intentionally unavailable, the app can still save the monitor and the shared hourly job can pick it up on its next run, but only if that workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`. In that operating mode, treat the missing `Run now` permission as lost acceleration, not lost functionality.
 

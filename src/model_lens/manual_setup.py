@@ -37,6 +37,8 @@ class ManualAppSettings:
     control_plane_schema: str
     refresh_job_id: str = ""
     refresh_job_name: str = ""
+    bootstrap_refresh_job_id: str = ""
+    bootstrap_refresh_job_name: str = ""
     lakebase_instance_name: str = ""
     lakebase_database_name: str = ""
     lakebase_schema: str = "model_lens_ui"
@@ -100,6 +102,10 @@ def build_manual_app_yaml(settings: ManualAppSettings) -> str:
         f"    value: {_yaml_string(settings.refresh_job_id.strip())}",
         "  - name: REFRESH_JOB_NAME",
         f"    value: {_yaml_string(refresh_job_name)}",
+        "  - name: BOOTSTRAP_REFRESH_JOB_ID",
+        f"    value: {_yaml_string(settings.bootstrap_refresh_job_id.strip())}",
+        "  - name: BOOTSTRAP_REFRESH_JOB_NAME",
+        f"    value: {_yaml_string(settings.bootstrap_refresh_job_name.strip())}",
         "  - name: GENIE_SPACE_ID",
         f"    value: {_yaml_string(settings.genie_space_id)}",
     ]

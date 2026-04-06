@@ -184,10 +184,12 @@ Open the `model-lens` Databricks App.
 Check immediately:
 
 - the app title reads `Model Lens`
+- if no monitors exist yet, `Overview` renders a clean empty state that says `No monitors onboarded yet.` instead of returning a 500
 - `SQL_WAREHOUSE_ID` is populated
 - `REFRESH_JOB_ID` is populated or `REFRESH_JOB_NAME` matches the deployed workflow name
 - if `REFRESH_JOB_ID` is blank, confirm you intentionally rely on name lookup; `REFRESH_JOB_ID` is safer for repeated customer deployments
 - if `REFRESH_JOB_ID` is populated and the setup card shows `Grant CAN_MANAGE_RUN on job <id>`, grant the app service principal `CAN_MANAGE_RUN` on that job before expecting immediate bootstrap from the UI
+- if you intentionally enabled the optional bootstrap lane, verify `BOOTSTRAP_REFRESH_JOB_ID` or `BOOTSTRAP_REFRESH_JOB_NAME` is populated too; otherwise the app should show that bootstrap uses the shared refresh workflow by default
 - `USE_LAKEBASE_READ_MODEL` is `false`
 - `Control Plane Catalog` and `Control Plane Schema` show the namespace you want to use
 - if Lakebase exists in the workspace and is visible to the app identity, an informational banner recommends Lakebase
@@ -206,6 +208,12 @@ Expected readiness modes:
 
 - `fully_ready`: the app can trigger bootstrap immediately
 - `scheduler_only`: the app can onboard monitors and rely on the scheduled shared workflow
+
+Optional extension:
+
+- if a separate bootstrap workflow is configured, the readiness card should show it as an optional bootstrap lane
+- if no separate bootstrap workflow is configured, the readiness card should explicitly say bootstrap uses the shared refresh workflow by default
+- a missing or ungranted optional bootstrap lane should warn, not block onboarding, because scheduled pickup still belongs to the main shared workflow
 
 Expected blocked state:
 

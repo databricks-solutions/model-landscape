@@ -185,6 +185,8 @@ class DashboardBackend:
 
     def list_models(self) -> list[dict]:
         configs = self.repository.list_monitor_configs(status="active")
+        if not configs:
+            return []
         summary = self.repository.get_monitor_summary()
         runtime_states = (
             self.repository.list_monitor_runtime_states([config.model_key for config in configs])
@@ -902,6 +904,8 @@ class DashboardBackend:
                 "sql_warehouse_id": settings.sql_warehouse_id,
                 "refresh_job_id": settings.refresh_job_id,
                 "refresh_job_name": settings.refresh_job_name,
+                "bootstrap_refresh_job_id": settings.bootstrap_refresh_job_id,
+                "bootstrap_refresh_job_name": settings.bootstrap_refresh_job_name,
                 "use_lakebase_read_model": settings.use_lakebase_read_model,
                 "lakebase_database_name": settings.lakebase_database_name,
                 "genie_space_id": settings.genie_space_id,

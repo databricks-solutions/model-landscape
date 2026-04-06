@@ -21,12 +21,14 @@ def test_build_manual_app_yaml_uses_literal_warehouse_id() -> None:
             sql_warehouse_id="wh-123",
             control_plane_catalog="gc_prod_mlproduct",
             control_plane_schema="mlp_rsch",
+            bootstrap_refresh_job_name="ml-drift-monitor-bootstrap-refresh",
         )
     )
 
     assert 'value: "wh-123"' in text
     assert "valueFrom: sql_warehouse" not in text
     assert 'value: "ml-drift-monitor-refresh"' in text
+    assert 'value: "ml-drift-monitor-bootstrap-refresh"' in text
 
 
 def test_build_manual_refresh_job_payload_uses_workspace_wheel_path() -> None:

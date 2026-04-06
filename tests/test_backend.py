@@ -885,6 +885,17 @@ def test_get_overview_rows_uses_bulk_latest_snapshot_queries() -> None:
     assert not any("ORDER BY computed_at DESC" in sql and "LIMIT 1" in sql for sql in queries)
 
 
+def test_get_overview_rows_returns_empty_without_active_monitors() -> None:
+    repository = SimpleNamespace(
+        list_monitor_configs=lambda status="active": [],
+        get_monitor_summary=lambda: (_ for _ in ()).throw(AssertionError("summary should not be queried")),
+    )
+    backend = DashboardBackend(repository=repository)
+
+    assert backend.list_models() == []
+    assert backend.get_overview_rows() == []
+
+
 def test_get_reference_data_includes_recent_incident_history_when_available() -> None:
     config = MonitorConfig(
         model_key="fraud_model_demo",

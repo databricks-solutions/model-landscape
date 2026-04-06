@@ -133,7 +133,16 @@ The refresh workflow is a Spark-capable Databricks job.
 
 Model Lens uses one shared refresh workflow by default. The bundle-managed workflow and the generated manual existing-app workflow payload are both scheduled hourly, so saved monitors have a default pickup path even when the app cannot call `Run now`, as long as that shared workflow already exists in the workspace and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`.
 
-The app does not run the heavy first refresh inline. During activation it saves the monitor config, resolves the workflow from `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`, and can trigger the job asynchronously so the UI stays responsive. Those are deploy-time app environment variables, not onboarding inputs. The shared refresh job now declares job-level parameters, pushes them into the wheel task's named arguments, and the app triggers `jobs/run-now` with `job_parameters`, which is the override path Databricks actually honors for this workflow. The workflow entrypoint also treats `scope=scheduler` plus a single `model_key` as `bootstrap`, so targeted single-monitor runs still land on the bootstrap path even if the caller only overrides `model_key`. `CAN MANAGE RUN` on the refresh job is therefore optional acceleration for the app service principal, while the job's Run as identity still needs the source-data and control-plane privileges required for the actual computation.
+The app does not run the heavy first refresh inline. During activation it saves the monitor config, resolves the workflow from `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`, and can trigger the job asynchronously so the UI stays responsive. Those are deploy-time app environment variables, not onboarding inputs. The shared refresh job now declares job-level parameters, pushes them into the wheel task's named arguments, and the app triggers `jobs/run-now` with `job_parameters`, which is the override path Databricks actually honors for this workflow. The workflow entrypoint also treats `scope=scheduler` plus a single `model_key` as `bootstrap`, so targeted single-monitor runs still land on the bootstrap path even if the caller only overrides `model_key`.
+
+For large tenants, there is now an optional extension path for bootstrap/backfill acceleration:
+
+- `BOOTSTRAP_REFRESH_JOB_ID`
+- `BOOTSTRAP_REFRESH_JOB_NAME`
+
+If either is set, direct bootstrap/backfill triggers use that second workflow instead of the main shared job. If neither is set, bootstrap uses the shared refresh workflow by default. This extension is intentionally non-blocking: readiness and scheduler-only operation are still anchored on the main shared workflow so low-permission workspaces do not dead-end when the optional second lane is absent.
+
+`CAN MANAGE RUN` on the shared refresh job is therefore optional acceleration for the app service principal, while the job's Run as identity still needs the source-data and control-plane privileges required for the actual computation. If a separate bootstrap job is configured by ID, `CAN MANAGE RUN` on that second job is only required for direct bootstrap acceleration; scheduled pickup still falls back to the main shared job.
 
 The `Setup` step now validates more than the control-plane namespace. `Validate Workspace Wiring` computes a workspace-readiness state with three modes:
 
