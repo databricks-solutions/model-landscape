@@ -1582,7 +1582,7 @@ class ControlPlaneRepository:
                 (model_key, profile_date),
             )
 
-        if result.incident_rows:
+        if result.incident_rows or result.incident_history_rows:
             self._warehouse.execute_params(
                 f"DELETE FROM {self._table_names.incidents} WHERE model_key = %s",
                 (model_key,),

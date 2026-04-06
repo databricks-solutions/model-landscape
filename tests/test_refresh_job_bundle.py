@@ -12,3 +12,6 @@ def test_bundle_refresh_job_uses_named_parameters() -> None:
     assert "named_parameters:" in text
     assert "scope: scheduler" in text
     assert "python_wheel_task:" in text
+    assert "job_clusters:" in text
+    assert "job_cluster_key: refresh_compute" in text
+    assert "timeout_seconds: ${var.refresh_timeout_seconds}" in text

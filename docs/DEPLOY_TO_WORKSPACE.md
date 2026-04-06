@@ -18,7 +18,8 @@ You need a workspace with:
 
 - Databricks CLI auth already working
 - one SQL warehouse
-- serverless jobs enabled
+- privileges to create or run a Spark-capable Databricks workflow job
+- an approved Databricks node type for the shared refresh cluster
 - privileges to deploy apps and workflows
 - privileges to write into a chosen Unity Catalog namespace for the control plane
 - optional privileges to create:
@@ -41,7 +42,7 @@ On Databricks CLI `v0.260.0`, the bundle can bind the SQL warehouse to the app b
 - `warehouse_only` is fully automated
 - `dev` / `prod` automate the workflow-side Lakebase sync inputs
 - the app-side Lakebase read path is enabled either from the workspace setup fields in the UI or by pre-populating `LAKEBASE_INSTANCE_NAME` / `LAKEBASE_DATABASE_NAME` in `app.yaml` before `databricks apps deploy`
-- the bundle-managed refresh workflow is one shared job (`<app-name>-refresh`) scheduled hourly by default
+- the bundle-managed refresh workflow is one shared Spark job (`<app-name>-refresh`) scheduled hourly by default
 - each monitor stores its own drift/performance cadence in the control plane, so one shared job can service many monitors without creating one Databricks job per model
 - the app can accelerate onboarding refreshes asynchronously by resolving `REFRESH_JOB_ID` first, then falling back to `REFRESH_JOB_NAME` (default `model-lens-refresh`)
 - the shared wheel task uses `named_parameters`, and the app triggers it with `python_named_params`, so `catalog`, `schema`, `scope=bootstrap`, and `model_key` overrides now reach the deployed workflow correctly
@@ -84,10 +85,17 @@ For `warehouse_only`, Model Lens expects:
 - `sql_warehouse_id`
 - `control_plane_catalog`
 - `control_plane_schema`
+- `refresh_node_type_id`
 
 Optional but important when you do not want the default names:
 
 - `app_name`
+- `refresh_spark_version`
+  default `"15.4.x-scala2.12"`
+- `refresh_num_workers`
+  default `4`
+- `refresh_timeout_seconds`
+  default `14400`
 
 Large-table tuning knobs:
 
@@ -103,6 +111,7 @@ Large-table tuning knobs:
   default `75`
 
 These are app and workflow environment variables, not bundle vars. They cap pandas-side window loads so one extremely large monitor does not force a full-table in-memory read, and they control when the shared scheduler automatically marks an abandoned `running` refresh as failed so the monitor can be retried later.
+The Spark refresh workflow no longer depends on those caps for core metric generation; they mainly govern bounded pandas fallback reads and detail views. The Spark refresh repository also clamps monitor-level worker fanout to `1` by default so one driver session is not shared across concurrent monitor threads unless you override that behavior intentionally.
 
 For `dev` or `prod`, Model Lens expects:
 
@@ -137,9 +146,12 @@ python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
 databricks bundle validate \
   -t warehouse_only \
   --var "sql_warehouse_id=<sql-warehouse-id>" \
+  --var "refresh_node_type_id=<spark-node-type-id>" \
   --var "control_plane_catalog=<control-plane-catalog>" \
   --var "control_plane_schema=<control-plane-schema>"
 ```
+
+The local test suite now includes Spark-refresh regressions. Run it from an environment with the repo dev dependencies installed so `pyspark` is present; those Spark-specific tests still skip automatically when no local Java runtime is available.
 
 Lakebase-enabled:
 
@@ -149,6 +161,7 @@ python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
 databricks bundle validate \
   -t dev \
   --var "sql_warehouse_id=<sql-warehouse-id>" \
+  --var "refresh_node_type_id=<spark-node-type-id>" \
   --var "control_plane_catalog=<control-plane-catalog>" \
   --var "control_plane_schema=<control-plane-schema>" \
   --var "lakebase_instance_name=<lakebase-instance-name>" \
@@ -160,7 +173,7 @@ Expected result:
 
 - tests pass
 - bundle validation succeeds
-- the wheel build succeeds and the bundle can resolve `../dist/*.whl` for the serverless workflow environment
+- the wheel build succeeds and the bundle can resolve `../dist/*.whl` plus the Spark job-cluster libraries for the shared refresh workflow
 
 Before calling the build broadly customer-ready, run these focused workspace release gates in addition to the local validation above:
 
@@ -181,6 +194,7 @@ Warehouse-only:
 databricks bundle deploy \
   -t warehouse_only \
   --var "sql_warehouse_id=<sql-warehouse-id>" \
+  --var "refresh_node_type_id=<spark-node-type-id>" \
   --var "control_plane_catalog=<control-plane-catalog>" \
   --var "control_plane_schema=<control-plane-schema>"
 
@@ -198,6 +212,7 @@ Lakebase-enabled:
 databricks bundle deploy \
   -t dev \
   --var "sql_warehouse_id=<sql-warehouse-id>" \
+  --var "refresh_node_type_id=<spark-node-type-id>" \
   --var "control_plane_catalog=<control-plane-catalog>" \
   --var "control_plane_schema=<control-plane-schema>" \
   --var "lakebase_instance_name=<lakebase-instance-name>" \
@@ -215,7 +230,7 @@ databricks apps get model-lens
 Expected result:
 
 - the app `model-lens` is created
-- the workflow `<app-name>-refresh` is created, where `<app-name>` is `model-lens` unless you overrode `app_name`
+- the workflow `<app-name>-refresh` is created on Spark job compute, where `<app-name>` is `model-lens` unless you overrode `app_name`
 - the workflow is scheduled hourly by default and acts as the shared pickup path for newly saved monitors
 - `databricks apps start model-lens` brings the app compute into `ACTIVE`
 - after `databricks apps deploy`, the app source is deployed to compute
@@ -243,7 +258,7 @@ Then grant the app identity all of the following:
 Treat the warehouse grant as a post-deploy check, not a one-time assumption. After every `databricks apps start model-lens` + `databricks apps deploy model-lens ...` cycle, verify the same app identity still has `CAN_USE` on the configured SQL warehouse and regrant it if the app shows warehouse-access errors.
 If you want the app to accelerate onboarding with `Run now`, also verify `CAN MANAGE RUN` on the refresh workflow. If that permission is unavailable, the shared hourly job still remains the default pickup path only if that workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`.
 
-For large-table customers, also verify that the deployed app and shared refresh workflow environment include the intended row-cap settings:
+For large-table customers, also verify that the deployed app and shared refresh workflow configuration include the intended readback/fallback settings:
 
 - `REFRESH_SAMPLE_ROWS_PER_DAY`
 - `REFRESH_MAX_ROWS_PER_WINDOW`
@@ -396,6 +411,7 @@ Expected result:
 - if one monitor hits an unexpected worker-level exception, that result is recorded as a failed monitor refresh instead of aborting the whole shared batch
 - each monitor scope is processed from one bounded projected source-range load, and the workflow derives the persisted window/history rows from the daily profile layer built for that range instead of re-querying every comparison window
 - on incremental runs, the workflow also reuses already-persisted daily profile facts for the affected date span before rewriting the touched window/history rows
+- when the Spark repository is active, those fact/window/history rewrites are written back through Spark/Delta persistence rather than row-batch warehouse inserts
 - `quality_metrics` stays model-wide because the workflow rebuilds that compatibility row from all persisted `daily_quality_profiles`, not just from the bounded incremental slice
 - numeric performance buckets stay stable across runs because the workflow stores canonical `performance_bin_specs` per monitor feature and reuses them during later performance repair
 - for labels stored directly in the inference table, performance repair compares an opaque label-freshness signature over the repair horizon, so late backfills on older rows still trigger recompute

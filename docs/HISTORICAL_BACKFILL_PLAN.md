@@ -12,6 +12,9 @@ Current local implementation status:
 - Phase 4 quality-history rows, queries, and charts are implemented
 - Phase 5 incident-history rows and recovery lifecycle events are implemented in the warehouse path
 - shared refresh hardening is implemented: refresh audit rows are created before source-range discovery, `quality_metrics` is rebuilt from persisted `daily_quality_profiles`, stale `running` rows are reclaimed after a timeout, and canonical `performance_bin_specs` now keep incremental performance repair comparable to bootstrap
+- the shared refresh workflow now runs on Spark-capable Databricks job compute, with exact bounded source reads, Spark-built daily fact rows, Spark-side affected-span derivation, and Spark/Delta persistence for the derived metric tables
+- numeric drift PSI / KL / JS for the Spark workflow now runs in Spark from persisted daily numeric histogram edges/counts instead of collecting per-window sample arrays back into Python
+- incident open/recovered/escalated history for the Spark workflow is now derived inside the Spark repository layer as well, leaving only the lightweight app/query side on the Python path
 
 The remaining work in this document is now primarily:
 
@@ -100,7 +103,7 @@ The important change is write semantics, not table count:
 
 - backfill writes many daily windows in one refresh
 - incremental runs append only missing or repaired windows
-- writes remain idempotent per logical comparison window
+- writes remain idempotent per logical comparison window, and the Spark repository now owns those Delta writes for the shared refresh path
 
 For the first cut, uniqueness should not rely on `window_end` alone. Use a logical window key built from:
 
@@ -292,7 +295,7 @@ The frontend should remain thin:
 - persist `performance_bin_specs`
 - use bounded range reads and the shared refresh job to materialize those facts without requiring a full-table pandas load
 - derive the persisted comparison-window tables from that per-run daily-profile layer so refresh no longer reloads every logical window from the warehouse
-- on incremental runs, merge already-persisted daily facts for the affected date span so derivation can reuse prior history instead of depending entirely on the current bounded load
+- on incremental runs, merge already-persisted daily facts for the affected date span in the Spark repository layer so derivation can reuse prior history without rebuilding those unions as Python daily-row lists
 - reuse persisted canonical performance-bin specs on incremental/performance-repair runs so daily performance profiles remain comparable across runs
 - keep the current window tables as the stable UI/read contract
 

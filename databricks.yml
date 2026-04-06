@@ -29,6 +29,14 @@ variables:
     default: ""
   lakebase_schema:
     default: model_lens_ui
+  refresh_spark_version:
+    default: "15.4.x-scala2.12"
+  refresh_node_type_id:
+    description: Existing Databricks node type for the shared Spark refresh job
+  refresh_num_workers:
+    default: 4
+  refresh_timeout_seconds:
+    default: 14400
   genie_space_id:
     default: ""
 
@@ -37,30 +45,6 @@ targets:
     mode: development
     workspace:
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
-    resources:
-      jobs:
-        refresh_control_plane:
-          tasks:
-            - task_key: refresh_control_plane
-              python_wheel_task:
-                package_name: model_lens
-                entry_point: model-lens-refresh
-                parameters:
-                  - --warehouse-id
-                  - ${var.sql_warehouse_id}
-                  - --catalog
-                  - ${var.control_plane_catalog}
-                  - --schema
-                  - ${var.control_plane_schema}
-                  - --use-lakebase-read-model
-                  - --lakebase-instance-name
-                  - ${var.lakebase_instance_name}
-                  - --lakebase-database-name
-                  - ${var.lakebase_database_name}
-                  - --lakebase-pguser
-                  - ${var.lakebase_pguser}
-                  - --lakebase-schema
-                  - ${var.lakebase_schema}
   warehouse_only:
     mode: development
     default: true
@@ -70,27 +54,3 @@ targets:
     mode: production
     workspace:
       root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
-    resources:
-      jobs:
-        refresh_control_plane:
-          tasks:
-            - task_key: refresh_control_plane
-              python_wheel_task:
-                package_name: model_lens
-                entry_point: model-lens-refresh
-                parameters:
-                  - --warehouse-id
-                  - ${var.sql_warehouse_id}
-                  - --catalog
-                  - ${var.control_plane_catalog}
-                  - --schema
-                  - ${var.control_plane_schema}
-                  - --use-lakebase-read-model
-                  - --lakebase-instance-name
-                  - ${var.lakebase_instance_name}
-                  - --lakebase-database-name
-                  - ${var.lakebase_database_name}
-                  - --lakebase-pguser
-                  - ${var.lakebase_pguser}
-                  - --lakebase-schema
-                  - ${var.lakebase_schema}

@@ -37,6 +37,7 @@ def test_build_manual_refresh_job_payload_uses_workspace_wheel_path() -> None:
             sql_warehouse_id="wh-123",
             control_plane_catalog="gc_prod_mlproduct",
             control_plane_schema="mlp_rsch",
+            node_type_id="m5d.large",
             use_lakebase_read_model=True,
             lakebase_instance_name="lakebase-instance",
             lakebase_database_name="lakebase-db",
@@ -51,7 +52,15 @@ def test_build_manual_refresh_job_payload_uses_workspace_wheel_path() -> None:
     assert task["python_wheel_task"]["named_parameters"]["scope"] == "scheduler"
     assert payload["schedule"]["quartz_cron_expression"] == "0 0 * * * ?"
     assert payload["schedule"]["pause_status"] == "UNPAUSED"
-    assert payload["environments"][0]["spec"]["dependencies"][0].endswith(".whl")
+    assert payload["job_clusters"][0]["new_cluster"]["node_type_id"] == "m5d.large"
+    assert payload["job_clusters"][0]["new_cluster"]["num_workers"] == 4
+    assert task["job_cluster_key"] == "refresh_compute"
+    assert task["libraries"][0]["whl"].endswith(".whl")
+    assert task["timeout_seconds"] == 14400
+    assert any(
+        library.get("pypi", {}).get("package") == "mlflow-skinny>=2.20,<3.0"
+        for library in task["libraries"][1:]
+    )
     assert task["python_wheel_task"]["named_parameters"]["use-lakebase-read-model"] == "true"
 
 

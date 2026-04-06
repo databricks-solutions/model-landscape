@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import argparse
 
-from model_lens.services.control_plane import build_repository
-from model_lens.services.refresh_engine import refresh_monitor, split_baseline_current
+from model_lens.services.spark_refresh import build_refresh_repository
 from model_lens.services.refresh_runner import run_refresh_cycle
 
 
@@ -40,7 +39,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     use_lakebase_read_model = _parse_optional_bool(args.use_lakebase_read_model)
-    repository = build_repository(
+    repository = build_refresh_repository(
         warehouse_id=args.warehouse_id or "",
         catalog=args.catalog,
         schema=args.schema,

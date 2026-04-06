@@ -182,6 +182,7 @@ databricks bundle deployment bind \
   -t warehouse_only \
   --var "app_name=<existing-app-name>" \
   --var "sql_warehouse_id=<sql-warehouse-id>" \
+  --var "refresh_node_type_id=<spark-node-type-id>" \
   --var "control_plane_catalog=<control-plane-catalog>" \
   --var "control_plane_schema=<control-plane-schema>" \
   control_plane <existing-app-resource-id>
@@ -190,6 +191,7 @@ databricks bundle deploy \
   -t warehouse_only \
   --var "app_name=<existing-app-name>" \
   --var "sql_warehouse_id=<sql-warehouse-id>" \
+  --var "refresh_node_type_id=<spark-node-type-id>" \
   --var "control_plane_catalog=<control-plane-catalog>" \
   --var "control_plane_schema=<control-plane-schema>"
 ```
@@ -246,7 +248,7 @@ If the app will monitor very large tables, set these environment variables in th
 
 Defaults are safe for many customers, but lowering them is the first lever to pull when a workspace has exceptionally wide or high-volume tables.
 `REFRESH_STALE_RUN_MINUTES` controls when the shared scheduler automatically marks an abandoned `running` row failed so that monitor can be retried later.
-`MAX_PARALLEL_REFRESH_WORKERS` controls only monitor-level concurrency in the shared job. Leave it low unless the row caps are already known-safe for the tenant, because the scheduler will still run one scope per model at a time and each active worker still holds its own bounded pandas range in memory while deriving daily profiles and comparison-window history from that range.
+`MAX_PARALLEL_REFRESH_WORKERS` controls only monitor-level concurrency in the shared job. Leave it low unless the cluster size and per-monitor source ranges are already known-safe for the tenant, because the scheduler still runs one scope per model at a time and each active worker still drives its own Spark range load plus Delta writes for the affected windows.
 
 That means you can create the shared refresh workflow first and then later switch the app to `REFRESH_JOB_ID` if you want stricter wiring.
 
@@ -471,11 +473,16 @@ If you prefer creating the job in the Databricks UI instead of `jobs create --js
    - task type: `Python wheel`
    - package name: `model_lens`
    - entry point: `model-lens-refresh`
-5. Set task parameters exactly as pairs:
-   - `--warehouse-id`, `<sql-warehouse-id>`
-   - `--catalog`, `<control-plane-catalog>`
-   - `--schema`, `<control-plane-schema>`
-6. Add a serverless environment with dependencies matching `refresh-job.json`:
+5. Set named task parameters:
+   - `warehouse-id`, `<sql-warehouse-id>`
+   - `catalog`, `<control-plane-catalog>`
+   - `schema`, `<control-plane-schema>`
+   - `scope`, `scheduler`
+6. Attach the task to one shared Spark job cluster:
+   - choose the Spark runtime version that matches the bundle default or your workspace standard
+   - set a workspace-approved node type
+   - start with `2` workers unless your platform team requires a different baseline
+7. Add task libraries:
    - the wheel path under your workspace source tree
    - `dash>=2.18,<3.0`
    - `dash-bootstrap-components>=1.6,<2.0`
@@ -486,14 +493,14 @@ If you prefer creating the job in the Databricks UI instead of `jobs create --js
    - `plotly>=5.24,<6.0`
    - `psycopg[binary]>=3.2,<4.0`
    - `scikit-learn>=1.5,<2.0`
-7. Set retries to:
+8. Set retries to:
    - max retries: `2`
    - min retry interval millis: `60000`
    - timeout seconds: `3600`
-8. Save the job.
-9. Record the numeric job ID from the UI.
-10. Trigger one manual run from the UI and verify that the wheel environment resolves and the task reaches your code.
-11. Continue with the `--refresh-job-id <job-id>` regeneration step above so the app points at the exact workflow ID.
+9. Save the job.
+10. Record the numeric job ID from the UI.
+11. Trigger one manual run from the UI and verify that the cluster starts, the wheel installs, and the task reaches your code.
+12. Continue with the `--refresh-job-id <job-id>` regeneration step above so the app points at the exact workflow ID.
 
 ### Optional Hardening Step For Both Tracks
 

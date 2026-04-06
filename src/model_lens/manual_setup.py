@@ -5,11 +5,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-SERVERLESS_DEPENDENCIES: tuple[str, ...] = (
+REFRESH_JOB_PYPI_DEPENDENCIES: tuple[str, ...] = (
     "dash>=2.18,<3.0",
     "dash-bootstrap-components>=1.6,<2.0",
     "databricks-sdk>=0.81,<1.0",
     "databricks-sql-connector>=3.0,<4.0",
+    "mlflow-skinny>=2.20,<3.0",
     "numpy>=1.26,<3.0",
     "pandas>=2.2,<3.0",
     "plotly>=5.24,<6.0",
@@ -56,6 +57,10 @@ class ManualRefreshJobSettings:
     sql_warehouse_id: str
     control_plane_catalog: str
     control_plane_schema: str
+    spark_version: str = "15.4.x-scala2.12"
+    node_type_id: str = ""
+    num_workers: int = 4
+    timeout_seconds: int = 14400
     lakebase_instance_name: str = ""
     lakebase_database_name: str = ""
     lakebase_pguser: str = ""
@@ -120,6 +125,16 @@ def build_manual_refresh_job_payload(settings: ManualRefreshJobSettings) -> dict
         "name": f"{settings.app_name}-refresh",
         "max_concurrent_runs": 1,
         "queue": {"enabled": True},
+        "job_clusters": [
+            {
+                "job_cluster_key": "refresh_compute",
+                "new_cluster": {
+                    "spark_version": settings.spark_version,
+                    "node_type_id": settings.node_type_id,
+                    "num_workers": settings.num_workers,
+                },
+            }
+        ],
         "tasks": [
             {
                 "task_key": "refresh_control_plane",
@@ -128,10 +143,17 @@ def build_manual_refresh_job_payload(settings: ManualRefreshJobSettings) -> dict
                     "entry_point": "model-lens-refresh",
                     "named_parameters": named_parameters,
                 },
-                "environment_key": "refresh_runtime",
+                "job_cluster_key": "refresh_compute",
+                "libraries": [
+                    {"whl": settings.wheel_workspace_path},
+                    *[
+                        {"pypi": {"package": dependency}}
+                        for dependency in REFRESH_JOB_PYPI_DEPENDENCIES
+                    ],
+                ],
                 "max_retries": 2,
                 "min_retry_interval_millis": 60000,
-                "timeout_seconds": 3600,
+                "timeout_seconds": settings.timeout_seconds,
             }
         ],
         "schedule": {
@@ -139,18 +161,6 @@ def build_manual_refresh_job_payload(settings: ManualRefreshJobSettings) -> dict
             "timezone_id": "UTC",
             "pause_status": "UNPAUSED",
         },
-        "environments": [
-            {
-                "environment_key": "refresh_runtime",
-                "spec": {
-                    "client": "2",
-                    "dependencies": [
-                        settings.wheel_workspace_path,
-                        *SERVERLESS_DEPENDENCIES,
-                    ],
-                },
-            }
-        ],
     }
 
 

@@ -34,7 +34,7 @@ flowchart LR
   App -->|scan source tables + write configs| Warehouse["Databricks SQL Warehouse"]
   App -->|optional hot summary + incident reads| Lakebase["Lakebase Read Model"]
 
-  Refresh["Serverless Refresh Workflow"] -->|read inference + labels| Warehouse
+  Refresh["Shared Spark Refresh Workflow"] -->|read inference + labels| Warehouse
   Warehouse --> Source["Unity Catalog Source Tables"]
   Refresh -->|write drift, quality, performance, incidents| Control["Unity Catalog Control-Plane Tables"]
   Refresh -->|sync monitor summary + incidents| Lakebase
@@ -129,7 +129,7 @@ The app uses Lakebase for hot UI reads when configured. If Lakebase is unavailab
 
 ### 5. Refresh Workflow
 
-The refresh workflow is a serverless Databricks job.
+The refresh workflow is a Spark-capable Databricks job.
 
 Model Lens uses one shared refresh workflow by default. The bundle-managed workflow and the generated manual existing-app workflow payload are both scheduled hourly, so saved monitors have a default pickup path even when the app cannot call `Run now`, as long as that shared workflow already exists in the workspace and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`.
 
@@ -150,15 +150,16 @@ Responsibilities:
 - prioritize one scope per model per scheduler run: `bootstrap` first, then `drift_quality`, then `performance_repair`
 - process due monitors with monitor-level concurrency only, using a bounded worker pool rather than feature-level fanout
 - isolate unexpected worker exceptions to per-monitor failed results so one bad target does not fail the whole shared batch
-- read SQL-side source profiles for bounded refresh ranges
-- load one bounded projected refresh range per monitor scope instead of re-querying every comparison window from the warehouse
+- read bounded source profiles and date ranges before refresh execution
+- load one exact bounded source range per monitor scope in Spark instead of re-querying every comparison window from the warehouse
 - optionally join labels from an external table with deterministic dedupe
 - scope shared source tables down to one monitored model/version when configured
 - backfill all valid daily rolling or fixed-baseline comparison windows on the first run
 - append only new daily windows on later runs by default
-- enforce deterministic per-day and per-window row caps during pandas-based window analysis so very large tables do not cause simple worker OOMs
-- materialize daily quality, feature, and performance profiles from the bounded range load, then derive the persisted comparison-window history from those daily profiles in the same refresh pass
-- for non-bootstrap runs, merge those newly built daily profiles with already-persisted daily facts for the affected date span before deriving the window/history tables
+- materialize daily quality, feature, and performance profiles from the Spark range load, then derive the persisted comparison-window history from those daily profiles in the same refresh pass
+- for non-bootstrap runs, read the affected persisted daily facts back through the Spark repository, merge them with the current run’s daily facts there, and derive the window/history tables from that Spark-side union instead of a Python list merge
+- when the Spark repository is active, persist the affected derived/fact tables back into Delta through Spark writes instead of row-batch warehouse inserts
+- with the Spark repository active, numeric drift histogram aggregation and incident lifecycle derivation also stay inside the Spark refresh layer rather than dropping back to Python helpers on the hot path
 - record one refresh-run row per model execution with requested mode, effective mode, counts, status, and data range
 - create that `refresh_runs` row before source-range discovery so every attempted monitor execution leaves an audit trail, even when validation or source inspection fails early
 - reconcile stale `running` refresh rows at scheduler startup after `REFRESH_STALE_RUN_MINUTES` so killed workers do not wedge monitors permanently
@@ -176,8 +177,8 @@ Responsibilities:
 Packaging/runtime shape:
 
 - the bundle builds a wheel artifact from the repo
-- the workflow runs a `python_wheel_task`
-- this avoids workspace-file import issues in Databricks serverless
+- the workflow still runs a `python_wheel_task`, but now on a Spark job cluster instead of a serverless environment
+- the heavy source scans, joins, and daily-fact aggregation happen in Spark; the app remains warehouse/read-model based
 
 Primary code:
 
@@ -211,24 +212,25 @@ Primary code:
 3. If configured, it applies `model_id_value` / `model_version_value` filters before analysis.
 4. If configured, it either reads labels directly from the inference table or joins an external labels table and uses the configured order column to dedupe repeated label keys.
 5. It calculates a SQL-side source profile for the refresh range so total rows, min/max dates, prediction stats, daily volume, and null-rate summaries do not require a raw full-frame load.
-6. It loads one bounded projected refresh range for that monitor scope, using the configured sampling caps.
-7. It materializes `daily_quality_profiles`, `daily_feature_profiles`, and `daily_performance_profiles` from that bounded range.
+6. It loads one exact bounded Spark source range for that monitor scope.
+7. It materializes `daily_quality_profiles`, `daily_feature_profiles`, and `daily_performance_profiles` from that Spark range.
 8. For performance repair, it reuses persisted canonical bin specs so the daily performance buckets stay stable across runs.
 9. It generates all valid daily comparison windows for the configured baseline policy within the comparison horizon, merges any already-persisted daily facts for the affected span, and derives drift, quality history, performance contributors, and incident lifecycle rows from that combined daily-profile layer instead of reloading each window separately.
 10. It rebuilds the monitor-wide `quality_metrics` compatibility row from all persisted `daily_quality_profiles`, so Overview and Reference stay model-wide even after bounded incremental refreshes.
 11. In `auto` mode, it backfills full history when no matching history exists and appends only new windows when history is already aligned.
-12. It writes `refresh_runs`, `comparison_windows`, and `monitor_runtime_state` updates alongside the metric facts.
-13. It replaces or appends persisted rows for that model without duplicating logical windows.
+12. It writes `refresh_runs` / `monitor_runtime_state` through the control-plane repository and writes the daily facts plus derived metric tables through the Spark repository.
+13. It replaces or appends persisted rows for that model without duplicating logical windows, and recovery windows clear the open-incident projection when no incidents remain active.
 14. If Lakebase mode is active, it refreshes the Lakebase monitor summary and open-incident projection.
 
 The current numeric drift implementation now stabilizes out-of-range current distributions by expanding the outer histogram bounds to include the current min/max while preserving the reference-derived interior bin edges. That keeps PSI / KL / JS finite for genuine severe-drift cases instead of producing divide-by-zero warnings.
+With the Spark refresh repository active, those numeric-drift histograms and PSI / KL / JS aggregations now run in Spark from persisted daily numeric histogram edges/counts instead of collecting per-window sample arrays back into Python.
 
 On the app read path, feature distributions prefer sampled values already stored in `daily_feature_profiles`. When a raw fallback is still needed for dimension or prediction detail, the app now loads only the latest current comparison window instead of the full baseline-plus-current span. That fallback also treats `window_end` as inclusive through the end of the day, so same-day rows are not accidentally dropped when the repository only exposes the unbounded `load_monitor_frame(config)` shape.
 
 Current limitation:
 
 - the app UI still emphasizes current/open incidents; `Reference` now shows recent incident lifecycle rows, but there is not yet a dedicated historical incident timeline page even though warehouse incident history is persisted
-- the next scale step is reading already-persisted daily facts across more readback and recompute paths; the current shipping implementation already derives window tables from the per-run daily-profile layer inside refresh, but it still rebuilds that daily layer from a bounded source-range load on each affected run
+- the next scale step is reading already-persisted daily facts across more readback and recompute paths; the current shipping implementation now uses Spark for the heavy source-range layer, but it still rebuilds that daily layer from a bounded source-range load on each affected run
 - readback still centers on the stable window/history tables; only selected paths such as feature distributions and quality-history fallback currently read the daily-profile layer directly
 - the remaining incident readback/productization work is tracked in [Historical Backfill Plan](/Users/volo.vragov/Desktop/work/model-lens/docs/HISTORICAL_BACKFILL_PLAN.md)
 
@@ -290,4 +292,4 @@ The product now follows this split:
   - bundle-managed app resource mode, where [app.yaml](/Users/volo.vragov/Desktop/work/model-lens/app.yaml) resolves `SQL_WAREHOUSE_ID` from `valueFrom: sql_warehouse`
   - manual existing-app mode, where [prepare_existing_app_source.py](/Users/volo.vragov/Desktop/work/model-lens/scripts/prepare_existing_app_source.py) generates an alternate `app.yaml` with a literal `SQL_WAREHOUSE_ID` so constrained operators do not need permission to manage app resources
 - `databricks bundle deploy` creates the app resource, but `databricks apps deploy ... --source-code-path ...` is still required to deploy the app source onto compute.
-- `MAX_PARALLEL_REFRESH_WORKERS` caps only monitor-level concurrency inside the shared job. It does not fan out feature computations, and it should be tuned alongside the row-sampling caps rather than treated as a free throughput multiplier.
+- `MAX_PARALLEL_REFRESH_WORKERS` is still the global cap for monitor-level concurrency inside the shared job, but the Spark refresh repository now clamps itself to serial monitor execution by default so one Spark driver session is not shared across multiple active monitor threads unless an operator explicitly opts into that tradeoff.

@@ -5,6 +5,12 @@ resources:
       max_concurrent_runs: 1
       queue:
         enabled: true
+      job_clusters:
+        - job_cluster_key: refresh_compute
+          new_cluster:
+            spark_version: ${var.refresh_spark_version}
+            node_type_id: ${var.refresh_node_type_id}
+            num_workers: ${var.refresh_num_workers}
       tasks:
         - task_key: refresh_control_plane
           python_wheel_task:
@@ -15,26 +21,38 @@ resources:
               catalog: ${var.control_plane_catalog}
               schema: ${var.control_plane_schema}
               scope: scheduler
-          environment_key: refresh_runtime
+              use-lakebase-read-model: "true"
+              lakebase-instance-name: ${var.lakebase_instance_name}
+              lakebase-database-name: ${var.lakebase_database_name}
+              lakebase-pguser: ${var.lakebase_pguser}
+              lakebase-schema: ${var.lakebase_schema}
+          job_cluster_key: refresh_compute
+          libraries:
+            - whl: ../dist/*.whl
+            - pypi:
+                package: dash>=2.18,<3.0
+            - pypi:
+                package: dash-bootstrap-components>=1.6,<2.0
+            - pypi:
+                package: databricks-sdk>=0.81,<1.0
+            - pypi:
+                package: databricks-sql-connector>=3.0,<4.0
+            - pypi:
+                package: mlflow-skinny>=2.20,<3.0
+            - pypi:
+                package: numpy>=1.26,<3.0
+            - pypi:
+                package: pandas>=2.2,<3.0
+            - pypi:
+                package: plotly>=5.24,<6.0
+            - pypi:
+              package: psycopg[binary]>=3.2,<4.0
+            - pypi:
+                package: scikit-learn>=1.5,<2.0
           max_retries: 2
           min_retry_interval_millis: 60000
-          timeout_seconds: 3600
+          timeout_seconds: ${var.refresh_timeout_seconds}
       schedule:
         quartz_cron_expression: "0 0 * * * ?"
         timezone_id: "UTC"
         pause_status: UNPAUSED
-      environments:
-        - environment_key: refresh_runtime
-          spec:
-            client: "2"
-            dependencies:
-              - ../dist/*.whl
-              - dash>=2.18,<3.0
-              - dash-bootstrap-components>=1.6,<2.0
-              - databricks-sdk>=0.81,<1.0
-              - databricks-sql-connector>=3.0,<4.0
-              - numpy>=1.26,<3.0
-              - pandas>=2.2,<3.0
-              - plotly>=5.24,<6.0
-              - psycopg[binary]>=3.2,<4.0
-              - scikit-learn>=1.5,<2.0

@@ -35,7 +35,8 @@ You need:
 
 - Databricks CLI auth configured for the target workspace
 - a SQL warehouse you can use
-- serverless jobs enabled in the target workspace
+- privileges to create or run a Spark-capable Databricks workflow job
+- an approved Databricks node type for the shared refresh cluster
 - privileges to create tables in a test catalog/schema
 - privileges to deploy Databricks Asset Bundles and open Databricks Apps
 - a chosen Unity Catalog catalog/schema for the Model Lens control plane
@@ -93,6 +94,7 @@ python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
 databricks bundle validate \
   -t warehouse_only \
   --var "sql_warehouse_id=<sql-warehouse-id>" \
+  --var "refresh_node_type_id=<spark-node-type-id>" \
   --var "control_plane_catalog=<control-plane-catalog>" \
   --var "control_plane_schema=<control-plane-schema>"
 ```
@@ -103,6 +105,8 @@ Expected result:
 - both wrapper scripts parse
 - wheel build succeeds
 - bundle validation passes
+
+Note: the local test suite now includes Spark-refresh regressions. Run it from an environment with the repo dev dependencies installed so `pyspark` is available; the Spark-specific tests still skip automatically when no local Java runtime is present.
 
 ## Step 2: Create Scratch Data
 
@@ -148,6 +152,7 @@ Deploy into your test target:
 databricks bundle deploy \
   -t warehouse_only \
   --var "sql_warehouse_id=<sql-warehouse-id>" \
+  --var "refresh_node_type_id=<spark-node-type-id>" \
   --var "control_plane_catalog=<control-plane-catalog>" \
   --var "control_plane_schema=<control-plane-schema>"
 
@@ -165,7 +170,7 @@ Expected result:
 - bundle deploy succeeds
 - the Databricks app `model-lens` exists
 - `databricks apps start model-lens` reaches `ACTIVE`
-- the workflow `<app-name>-refresh` exists, where `<app-name>` is `model-lens` unless you overrode `app_name`
+- the workflow `<app-name>-refresh` exists on Spark job compute, where `<app-name>` is `model-lens` unless you overrode `app_name`
 - the app service principal shown in `databricks apps get model-lens -o json` still has `CAN_USE` on the SQL warehouse
 - the same app identity has `CAN MANAGE RUN` on the refresh workflow
 
@@ -333,8 +338,8 @@ Expected result:
 - after the workflow finishes, Drift and Performance should already show historical windows rather than a single snapshot
 - after the workflow finishes, Data Quality should show window-history charts instead of only the latest summary row
 - with the scratch dataset and `Baseline Days = 7`, you should have 8 daily comparison windows immediately
-- for very large real-world tables, the first run should stay bounded by the configured sampling caps rather than trying to load the entire inference table into pandas, and the shared job should issue one bounded range load per monitor scope rather than one warehouse query per comparison window
-- for multi-monitor tenants, the shared job should parallelize across monitors only up to `MAX_PARALLEL_REFRESH_WORKERS`, while still avoiding two scopes for the same model in one scheduler pass
+- for very large real-world tables, the first run should use one exact bounded Spark source-range load per monitor scope, persist daily facts and affected derived windows through Spark/Delta writes, and reserve the configured sampling caps for UI/detail fallbacks rather than core refresh correctness
+- for multi-monitor tenants, the shared job should still avoid two scopes for the same model in one scheduler pass; the Spark refresh repository now defaults to serial monitor execution inside the driver unless you deliberately override the worker cap for that workspace
 - `quality_metrics` should remain model-wide because the workflow rebuilds it from all persisted `daily_quality_profiles`, not only from the bounded refresh slice
 - `performance_bin_specs` should be created for numeric performance features so later repair runs reuse the same bucket edges
 - if labels come from the inference table itself, performance repair should track an opaque label-freshness signature instead of only the max event timestamp

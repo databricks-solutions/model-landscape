@@ -1,19 +1,23 @@
 from __future__ import annotations
 
 from pathlib import Path
+import tomllib
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_jobs_bundle_uses_serverless_environment_dependencies() -> None:
+def test_jobs_bundle_uses_spark_cluster_libraries() -> None:
     text = (REPO_ROOT / "resources" / "jobs.yml").read_text()
 
-    assert "libraries:" not in text
+    assert "job_clusters:" in text
+    assert "new_cluster:" in text
+    assert "libraries:" in text
     assert "../dist/*.whl" in text
-    assert "${var.lakebase_instance_name}" not in text
-    assert "${var.lakebase_database_name}" not in text
-    assert "${var.lakebase_pguser}" not in text
+    assert "${var.lakebase_instance_name}" in text
+    assert "${var.lakebase_database_name}" in text
+    assert "${var.lakebase_pguser}" in text
+    assert "mlflow-skinny>=2.20,<3.0" in text
 
 
 def test_app_resource_uses_only_supported_sql_warehouse_binding() -> None:
@@ -43,9 +47,20 @@ def test_wrapper_scripts_avoid_serverless_fragile_path_patterns() -> None:
         assert "raise SystemExit" not in text
 
 
-def test_lakebase_parameters_are_added_only_in_lakebase_targets() -> None:
+def test_bundle_declares_spark_refresh_job_variables() -> None:
     text = (REPO_ROOT / "databricks.yml").read_text()
 
-    assert "default: true" in text
+    assert "refresh_spark_version:" in text
+    assert "refresh_node_type_id:" in text
+    assert "refresh_num_workers:" in text
+    assert "refresh_timeout_seconds:" in text
     assert "warehouse_only" in text
-    assert text.count("--use-lakebase-read-model") == 2
+    assert "default: true" in text
+
+
+def test_project_dev_dependencies_include_local_spark_support() -> None:
+    payload = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+
+    dev_dependencies = payload["project"]["optional-dependencies"]["dev"]
+
+    assert "pyspark>=3.5,<4.0" in dev_dependencies

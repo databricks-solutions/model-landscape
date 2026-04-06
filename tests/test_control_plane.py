@@ -21,6 +21,7 @@ from model_lens.services.refresh_engine import (
     build_daily_quality_profile_rows,
 )
 from model_lens.services.refresh_runner import MonitorRefreshResult, RefreshCounts, run_refresh_cycle
+from model_lens.services.spark_refresh import SparkDailyProfiles
 from model_lens.services.table_names import TableNames
 
 
@@ -723,6 +724,43 @@ def test_append_refresh_result_replaces_window_scoped_incident_history_rows() ->
     assert any("INSERT INTO model_observability.control_plane.incident_history" in sql for sql, _ in warehouse.batch_calls)
 
 
+def test_append_refresh_result_clears_open_incidents_on_recovery_history() -> None:
+    warehouse = FakeWarehouse()
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    repository.append_refresh_result(
+        "payments_risk_v1",
+        RefreshResult(
+            drift_rows=[],
+            quality_rows=[],
+            performance_rows=[],
+            incident_rows=[],
+            incident_history_rows=[
+                {
+                    "model_key": "payments_risk_v1",
+                    "feature_name": "amount",
+                    "metric_name": "psi",
+                    "event_type": "recovered",
+                    "severity": "warning",
+                    "status": "closed",
+                    "metric_value": 0.0,
+                    "window_id": "window-1",
+                    "window_start": "2026-01-08",
+                    "window_end": "2026-01-14",
+                    "baseline_start": "2026-01-01",
+                    "baseline_end": "2026-01-07",
+                    "observed_at": "2026-01-14T00:00:00+00:00",
+                }
+            ],
+            quality_history_rows=[],
+            window_rows=[],
+        ),
+        source_run_id="run-1",
+    )
+
+    assert any("DELETE FROM model_observability.control_plane.incidents" in sql for sql, _ in warehouse.executed_params)
+
+
 def test_append_refresh_result_replaces_daily_profile_rows_by_profile_date() -> None:
     warehouse = FakeWarehouse()
     repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
@@ -1246,6 +1284,174 @@ def test_run_refresh_cycle_performance_repair_extends_range_for_baseline_lookbac
     assert repository.window_load_calls[0]["end_date"] == "2026-01-21"
 
 
+class SparkProfileRepository(BoundedWindowRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.spark_profile_calls: list[dict[str, object]] = []
+        self.spark_derivation_calls: list[dict[str, object]] = []
+
+    def build_daily_profiles(
+        self,
+        config: MonitorConfig,
+        *,
+        start_date: str,
+        end_date: str,
+        computed_at: str,
+        include_drift_quality: bool,
+        include_performance: bool,
+        existing_bin_specs: dict[str, tuple[float, ...]] | None = None,
+    ) -> SparkDailyProfiles:
+        self.spark_profile_calls.append({
+            "model_key": config.model_key,
+            "start_date": start_date,
+            "end_date": end_date,
+            "computed_at": computed_at,
+            "include_drift_quality": include_drift_quality,
+            "include_performance": include_performance,
+            "existing_bin_specs": existing_bin_specs or {},
+        })
+        range_frame = super().load_monitor_frame(
+            config,
+            start_date=start_date,
+            end_date=end_date,
+            feature_columns=config.contract.feature_columns,
+            sample_rows_per_day=settings.refresh_sample_rows_per_day,
+            max_total_rows=settings.refresh_max_rows_per_window,
+        )
+        return SparkDailyProfiles(
+            daily_quality_profile_rows=build_daily_quality_profile_rows(
+                config=config,
+                inference_df=range_frame,
+                computed_at=computed_at,
+            ),
+            daily_feature_profile_rows=build_daily_feature_profile_rows(
+                config=config,
+                inference_df=range_frame,
+                computed_at=computed_at,
+            ),
+            daily_performance_profile_rows=[],
+            performance_bin_specs=existing_bin_specs or {},
+        )
+
+    def derive_refresh_result_from_daily_profile_rows(
+        self,
+        *,
+        config: MonitorConfig,
+        metadata_list: list[dict[str, str]],
+        current_daily_quality_profile_rows: list[dict[str, object]],
+        current_daily_feature_profile_rows: list[dict[str, object]],
+        current_daily_performance_profile_rows: list[dict[str, object]],
+        derivation_start: str,
+        derivation_end: str,
+        computed_at: str,
+        prior_open_incidents: dict[tuple[str, str, str], dict[str, object]] | None = None,
+        include_drift_quality: bool = True,
+        include_performance: bool = True,
+    ) -> RefreshResult:
+        del prior_open_incidents
+        self.spark_derivation_calls.append({
+            "model_key": config.model_key,
+            "window_count": len(metadata_list),
+            "quality_rows": len(current_daily_quality_profile_rows),
+            "feature_rows": len(current_daily_feature_profile_rows),
+            "performance_rows": len(current_daily_performance_profile_rows),
+            "derivation_start": derivation_start,
+            "derivation_end": derivation_end,
+            "computed_at": computed_at,
+            "include_drift_quality": include_drift_quality,
+            "include_performance": include_performance,
+        })
+        metadata = metadata_list[-1]
+        return RefreshResult(
+            drift_rows=[{
+                "model_key": config.model_key,
+                "feature_name": "amount",
+                "metric_name": "psi",
+                "metric_value": 0.2,
+                "window_id": metadata["window_id"],
+                "window_start": metadata["window_start"],
+                "window_end": metadata["window_end"],
+                "baseline_start": metadata["baseline_start"],
+                "baseline_end": metadata["baseline_end"],
+                "ref_mean": 10.0,
+                "cur_mean": 12.0,
+                "ref_std": 1.0,
+                "cur_std": 1.5,
+                "ref_null_pct": 0.0,
+                "cur_null_pct": 0.0,
+                "ref_count": 10,
+                "cur_count": 10,
+                "computed_at": computed_at,
+            }],
+            quality_rows=[],
+            performance_rows=[],
+            incident_rows=[],
+            incident_history_rows=[],
+            quality_history_rows=[{
+                "model_key": config.model_key,
+                "window_id": metadata["window_id"],
+                "window_start": metadata["window_start"],
+                "window_end": metadata["window_end"],
+                "baseline_start": metadata["baseline_start"],
+                "baseline_end": metadata["baseline_end"],
+                "row_count": 20,
+                "prediction_mean": 0.4,
+                "prediction_std": 0.1,
+                "null_rates": json.dumps({"amount": 0.0, "segment": 0.0}),
+                "computed_at": computed_at,
+            }],
+            window_rows=[{
+                "window_id": metadata["window_id"],
+                "model_key": config.model_key,
+                "window_grain": metadata["window_grain"],
+                "window_start": metadata["window_start"],
+                "window_end": metadata["window_end"],
+                "baseline_start": metadata["baseline_start"],
+                "baseline_end": metadata["baseline_end"],
+                "baseline_kind": metadata["baseline_kind"],
+                "created_at": computed_at,
+            }],
+            daily_quality_profile_rows=[dict(row) for row in current_daily_quality_profile_rows],
+            daily_feature_profile_rows=[dict(row) for row in current_daily_feature_profile_rows],
+            daily_performance_profile_rows=[dict(row) for row in current_daily_performance_profile_rows],
+        )
+
+    def get_daily_quality_profile_rows(self, *args, **kwargs):
+        raise AssertionError("Spark derivation path should not load persisted daily quality rows through pandas")
+
+    def get_daily_feature_profile_rows(self, *args, **kwargs):
+        raise AssertionError("Spark derivation path should not load persisted daily feature rows through pandas")
+
+    def get_daily_performance_profile_rows(self, *args, **kwargs):
+        raise AssertionError("Spark derivation path should not load persisted daily performance rows through pandas")
+
+    def load_monitor_frame(
+        self,
+        config: MonitorConfig,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        feature_columns: tuple[str, ...] | None = None,
+        sample_rows_per_day: int | None = None,
+        max_total_rows: int | None = None,
+    ) -> pd.DataFrame:
+        raise AssertionError("Spark-backed refresh path should not load pandas source frames")
+
+
+def test_run_refresh_cycle_prefers_repository_spark_profiles_over_pandas_window_loads() -> None:
+    repository = SparkProfileRepository()
+
+    counts = run_refresh_cycle(repository, mode="auto")
+
+    assert counts.models == 1
+    assert len(repository.spark_profile_calls) == 1
+    assert len(repository.spark_derivation_calls) == 1
+    assert repository.spark_profile_calls[0]["start_date"] == "2025-10-11"
+    assert repository.spark_profile_calls[0]["end_date"] == "2026-01-21"
+    assert repository.spark_derivation_calls[0]["derivation_start"] == "2025-10-11"
+    assert repository.spark_derivation_calls[0]["derivation_end"] == "2026-01-21"
+
+
 class LabelSignaturePerformanceRepairRepository(PerformanceRepairRepository):
     def __init__(self) -> None:
         super().__init__()
@@ -1624,6 +1830,11 @@ class ParallelSchedulerRepository(BoundedWindowRepository):
         self.sync_calls += 1
 
 
+class SparkSerialSchedulerRepository(ParallelSchedulerRepository):
+    def recommended_max_parallel_refresh_workers(self) -> int:
+        return 1
+
+
 def test_run_refresh_cycle_scheduler_parallelizes_across_monitors_with_one_scope_each() -> None:
     repository = ParallelSchedulerRepository()
     original = settings.max_parallel_refresh_workers
@@ -1707,7 +1918,20 @@ def test_run_refresh_cycle_scheduler_isolates_unexpected_worker_failure_in_seria
     assert len(counts.results) == 3
     failure = next(result for result in counts.results if result.model_key == "payments_risk_v1")
     assert failure.status == "failed"
-    assert failure.error == "serial boom"
+
+
+def test_run_refresh_cycle_clamps_parallelism_when_repository_requests_serial_workers() -> None:
+    repository = SparkSerialSchedulerRepository()
+    original = settings.max_parallel_refresh_workers
+    object.__setattr__(settings, "max_parallel_refresh_workers", 3)
+    try:
+        counts = run_refresh_cycle(repository, mode="auto", scope="scheduler")
+    finally:
+        object.__setattr__(settings, "max_parallel_refresh_workers", original)
+
+    assert counts.models == 3
+    assert repository.fork_calls == 0
+    assert repository.max_parallel_start_calls == 1
 
 
 class FailingSourceRangeRepository(StubRepository):

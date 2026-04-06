@@ -15,7 +15,7 @@ It is built for teams that want an in-house alternative to external observabilit
 - let operators archive a monitor from the `Reference` page without losing history, restore an archived monitor later, or permanently delete the monitor and its stored history when cleanup is required
 - show recent incident lifecycle events in `Reference` so operators can inspect openings, escalations, and recoveries without leaving the current monitor context
 - backfill drift, quality, and performance window history on the first refresh so timelines are populated immediately
-- keep giant inference tables off the app memory hot path by using SQL-side source profiles plus projected, date-bounded, sampled window loads
+- keep giant inference tables off the app memory hot path by using Spark-backed exact source reads for refresh computation and only bounded pandas reads for small UI drilldowns
 - read Overview in bulk for large tenants by querying the latest drift and quality snapshots across all active monitors with explicit latest-row windowing instead of replaying full per-monitor history queries on page load
 - keep those bulk Overview reads Databricks-SQL-safe by explicitly aliasing derived tables instead of relying on permissive parser behavior
 - persist durable monitoring state in Unity Catalog Delta tables
@@ -38,7 +38,7 @@ Model Lens has three layers:
    - not the source of truth
 3. `Operator app + refresh workflow`
    - Databricks App for setup, onboarding, and investigation
-- one shared serverless refresh workflow for all active monitors, scheduled hourly by default
+- one shared Spark-capable refresh workflow for all active monitors, scheduled hourly by default
 - per-monitor cadence presets for drift and performance repair, stored in the control plane
 - monitor-level concurrency only inside the shared workflow, capped by `MAX_PARALLEL_REFRESH_WORKERS`
 - bundle-built wheel packaging for the workflow runtime
@@ -104,7 +104,7 @@ Current engine behavior:
 - later refreshes run in `auto` mode by default: they append new windows when history already exists and fall back to full backfill when the stored history no longer matches the current baseline configuration
 - every monitor now stores its own drift cadence, performance cadence, and runtime state so the shared hourly workflow can pick up only the monitors that are pending or overdue
 - `last_label_watermark` now stores an opaque freshness signature, not just a raw timestamp; for in-source labels it includes both the latest labeled timestamp and the non-null label count inside the repair horizon so late backfills on old rows still trigger performance repair
-- scheduled refreshes no longer read entire source tables into pandas by default; they fetch SQL-side summary profiles, then load one bounded projected refresh range with deterministic sampling caps, materialize daily quality/feature/performance profiles, and derive comparison-window history from those daily profiles instead of reloading every window from the warehouse
+- scheduled refreshes no longer read entire source tables into pandas by default; the shared workflow reads exact bounded source ranges with Spark, materializes daily quality/feature/performance profiles there, and derives comparison-window history from those daily profiles instead of reloading every window from the warehouse
 - if an external labels table is not unique on the join key, you must provide an `External Labels Order Column`
 - if a source table contains multiple `model_id` values, you must provide `Monitored Model ID Value`
 
@@ -114,25 +114,26 @@ Model Lens is now tuned to avoid straightforward OOM failures on very large infe
 
 Current protections:
 
-- scheduled refresh first reads a SQL aggregate profile for the bounded refresh range instead of loading the full source frame into pandas
-- each monitor scope then loads one bounded projected refresh range, not one warehouse query per comparison window
-- the workflow materializes `daily_quality_profiles`, `daily_feature_profiles`, and `daily_performance_profiles` from that bounded range and derives the persisted window/history tables from those daily profiles inside the same refresh pass
-- those bounded range loads use deterministic row caps so one very large day or one very wide table does not explode memory on the app or workflow worker
-- the shared workflow parallelizes across monitors, not across features, and caps concurrent monitor execution with a small worker pool so large tenants get more throughput without multiplying per-monitor memory spikes
+- the shared refresh workflow now runs on Spark-capable Databricks job compute rather than a serverless Python-only environment
+- scheduled refresh first reads date-range/profile metadata natively, then processes one exact bounded source range per monitor scope in Spark instead of loading raw source rows into pandas
+- the workflow materializes `daily_quality_profiles`, `daily_feature_profiles`, and `daily_performance_profiles` from that Spark range and derives the persisted window/history tables from those daily profiles inside the same refresh pass
+- the shared Spark workflow now defaults to serial monitor execution inside the driver even if the global worker cap is higher; that avoids running multiple large monitor Spark jobs through one shared session unless an operator deliberately overrides it
 - feature deep-dive charts no longer reread the full source table when daily feature samples are available; they read sampled values from `daily_feature_profiles` first and only fall back to a bounded raw load when needed
 - when a feature/detail fallback still needs raw rows, the app now loads only the latest current comparison window for prediction and dimension views instead of rereading the full baseline+current span
 - raw current-window fallbacks now treat `window_end` as inclusive through the end of that calendar day, so same-day rows are not dropped when the lightweight repository path is used
-- non-bootstrap refreshes now merge the current run’s daily profiles with already-persisted daily facts for the affected derivation span, so recomputed windows can reuse prior baseline/profile history instead of depending entirely on the current bounded load
-- numeric drift now keeps finite PSI / JS / KL values even when the current distribution moves completely outside the reference-derived range, instead of degrading into runtime warnings or `NaN`
+- non-bootstrap refreshes now merge the current run’s daily profiles with already-persisted daily facts for the affected derivation span inside the Spark repository layer, so recomputed windows no longer depend on Python-side list merges of those daily rows
+- when the Spark repository is active, the workflow also persists `comparison_windows`, `drift_metrics`, `quality_history`, `performance_metrics`, `daily_*` facts, `performance_bin_specs`, `incidents`, and `incident_history` through Spark/Delta writes instead of row-batch warehouse inserts
+- numeric drift now keeps finite PSI / JS / KL values even when the current distribution moves completely outside the reference-derived range, and those histogram calculations now run in Spark from persisted daily numeric histogram edges/counts instead of flattened sample arrays
+- incident open/recovered/escalated lifecycle rows for the Spark workflow are now also derived inside the Spark repository layer before persistence, so the shared refresh job no longer needs the old Python incident helper on the hot path
 
 Relevant runtime knobs:
 
 - `REFRESH_SAMPLE_ROWS_PER_DAY`
   default `50000`
-  cap rows sampled per calendar day for a refresh-window load
+  legacy/compatibility cap for pandas-based raw range fallbacks; no longer used by the Spark refresh workflow
 - `REFRESH_MAX_ROWS_PER_WINDOW`
   default `250000`
-  hard cap for the total sampled rows loaded into pandas for one refresh window
+  legacy/compatibility cap for pandas-based raw range fallbacks; no longer used by the Spark refresh workflow
 - `FEATURE_DETAIL_SAMPLE_ROWS_PER_DAY`
   default `50000`
   cap rows sampled per calendar day for feature-investigation reads
@@ -144,14 +145,14 @@ Relevant runtime knobs:
   stale-run timeout used by the shared scheduler to mark abandoned `running` rows failed before selecting new due monitors
 - `MAX_PARALLEL_REFRESH_WORKERS`
   default `2`
-  cap for concurrent monitor refreshes inside the shared job; the scheduler still keeps one scope per model per run (`bootstrap` before `drift_quality` before `performance_repair`)
+  global cap for concurrent monitor refreshes inside the shared job; the Spark refresh repository currently clamps itself to `1` worker by default so a single Spark driver session is not shared across multiple active monitor threads
 
 Operational guidance:
 
 - start with the defaults
 - if a customer has exceptionally wide or high-volume tables, lower the row caps before increasing compute size
-- increase `MAX_PARALLEL_REFRESH_WORKERS` only after the row caps are already safe for that tenant, because throughput scales at the monitor level while pandas memory still scales inside each active worker
-- the next scale step is reusing already-persisted daily facts across even more readback paths and cross-run recompute flows; the current shipping implementation already merges persisted daily facts into incremental derivation for affected spans and uses daily-feature samples in readback, while the UI still reads the stable window/history tables
+- increase `MAX_PARALLEL_REFRESH_WORKERS` only after validating a dedicated Spark cluster shape for that tenant, and treat Spark-side monitor fanout as an explicit override rather than the default large-tenant mode
+- the next scale step is reusing already-persisted daily facts across even more readback paths and cross-run recompute flows; the current shipping implementation already merges persisted daily facts into Spark-backed incremental derivation for affected spans and uses daily-feature samples in readback, while the UI still reads the stable window/history tables
 
 Discovery priorities:
 
@@ -183,7 +184,8 @@ You need all of the following in the target Databricks workspace:
 
 - Databricks CLI auth configured
 - one SQL warehouse for Model Lens reads and writes
-- serverless jobs enabled
+- privileges to create and run a Spark-capable Databricks workflow job
+- an approved Databricks node type for the shared refresh cluster
 - permissions to deploy Databricks Asset Bundles and Databricks Apps
 - permissions to write into an existing or pre-approved Unity Catalog namespace for the control plane
 - enough shared-job capacity for the number of monitors you plan to keep active at once; cadence is per monitor, but the default deployment still uses one shared workflow
@@ -193,6 +195,17 @@ You need all of the following in the target Databricks workspace:
   - the target Lakebase database if using Lakebase mode
 
 If you use Lakebase mode, the scheduled refresh job also needs to be able to connect to Lakebase. In practice, that means the job identity must be allowed to mint database credentials and connect to the target Lakebase database.
+
+The default bundle/job-cluster settings for the shared refresh workflow are now:
+
+- `refresh_spark_version`
+  default `"15.4.x-scala2.12"`
+- `refresh_node_type_id`
+  required workspace-specific node type
+- `refresh_num_workers`
+  default `4`
+- `refresh_timeout_seconds`
+  default `14400`
 
 For the app itself, you can enable Lakebase-backed reads in either of these ways:
 
@@ -290,12 +303,14 @@ python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
 databricks bundle validate \
   -t warehouse_only \
   --var "sql_warehouse_id=<sql-warehouse-id>" \
+  --var "refresh_node_type_id=<spark-node-type-id>" \
   --var "control_plane_catalog=<control-plane-catalog>" \
   --var "control_plane_schema=<control-plane-schema>"
 
 databricks bundle deploy \
   -t warehouse_only \
   --var "sql_warehouse_id=<sql-warehouse-id>" \
+  --var "refresh_node_type_id=<spark-node-type-id>" \
   --var "control_plane_catalog=<control-plane-catalog>" \
   --var "control_plane_schema=<control-plane-schema>"
 
@@ -306,6 +321,8 @@ databricks apps deploy model-lens \
 
 databricks apps get model-lens
 ```
+
+Local Spark regressions now run under the normal `pytest` suite. For local execution outside Databricks, install the repo dev dependencies so `pyspark` is available; the Spark-specific tests still skip automatically when no local Java runtime is present.
 
 Then explicitly verify the app service principal still has warehouse access. The safest flow is:
 
@@ -337,6 +354,7 @@ python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
 databricks bundle validate \
   -t dev \
   --var "sql_warehouse_id=<sql-warehouse-id>" \
+  --var "refresh_node_type_id=<spark-node-type-id>" \
   --var "control_plane_catalog=<control-plane-catalog>" \
   --var "control_plane_schema=<control-plane-schema>" \
   --var "lakebase_instance_name=<lakebase-instance-name>" \
@@ -346,6 +364,7 @@ databricks bundle validate \
 databricks bundle deploy \
   -t dev \
   --var "sql_warehouse_id=<sql-warehouse-id>" \
+  --var "refresh_node_type_id=<spark-node-type-id>" \
   --var "control_plane_catalog=<control-plane-catalog>" \
   --var "control_plane_schema=<control-plane-schema>" \
   --var "lakebase_instance_name=<lakebase-instance-name>" \
@@ -455,7 +474,7 @@ Implemented now:
 - app-session Lakebase enablement via workspace setup fields
 - modular multi-page Dash frontend with a staged onboarding wizard, shared components, and route-based navigation
 - app-driven setup, onboarding, and refresh
-- serverless refresh workflow
+- Spark-capable shared refresh workflow
 - true labels can come either from the inference table itself or from an optional external labels table
 - external labels joins with explicit dedupe support, including shared join-column reuse when the same key exists in both inference and labels tables
 - hyphenated Databricks column names supported through backtick-quoted SQL identifiers
@@ -468,7 +487,7 @@ Still intentionally limited:
 - slice-level UI rollups
 - alert delivery integrations
 - full incident lifecycle with acknowledge / resolve / history
-- deriving the current drift/performance window tables directly from daily profile facts; the current implementation persists those daily facts as a foundation but still computes the UI-facing window tables in the refresh pass
+- the UI still reads the stable window/history tables rather than querying the daily-fact layer directly for every page
 
 ## Positioning
 

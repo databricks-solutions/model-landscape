@@ -44,6 +44,42 @@ def _safe_json_list(value: object) -> list[float]:
     return numeric
 
 
+def _approximate_histogram_values(
+    edges: list[float],
+    counts: list[float],
+    *,
+    max_points: int = 256,
+) -> list[float]:
+    if len(edges) < 2 or len(counts) != len(edges) - 1:
+        return []
+    positive_bins = [
+        (index, max(float(count), 0.0))
+        for index, count in enumerate(counts)
+        if float(count) > 0
+    ]
+    if not positive_bins:
+        return []
+    total = sum(count for _, count in positive_bins)
+    if total <= 0:
+        return []
+    values: list[float] = []
+    allocated = 0
+    for index, count in positive_bins:
+        left = float(edges[index])
+        right = float(edges[index + 1])
+        midpoint = (left + right) / 2.0
+        share = max(1, int(round((count / total) * max_points)))
+        remaining = max_points - allocated
+        repeats = min(share, max(remaining, 0))
+        if repeats <= 0:
+            continue
+        values.extend([midpoint] * repeats)
+        allocated += repeats
+        if allocated >= max_points:
+            break
+    return values
+
+
 def _safe_float(value: object) -> float:
     numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
     if pd.isna(numeric):
@@ -712,6 +748,11 @@ class DashboardBackend:
             profile_date = str(row.get("profile_date") or "")
             payload = _safe_json_dict(row.get("distribution_json"))
             sample_values = _safe_json_list(payload.get("sample_values"))
+            if not sample_values:
+                sample_values = _approximate_histogram_values(
+                    _safe_json_list(payload.get("edges")),
+                    _safe_json_list(payload.get("counts")),
+                )
             if not sample_values:
                 continue
             if baseline_start <= profile_date <= baseline_end:

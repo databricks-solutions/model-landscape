@@ -19,6 +19,7 @@ from model_lens.services.refresh_engine import (
     derive_refresh_result_from_daily_profiles,
     generate_window_metadata,
 )
+from model_lens.services.spark_refresh import SparkDailyProfiles
 
 
 RefreshScope = Literal["scheduler", "bootstrap", "drift_quality", "performance_repair"]
@@ -708,6 +709,77 @@ def _load_window_frame(
                 return repository.load_monitor_frame(config)
 
 
+def _build_range_daily_profiles(
+    repository: ControlPlaneRepository,
+    config: MonitorConfig,
+    *,
+    range_start: str,
+    range_end: str,
+    computed_at: str,
+    include_drift_quality: bool,
+    include_performance: bool,
+    existing_bin_specs: dict[str, tuple[float, ...]] | None = None,
+) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]], dict[str, tuple[float, ...]]]:
+    if hasattr(repository, "build_daily_profiles"):
+        spark_profiles = repository.build_daily_profiles(
+            config,
+            start_date=range_start,
+            end_date=range_end,
+            computed_at=computed_at,
+            include_drift_quality=include_drift_quality,
+            include_performance=include_performance,
+            existing_bin_specs=existing_bin_specs,
+        )
+        if isinstance(spark_profiles, SparkDailyProfiles):
+            return (
+                list(spark_profiles.daily_quality_profile_rows),
+                list(spark_profiles.daily_feature_profile_rows),
+                list(spark_profiles.daily_performance_profile_rows),
+                dict(spark_profiles.performance_bin_specs),
+            )
+    range_frame = _load_window_frame(
+        repository,
+        config,
+        range_start=range_start,
+        range_end=range_end,
+    )
+    daily_quality_profile_rows = (
+        build_daily_quality_profile_rows(config=config, inference_df=range_frame, computed_at=computed_at)
+        if include_drift_quality
+        else []
+    )
+    daily_feature_profile_rows = (
+        build_daily_feature_profile_rows(config=config, inference_df=range_frame, computed_at=computed_at)
+        if include_drift_quality
+        else []
+    )
+    performance_bin_specs = (
+        build_performance_bin_specs(
+            config=config,
+            inference_df=range_frame,
+            existing_specs=existing_bin_specs,
+        )
+        if include_performance
+        else {}
+    )
+    daily_performance_profile_rows = (
+        build_daily_performance_profile_rows(
+            config=config,
+            inference_df=range_frame,
+            computed_at=computed_at,
+            bin_specs=performance_bin_specs,
+        )
+        if include_performance
+        else []
+    )
+    return (
+        daily_quality_profile_rows,
+        daily_feature_profile_rows,
+        daily_performance_profile_rows,
+        performance_bin_specs,
+    )
+
+
 def _execute_target(
     repository: ControlPlaneRepository,
     target: RefreshTarget,
@@ -878,48 +950,32 @@ def _execute_target(
         include_drift_quality = target.scope != "performance_repair"
         include_performance = target.scope != "drift_quality"
         computed_at_text = _utc_now().isoformat(timespec="seconds")
-        range_frame = _load_window_frame(
-            repository,
-            config,
-            range_start=range_start or bounded_min_date or data_min_date or bounded_max_date,
-            range_end=range_end or bounded_max_date,
-        )
         quality_rows = (
             build_quality_rows_from_profile(config=config, profile=profile, computed_at=computed_at_text)
             if include_drift_quality
             else []
         )
-        daily_quality_profile_rows = (
-            build_daily_quality_profile_rows(config=config, inference_df=range_frame, computed_at=computed_at_text)
-            if include_drift_quality
-            else []
+        existing_bin_specs = (
+            repository.get_performance_bin_specs(config.model_key)
+            if (include_drift_quality or include_performance)
+            and hasattr(repository, "get_performance_bin_specs")
+            and target.scope != "bootstrap"
+            else {}
         )
-        daily_feature_profile_rows = (
-            build_daily_feature_profile_rows(config=config, inference_df=range_frame, computed_at=computed_at_text)
-            if include_drift_quality
-            else []
-        )
-        performance_bin_specs: dict[str, tuple[float, ...]] = {}
-        if include_performance:
-            existing_bin_specs = (
-                repository.get_performance_bin_specs(config.model_key)
-                if hasattr(repository, "get_performance_bin_specs") and target.scope != "bootstrap"
-                else {}
-            )
-            performance_bin_specs = build_performance_bin_specs(
-                config=config,
-                inference_df=range_frame,
-                existing_specs=existing_bin_specs,
-            )
-        daily_performance_profile_rows = (
-            build_daily_performance_profile_rows(
-                config=config,
-                inference_df=range_frame,
-                computed_at=computed_at_text,
-                bin_specs=performance_bin_specs,
-            )
-            if include_performance
-            else []
+        (
+            daily_quality_profile_rows,
+            daily_feature_profile_rows,
+            daily_performance_profile_rows,
+            performance_bin_specs,
+        ) = _build_range_daily_profiles(
+            repository,
+            config,
+            range_start=range_start or bounded_min_date or data_min_date or bounded_max_date,
+            range_end=range_end or bounded_max_date,
+            computed_at=computed_at_text,
+            include_drift_quality=include_drift_quality,
+            include_performance=include_performance,
+            existing_bin_specs=existing_bin_specs,
         )
         derivation_start = min(
             [str(metadata["baseline_start"]) for metadata in metadata_list],
@@ -929,42 +985,57 @@ def _execute_target(
             [str(metadata["window_end"]) for metadata in metadata_list],
             default=range_end or bounded_max_date or data_max_date or derivation_start,
         )
-        merged_daily_quality_rows = list(daily_quality_profile_rows)
-        merged_daily_feature_rows = list(daily_feature_profile_rows)
-        merged_daily_performance_rows = list(daily_performance_profile_rows)
-        if target.scope != "bootstrap" and derivation_start and derivation_end:
-            persisted_quality_rows, persisted_feature_rows, persisted_performance_rows = _load_persisted_daily_rows(
-                repository,
-                config,
-                start_date=derivation_start,
-                end_date=derivation_end,
+        if hasattr(repository, "derive_refresh_result_from_daily_profile_rows"):
+            derived_result = repository.derive_refresh_result_from_daily_profile_rows(
+                config=config,
+                metadata_list=metadata_list,
+                current_daily_quality_profile_rows=daily_quality_profile_rows,
+                current_daily_feature_profile_rows=daily_feature_profile_rows,
+                current_daily_performance_profile_rows=daily_performance_profile_rows,
+                derivation_start=derivation_start,
+                derivation_end=derivation_end,
+                computed_at=computed_at_text,
+                prior_open_incidents=repository.get_current_incident_state(config.model_key),
+                include_drift_quality=include_drift_quality,
+                include_performance=include_performance,
             )
-            merged_daily_quality_rows = _merge_daily_rows(
-                persisted_quality_rows,
-                daily_quality_profile_rows,
-                key_fields=("profile_date",),
+        else:
+            merged_daily_quality_rows = list(daily_quality_profile_rows)
+            merged_daily_feature_rows = list(daily_feature_profile_rows)
+            merged_daily_performance_rows = list(daily_performance_profile_rows)
+            if target.scope != "bootstrap" and derivation_start and derivation_end:
+                persisted_quality_rows, persisted_feature_rows, persisted_performance_rows = _load_persisted_daily_rows(
+                    repository,
+                    config,
+                    start_date=derivation_start,
+                    end_date=derivation_end,
+                )
+                merged_daily_quality_rows = _merge_daily_rows(
+                    persisted_quality_rows,
+                    daily_quality_profile_rows,
+                    key_fields=("profile_date",),
+                )
+                merged_daily_feature_rows = _merge_daily_rows(
+                    persisted_feature_rows,
+                    daily_feature_profile_rows,
+                    key_fields=("profile_date", "feature_name"),
+                )
+                merged_daily_performance_rows = _merge_daily_rows(
+                    persisted_performance_rows,
+                    daily_performance_profile_rows,
+                    key_fields=("profile_date", "feature_name", "bin_label", "metric_name"),
+                )
+            derived_result = derive_refresh_result_from_daily_profiles(
+                config=config,
+                metadata_list=metadata_list,
+                daily_quality_profile_rows=merged_daily_quality_rows,
+                daily_feature_profile_rows=merged_daily_feature_rows,
+                daily_performance_profile_rows=merged_daily_performance_rows,
+                computed_at=computed_at_text,
+                prior_open_incidents=repository.get_current_incident_state(config.model_key),
+                include_drift_quality=include_drift_quality,
+                include_performance=include_performance,
             )
-            merged_daily_feature_rows = _merge_daily_rows(
-                persisted_feature_rows,
-                daily_feature_profile_rows,
-                key_fields=("profile_date", "feature_name"),
-            )
-            merged_daily_performance_rows = _merge_daily_rows(
-                persisted_performance_rows,
-                daily_performance_profile_rows,
-                key_fields=("profile_date", "feature_name", "bin_label", "metric_name"),
-            )
-        derived_result = derive_refresh_result_from_daily_profiles(
-            config=config,
-            metadata_list=metadata_list,
-            daily_quality_profile_rows=merged_daily_quality_rows,
-            daily_feature_profile_rows=merged_daily_feature_rows,
-            daily_performance_profile_rows=merged_daily_performance_rows,
-            computed_at=computed_at_text,
-            prior_open_incidents=repository.get_current_incident_state(config.model_key),
-            include_drift_quality=include_drift_quality,
-            include_performance=include_performance,
-        )
 
         if not any((derived_result.drift_rows, quality_rows, derived_result.performance_rows, derived_result.incident_rows, derived_result.window_rows)):
             repository.complete_refresh_run(run_id, status="skipped", error_message="No comparable windows available.")
@@ -1079,6 +1150,12 @@ def run_refresh_cycle(
     targets = _select_targets(repository, configs, model_key=model_key, scope=scope)
 
     max_workers = max(1, settings.max_parallel_refresh_workers)
+    recommended_worker_cap = getattr(repository, "recommended_max_parallel_refresh_workers", None)
+    if callable(recommended_worker_cap):
+        try:
+            max_workers = min(max_workers, max(1, int(recommended_worker_cap())))
+        except Exception:
+            max_workers = 1
     results: list[MonitorRefreshResult] = []
     if len(targets) <= 1 or max_workers <= 1 or not hasattr(repository, "fork_for_worker"):
         for target in targets:
