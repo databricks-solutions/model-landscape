@@ -53,6 +53,12 @@ class WorkspaceReadiness:
     warnings: tuple[str, ...] = ()
 
 
+def run_now_permission_guidance(job_id: int | None) -> str | None:
+    if job_id is None:
+        return None
+    return f"Grant the app service principal CAN_MANAGE_RUN on job {int(job_id)}."
+
+
 def _clean(value: object) -> str:
     if value is None:
         return ""
@@ -251,6 +257,10 @@ def resolve_refresh_workflow_status(workspace_client=None) -> RefreshWorkflowSta
     run_now_available, run_now_warning = _direct_run_now_permission(client, int(job_id))
     if run_now_warning:
         warnings.append(run_now_warning)
+    if run_now_available is not True:
+        guidance = run_now_permission_guidance(int(job_id))
+        if guidance:
+            warnings.append(guidance)
 
     return RefreshWorkflowStatus(
         configured=True,

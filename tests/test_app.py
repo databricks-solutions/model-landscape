@@ -561,7 +561,10 @@ def test_validate_workspace_wiring_callback_renders_readiness_card(monkeypatch) 
             "run_now_available": None,
             "lakebase_ready": True,
             "blocking_issues": [],
-            "warnings": ["Could not confirm immediate Run now permission; scheduler-only mode assumed."],
+            "warnings": [
+                "Could not confirm immediate Run now permission; scheduler-only mode assumed.",
+                "Grant the app service principal CAN_MANAGE_RUN on job 123.",
+            ],
         },
     )
     app = create_app()
@@ -579,7 +582,20 @@ def test_validate_workspace_wiring_callback_renders_readiness_card(monkeypatch) 
 
     assert "Workspace Readiness" in str(result[0])
     assert "scheduler-only mode" in str(result[0]).lower()
+    assert "Grant CAN_MANAGE_RUN on job 123" in str(result[0])
     assert result[1]["overall_mode"] == "scheduler_only"
+
+
+def test_refresh_job_unavailable_message_includes_explicit_grant_for_configured_job_id(monkeypatch) -> None:
+    monkeypatch.setattr(
+        callbacks_module,
+        "settings",
+        SimpleNamespace(refresh_job_id="321"),
+    )
+
+    message = callbacks_module._refresh_job_unavailable_message("fraud_model_demo", RuntimeError("permission denied"))
+
+    assert "Grant the app service principal CAN_MANAGE_RUN on job 321." in message
 
 
 def test_performance_metric_selector_uses_monitor_configured_metrics(monkeypatch) -> None:

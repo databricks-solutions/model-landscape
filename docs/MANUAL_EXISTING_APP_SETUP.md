@@ -593,6 +593,7 @@ If Setup should create missing objects from the UI, also grant:
 Important:
 
 - `CAN MANAGE RUN` is required because onboarding triggers the initial refresh asynchronously
+- if the generated `app.yaml` sets `REFRESH_JOB_ID`, grant `CAN_MANAGE_RUN` on that exact job ID; the Setup readiness card now points to that concrete grant when immediate bootstrap is unavailable
 - the app identity triggers the job
 - the job's Run as identity performs the actual refresh work
 
@@ -685,6 +686,8 @@ Check:
 - `REFRESH_JOB_ID` or `REFRESH_JOB_NAME` is set correctly
 - the app service principal has `CAN MANAGE RUN` on the refresh job
 - if using `REFRESH_JOB_NAME`, the configured value matches the real deployed workflow name for this app
+
+If `REFRESH_JOB_ID` is set and the app still reports scheduler-only mode, the expected operator fix is explicit: grant the app service principal `CAN_MANAGE_RUN` on that job ID.
 
 If `CAN MANAGE RUN` is intentionally unavailable, the app can still save the monitor and the shared hourly job can pick it up on its next run, but only if that workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`. In that operating mode, treat the missing `Run now` permission as lost acceleration, not lost functionality.
 

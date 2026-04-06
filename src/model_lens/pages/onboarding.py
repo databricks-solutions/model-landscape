@@ -61,6 +61,7 @@ def _workspace_step(form_style: dict) -> dbc.Row:
                                                     ),
                                                     html.Li(
                                                         "App service principal: CAN MANAGE RUN on the refresh workflow "
+                                                        "(or CAN_MANAGE_RUN on REFRESH_JOB_ID when you wire by job ID) "
                                                         "so activation can trigger the first refresh asynchronously."
                                                     ),
                                                     html.Li(

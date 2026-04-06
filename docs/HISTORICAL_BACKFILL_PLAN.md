@@ -15,11 +15,13 @@ Current local implementation status:
 - the shared refresh workflow now runs on Spark-capable Databricks job compute, with exact bounded source reads, Spark-built daily fact rows, Spark-side affected-span derivation, and Spark/Delta persistence for the derived metric tables
 - numeric drift PSI / KL / JS for the Spark workflow now runs in Spark from persisted daily numeric histogram edges/counts instead of collecting per-window sample arrays back into Python
 - incident open/recovered/escalated history for the Spark workflow is now derived inside the Spark repository layer as well, leaving only the lightweight app/query side on the Python path
+- the remaining Python-side row packaging on the Spark hot path is reduced to streamed iterator formatting of already-aggregated outputs rather than whole-frame `collect()` calls for main drift/performance/quality-history derivation
+- daily per-day feature statistics are now batched across numeric features and across categorical features before the remaining per-feature histogram/top-N distribution work, which lowers wide-monitor Spark job churn compared with the earlier one-feature-at-a-time stats scans
 
 The remaining work in this document is now primarily:
 
 - incident-history readback/product surfaces in the app
-- any later normalization or UI features that build on the recorded window/run provenance
+- wide-monitor Spark efficiency improvements and any later normalization/UI features that build on the recorded window/run provenance
 
 ## Remaining Problem
 

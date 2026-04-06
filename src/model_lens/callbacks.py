@@ -30,6 +30,7 @@ from model_lens.services.inference_contracts import build_inference_contract
 from model_lens.services.onboarding import baseline_label, build_default_baseline, build_fixed_baseline
 from model_lens.services.refresh_jobs import (
     is_refresh_job_configuration_error,
+    run_now_permission_guidance,
     trigger_refresh_job,
     validate_workspace_readiness,
     workspace_readiness_payload,
@@ -71,6 +72,15 @@ def _status_alert(message: str, color: str = "info") -> dbc.Alert:
     return dbc.Alert(message, color=color, className="py-2 mb-3")
 
 
+def _configured_run_now_permission_hint() -> str:
+    configured_job_id = str(getattr(settings, "refresh_job_id", "") or "").strip()
+    if configured_job_id.isdigit():
+        guidance = run_now_permission_guidance(int(configured_job_id))
+        if guidance:
+            return f" {guidance}"
+    return ""
+
+
 def _setup_retry_message(error: object) -> str:
     return f"Setup failed. Fix the issue and click Setup Control Plane again to retry. Details: {error}"
 
@@ -88,6 +98,7 @@ def _refresh_job_unavailable_message(model_key: str, error: Exception) -> str:
     return (
         f"Saved monitor {model_key}. Initial refresh is pending on the shared refresh job; automatic trigger was unavailable: {error}. "
         "The shared workflow can still pick it up on its next hourly run, or you can run it manually once job permissions are fixed."
+        f"{_configured_run_now_permission_hint()}"
     )
 
 
@@ -104,6 +115,7 @@ def _manual_refresh_unavailable_message(model_key: str, error: Exception) -> str
     return (
         f"Could not trigger the initial refresh for {model_key}: {error}. "
         "The shared workflow can still pick it up on its next hourly run once job permissions are fixed."
+        f"{_configured_run_now_permission_hint()}"
     )
 
 
@@ -388,6 +400,8 @@ def _render_workspace_readiness(readiness_state: dict | None) -> html.Div:
     run_now_available = readiness.get("run_now_available")
     if run_now_available is True:
         immediate_text = "Available"
+    elif resolved_id is not None:
+        immediate_text = f"Grant CAN_MANAGE_RUN on job {resolved_id}"
     elif readiness.get("scheduler_path_available"):
         immediate_text = "Scheduler only"
     else:

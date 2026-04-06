@@ -107,6 +107,7 @@ Expected result:
 - bundle validation passes
 
 Note: the local test suite now includes Spark-refresh regressions. Run it from an environment with the repo dev dependencies installed so `pyspark` is available; the Spark-specific tests still skip automatically when no local Java runtime is present.
+For large-tenant rollout, treat those local skipped tests as insufficient proof by themselves; the real release gate is successful Databricks Spark execution for bootstrap and incremental runs.
 
 ## Step 2: Create Scratch Data
 
@@ -186,6 +187,7 @@ Check immediately:
 - `SQL_WAREHOUSE_ID` is populated
 - `REFRESH_JOB_ID` is populated or `REFRESH_JOB_NAME` matches the deployed workflow name
 - if `REFRESH_JOB_ID` is blank, confirm you intentionally rely on name lookup; `REFRESH_JOB_ID` is safer for repeated customer deployments
+- if `REFRESH_JOB_ID` is populated and the setup card shows `Grant CAN_MANAGE_RUN on job <id>`, grant the app service principal `CAN_MANAGE_RUN` on that job before expecting immediate bootstrap from the UI
 - `USE_LAKEBASE_READ_MODEL` is `false`
 - `Control Plane Catalog` and `Control Plane Schema` show the namespace you want to use
 - if Lakebase exists in the workspace and is visible to the app identity, an informational banner recommends Lakebase
@@ -340,6 +342,7 @@ Expected result:
 - with the scratch dataset and `Baseline Days = 7`, you should have 8 daily comparison windows immediately
 - for very large real-world tables, the first run should use one exact bounded Spark source-range load per monitor scope, persist daily facts and affected derived windows through Spark/Delta writes, and reserve the configured sampling caps for UI/detail fallbacks rather than core refresh correctness
 - for multi-monitor tenants, the shared job should still avoid two scopes for the same model in one scheduler pass; the Spark refresh repository now defaults to serial monitor execution inside the driver unless you deliberately override the worker cap for that workspace
+- for very wide monitors, watch runtime and cluster pressure carefully because the remaining main scale cost is per-feature Spark work, not pandas raw-frame loading
 - `quality_metrics` should remain model-wide because the workflow rebuilds it from all persisted `daily_quality_profiles`, not only from the bounded refresh slice
 - `performance_bin_specs` should be created for numeric performance features so later repair runs reuse the same bucket edges
 - if labels come from the inference table itself, performance repair should track an opaque label-freshness signature instead of only the max event timestamp

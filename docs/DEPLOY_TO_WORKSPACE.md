@@ -55,6 +55,8 @@ If you override `app_name`, replace the app name in every `databricks apps ...` 
 - set `REFRESH_JOB_ID=<job-id>` before `databricks apps deploy`, or
 - set `REFRESH_JOB_NAME=<app-name>-refresh`
 
+Keep the checked-in `app.yaml` template environment-neutral. Set `REFRESH_JOB_ID` in the deployed app source for each workspace, but do not commit a real workspace job ID back into the repo template.
+
 If no shared refresh workflow exists in the workspace yet, onboarding can still save the monitor config, but no scheduled pickup can happen until that shared workflow is created and the app points at it.
 
 ## Permission Matrix
@@ -153,6 +155,8 @@ databricks bundle validate \
 
 The local test suite now includes Spark-refresh regressions. Run it from an environment with the repo dev dependencies installed so `pyspark` is present; those Spark-specific tests still skip automatically when no local Java runtime is available.
 
+Because the shared refresh workflow now runs on a Spark job cluster, `refresh_node_type_id` is mandatory even for `warehouse_only`.
+
 Lakebase-enabled:
 
 ```bash
@@ -175,9 +179,12 @@ Expected result:
 - bundle validation succeeds
 - the wheel build succeeds and the bundle can resolve `../dist/*.whl` plus the Spark job-cluster libraries for the shared refresh workflow
 
+If local bundle validation fails with a repo-local `.databricks/bundle` permission error, fix or remove that local bundle directory and rerun. That is a workstation ownership issue, not a Model Lens bundle contract issue.
+
 Before calling the build broadly customer-ready, run these focused workspace release gates in addition to the local validation above:
 
 - open Overview with at least two active monitors and confirm the bulk latest-quality/latest-drift queries render normally in a real Databricks workspace
+- run at least one real Spark bootstrap and one incremental Spark refresh in Databricks; local skipped Spark tests are not enough proof for 20M-100M/day tenants
 - force a severe numeric drift case where the latest current window sits fully outside the baseline range and confirm Drift still shows finite PSI / JS / KL values instead of blanks or warnings
 - open feature detail and prediction detail on a window whose newest rows land later in the `window_end` day and confirm those same-day rows are still included
 
@@ -257,6 +264,7 @@ Then grant the app identity all of the following:
 
 Treat the warehouse grant as a post-deploy check, not a one-time assumption. After every `databricks apps start model-lens` + `databricks apps deploy model-lens ...` cycle, verify the same app identity still has `CAN_USE` on the configured SQL warehouse and regrant it if the app shows warehouse-access errors.
 If you want the app to accelerate onboarding with `Run now`, also verify `CAN MANAGE RUN` on the refresh workflow. If that permission is unavailable, the shared hourly job still remains the default pickup path only if that workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`.
+If `REFRESH_JOB_ID` is set, use that exact job as the permission target and grant the app service principal `CAN_MANAGE_RUN` on job `<REFRESH_JOB_ID>`.
 
 For large-table customers, also verify that the deployed app and shared refresh workflow configuration include the intended readback/fallback settings:
 
@@ -303,6 +311,8 @@ Expected readiness modes:
 
 - `fully_ready`: the app can save monitors and trigger bootstrap immediately
 - `scheduler_only`: the app can save monitors and rely on the scheduled shared workflow pickup path
+
+When the readiness card shows `Immediate Bootstrap: Grant CAN_MANAGE_RUN on job <id>`, the workflow wiring is fine and the missing step is the Databricks job permission grant for the app service principal.
 
 If the readiness card stays `not ready`, onboarding is intentionally blocked until the shared workflow wiring is fixed.
 

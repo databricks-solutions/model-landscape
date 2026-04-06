@@ -420,6 +420,60 @@ def test_validate_workspace_readiness_reports_scheduler_only_when_run_now_is_unc
     assert readiness.scheduler_path_available is True
     assert readiness.run_now_available is None
     assert any("scheduler-only mode assumed" in warning for warning in readiness.warnings)
+    assert any("CAN_MANAGE_RUN on job 321" in warning for warning in readiness.warnings)
+
+
+def test_validate_workspace_readiness_reports_explicit_run_now_grant_when_manage_run_is_missing(monkeypatch) -> None:
+    monkeypatch.setattr(
+        refresh_jobs,
+        "settings",
+        SimpleNamespace(
+            sql_warehouse_id="wh-123",
+            refresh_job_id="321",
+            refresh_job_name="model-lens-refresh",
+            lakebase_instance_name="",
+            lakebase_database_name="",
+            lakebase_host="",
+            lakebase_port=5432,
+            lakebase_pguser="",
+            lakebase_sslmode="require",
+            lakebase_schema="model_lens_ui",
+        ),
+    )
+
+    fake_job = SimpleNamespace(
+        job_id=321,
+        settings=SimpleNamespace(
+            name="model-lens-refresh",
+            schedule=SimpleNamespace(pause_status="UNPAUSED"),
+            trigger=None,
+            continuous=None,
+            queue=SimpleNamespace(enabled=True),
+            max_concurrent_runs=1,
+        ),
+    )
+    fake_workspace = SimpleNamespace(
+        jobs=SimpleNamespace(
+            get=lambda **_: fake_job,
+            get_permissions=lambda *_: SimpleNamespace(
+                access_control_list=[
+                    SimpleNamespace(
+                        user_name="svc@app",
+                        service_principal_name=None,
+                        display_name="svc@app",
+                        all_permissions=[SimpleNamespace(permission_level="CAN_VIEW")],
+                    )
+                ]
+            ),
+        ),
+        current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name="svc@app", display_name="svc@app")),
+    )
+
+    readiness = refresh_jobs.validate_workspace_readiness(control_plane_ready=True, workspace_client=fake_workspace)
+
+    assert readiness.overall_mode == "scheduler_only"
+    assert readiness.run_now_available is False
+    assert any("Grant the app service principal CAN_MANAGE_RUN on job 321." == warning for warning in readiness.warnings)
 
 
 def test_validate_workspace_readiness_reports_fully_ready_with_direct_manage_run_access(monkeypatch) -> None:

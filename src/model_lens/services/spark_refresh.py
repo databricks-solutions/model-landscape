@@ -251,6 +251,19 @@ def _iso_date(value: object) -> str | None:
     return str(value)
 
 
+def _iter_local_rows(frame: DataFrame):
+    return frame.toLocalIterator()
+
+
+def _union_all(frames: list[DataFrame]) -> DataFrame | None:
+    if not frames:
+        return None
+    combined = frames[0]
+    for frame in frames[1:]:
+        combined = combined.unionByName(frame)
+    return combined
+
+
 def _sql_string_literal(value: str) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
@@ -535,7 +548,7 @@ class SparkRefreshRepository(ControlPlaneRepository):
                 F.date_format(F.min(_spark_col(config.contract.timestamp_col)), "yyyy-MM-dd").alias("min_date"),
                 F.date_format(F.max(_spark_col(config.contract.timestamp_col)), "yyyy-MM-dd").alias("max_date"),
             )
-            .collect()[0]
+            .first()
         )
         return _iso_date(row["min_date"]), _iso_date(row["max_date"])
 
@@ -561,7 +574,7 @@ class SparkRefreshRepository(ControlPlaneRepository):
                     else F.lit(0)
                 ).alias("label_row_count"),
             )
-            .collect()[0]
+            .first()
         )
         total_rows = int(summary["total_rows"] or 0)
         if total_rows <= 0:
@@ -582,11 +595,10 @@ class SparkRefreshRepository(ControlPlaneRepository):
             .groupBy("profile_date")
             .agg(F.count("*").alias("row_count"))
             .orderBy("profile_date")
-            .collect()
         )
         daily_volume = {
             str(row["profile_date"]): int(row["row_count"] or 0)
-            for row in daily_volume_rows
+            for row in _iter_local_rows(daily_volume_rows)
             if row["profile_date"] is not None
         }
         null_rates: dict[str, float] = {}
@@ -600,7 +612,7 @@ class SparkRefreshRepository(ControlPlaneRepository):
                 if feature in df.columns
             ]
             if null_exprs:
-                null_row = df.agg(*null_exprs).collect()[0].asDict()
+                null_row = df.agg(*null_exprs).first().asDict()
                 null_rates = {
                     str(feature): round(float(value), 2)
                     for feature, value in null_row.items()
@@ -625,7 +637,7 @@ class SparkRefreshRepository(ControlPlaneRepository):
         end_date: str | None = None,
     ) -> str | None:
         if config.labels_table and config.labels_order_col:
-            row = self._read_table(config.labels_table).agg(F.max(_spark_col(config.labels_order_col)).cast("string").alias("watermark")).collect()[0]
+            row = self._read_table(config.labels_table).agg(F.max(_spark_col(config.labels_order_col)).cast("string").alias("watermark")).first()
             return str(row["watermark"]) if row["watermark"] is not None else None
         if not config.contract.label_col:
             return None
@@ -638,7 +650,7 @@ class SparkRefreshRepository(ControlPlaneRepository):
                 F.max(_spark_col(config.contract.timestamp_col)).cast("string").alias("watermark"),
                 F.count("*").alias("label_count"),
             )
-            .collect()[0]
+            .first()
         )
         if row["watermark"] is None:
             return None
@@ -657,12 +669,12 @@ class SparkRefreshRepository(ControlPlaneRepository):
                 )
                 .distinct()
             )
-            rows = frame.collect()
+            rows = list(_iter_local_rows(frame))
         except Exception:
             rows = []
         if not rows:
             try:
-                rows = (
+                rows = list(_iter_local_rows(
                     self._read_table(self._table_names.drift_metrics)
                     .filter(F.col("model_key") == F.lit(model_key))
                     .select(
@@ -672,8 +684,7 @@ class SparkRefreshRepository(ControlPlaneRepository):
                         F.date_format(F.col("window_end"), "yyyy-MM-dd").alias("window_end"),
                     )
                     .distinct()
-                    .collect()
-                )
+                ))
             except Exception:
                 rows = []
         return {
@@ -688,13 +699,12 @@ class SparkRefreshRepository(ControlPlaneRepository):
 
     def get_performance_bin_specs(self, model_key: str) -> dict[str, tuple[float, ...]]:
         try:
-            rows = (
+            rows = list(_iter_local_rows(
                 self._read_table(self._table_names.performance_bin_specs)
                 .filter(F.col("model_key") == F.lit(model_key))
                 .select("feature_name", "edges_json")
                 .orderBy("feature_name")
-                .collect()
-            )
+            ))
         except Exception:
             return {}
         specs: dict[str, tuple[float, ...]] = {}
@@ -726,7 +736,7 @@ class SparkRefreshRepository(ControlPlaneRepository):
 
     def get_current_incident_state(self, model_key: str) -> dict[tuple[str, str, str], dict[str, Any]]:
         try:
-            rows = (
+            rows = _iter_local_rows(
                 self._read_table(self._table_names.incidents)
                 .filter((F.col("model_key") == F.lit(model_key)) & (F.col("status") == F.lit("open")))
                 .select(
@@ -739,7 +749,6 @@ class SparkRefreshRepository(ControlPlaneRepository):
                     F.date_format(F.col("window_end"), "yyyy-MM-dd").alias("window_end"),
                     F.col("observed_at").cast("string").alias("observed_at"),
                 )
-                .collect()
             )
         except Exception:
             return {}
@@ -958,9 +967,8 @@ class SparkRefreshRepository(ControlPlaneRepository):
                 F.date_format(F.col("window_end"), "yyyy-MM-dd").alias("window_end"),
                 "observed_at",
             )
-            .collect()
         )
-        return [row.asDict() for row in rows]
+        return [row.asDict() for row in _iter_local_rows(rows)]
 
     def _derive_incident_history_rows_from_drift_rows(
         self,
@@ -1121,7 +1129,7 @@ class SparkRefreshRepository(ControlPlaneRepository):
             )
             .orderBy("window_end", "window_start", "window_id", "feature_name", "metric_name")
         )
-        return [row.asDict() for row in timeline.collect()]
+        return [row.asDict() for row in _iter_local_rows(timeline)]
 
     def _rewrite_quality_summary(self, model_key: str) -> None:
         self._delete_where(
@@ -1159,7 +1167,7 @@ class SparkRefreshRepository(ControlPlaneRepository):
                     ).otherwise(F.lit(0.0))
                 ).alias("_variance_terms"),
             )
-            .collect()[0]
+            .first()
         )
         total_rows = int(aggregate["total_rows"] or 0)
         if total_rows <= 0:
@@ -1169,10 +1177,9 @@ class SparkRefreshRepository(ControlPlaneRepository):
         prediction_std = (variance_numerator / (total_rows - 1)) ** 0.5 if total_rows > 1 else None
         daily_volume = {
             str(row["profile_date"]): int(row["row_count"] or 0)
-            for row in (
+            for row in _iter_local_rows(
                 quality_df.select(F.date_format(F.col("profile_date"), "yyyy-MM-dd").alias("profile_date"), "row_count")
                 .orderBy("profile_date")
-                .collect()
             )
             if row["profile_date"] is not None
         }
@@ -1186,11 +1193,10 @@ class SparkRefreshRepository(ControlPlaneRepository):
             .groupBy("feature_name")
             .agg(F.sum(F.col("null_pct") * F.col("row_count")).alias("weighted_null_sum"))
             .orderBy("feature_name")
-            .collect()
         )
         null_rates = {
             str(row["feature_name"]): round(float(row["weighted_null_sum"]) / total_rows, 2)
-            for row in null_rate_rows
+            for row in _iter_local_rows(null_rate_rows)
             if row["feature_name"] is not None and row["weighted_null_sum"] is not None
         }
         summary_rows = [{
@@ -1265,6 +1271,49 @@ class SparkRefreshRepository(ControlPlaneRepository):
         self._sync_read_model()
 
     def append_refresh_result(self, model_key: str, result: RefreshResult, source_run_id: str | None = None) -> None:
+        model_key_predicate = f"model_key = {_sql_string_literal(model_key)}"
+
+        def _delete_string_values(table_name: str, column_name: str, values: set[str]) -> None:
+            cleaned = sorted(value for value in values if value)
+            if not cleaned:
+                return
+            literals = ", ".join(_sql_string_literal(value) for value in cleaned)
+            self._delete_where(
+                table_name,
+                f"{model_key_predicate} AND {column_name} IN ({literals})",
+            )
+
+        def _delete_date_values(table_name: str, column_name: str, values: set[str]) -> None:
+            cleaned = sorted(value for value in values if value)
+            if not cleaned:
+                return
+            literals = ", ".join(_sql_date_literal(value) for value in cleaned)
+            self._delete_where(
+                table_name,
+                f"{model_key_predicate} AND {column_name} IN ({literals})",
+            )
+
+        def _delete_composite_windows(
+            table_name: str,
+            windows: set[tuple[str, ...]],
+            columns: tuple[str, ...],
+        ) -> None:
+            predicates = []
+            for window in sorted(windows):
+                if any(not value for value in window):
+                    continue
+                clauses = [
+                    f"{column_name} = {_sql_date_literal(column_value)}"
+                    for column_name, column_value in zip(columns, window, strict=True)
+                ]
+                predicates.append("(" + " AND ".join(clauses) + ")")
+            if not predicates:
+                return
+            self._delete_where(
+                table_name,
+                f"{model_key_predicate} AND (" + " OR ".join(predicates) + ")",
+            )
+
         drift_windows = {
             (
                 str(row.get("baseline_start") or ""),
@@ -1286,97 +1335,31 @@ class SparkRefreshRepository(ControlPlaneRepository):
         daily_quality_dates = {str(row.get("profile_date") or "") for row in result.daily_quality_profile_rows}
         daily_feature_dates = {str(row.get("profile_date") or "") for row in result.daily_feature_profile_rows}
         daily_performance_dates = {str(row.get("profile_date") or "") for row in result.daily_performance_profile_rows}
-
-        for baseline_start, baseline_end, window_start, window_end in drift_windows:
-            self._delete_where(
-                self._table_names.drift_metrics,
-                " AND ".join([
-                    f"model_key = {_sql_string_literal(model_key)}",
-                    f"baseline_start = {_sql_date_literal(baseline_start)}",
-                    f"baseline_end = {_sql_date_literal(baseline_end)}",
-                    f"window_start = {_sql_date_literal(window_start)}",
-                    f"window_end = {_sql_date_literal(window_end)}",
-                ]),
-            )
-
-        for window_start, window_end in performance_windows:
-            self._delete_where(
-                self._table_names.performance_metrics,
-                " AND ".join([
-                    f"model_key = {_sql_string_literal(model_key)}",
-                    f"window_start = {_sql_date_literal(window_start)}",
-                    f"window_end = {_sql_date_literal(window_end)}",
-                ]),
-            )
-
-        for window_id in {str(row.get("window_id") or "") for row in result.window_rows if str(row.get("window_id") or "")}:
-            self._delete_where(
-                self._table_names.comparison_windows,
-                " AND ".join([
-                    f"model_key = {_sql_string_literal(model_key)}",
-                    f"window_id = {_sql_string_literal(window_id)}",
-                ]),
-            )
-
-        for window_id in quality_windows:
-            if not window_id:
-                continue
-            self._delete_where(
-                self._table_names.quality_history,
-                " AND ".join([
-                    f"model_key = {_sql_string_literal(model_key)}",
-                    f"window_id = {_sql_string_literal(window_id)}",
-                ]),
-            )
-
-        for window_id in incident_history_windows:
-            if not window_id:
-                continue
-            self._delete_where(
-                self._table_names.incident_history,
-                " AND ".join([
-                    f"model_key = {_sql_string_literal(model_key)}",
-                    f"window_id = {_sql_string_literal(window_id)}",
-                ]),
-            )
-
-        for profile_date in daily_quality_dates:
-            if not profile_date:
-                continue
-            self._delete_where(
-                self._table_names.daily_quality_profiles,
-                " AND ".join([
-                    f"model_key = {_sql_string_literal(model_key)}",
-                    f"profile_date = {_sql_date_literal(profile_date)}",
-                ]),
-            )
-
-        for profile_date in daily_feature_dates:
-            if not profile_date:
-                continue
-            self._delete_where(
-                self._table_names.daily_feature_profiles,
-                " AND ".join([
-                    f"model_key = {_sql_string_literal(model_key)}",
-                    f"profile_date = {_sql_date_literal(profile_date)}",
-                ]),
-            )
-
-        for profile_date in daily_performance_dates:
-            if not profile_date:
-                continue
-            self._delete_where(
-                self._table_names.daily_performance_profiles,
-                " AND ".join([
-                    f"model_key = {_sql_string_literal(model_key)}",
-                    f"profile_date = {_sql_date_literal(profile_date)}",
-                ]),
-            )
+        _delete_composite_windows(
+            self._table_names.drift_metrics,
+            drift_windows,
+            ("baseline_start", "baseline_end", "window_start", "window_end"),
+        )
+        _delete_composite_windows(
+            self._table_names.performance_metrics,
+            performance_windows,
+            ("window_start", "window_end"),
+        )
+        _delete_string_values(
+            self._table_names.comparison_windows,
+            "window_id",
+            {str(row.get("window_id") or "") for row in result.window_rows},
+        )
+        _delete_string_values(self._table_names.quality_history, "window_id", quality_windows)
+        _delete_string_values(self._table_names.incident_history, "window_id", incident_history_windows)
+        _delete_date_values(self._table_names.daily_quality_profiles, "profile_date", daily_quality_dates)
+        _delete_date_values(self._table_names.daily_feature_profiles, "profile_date", daily_feature_dates)
+        _delete_date_values(self._table_names.daily_performance_profiles, "profile_date", daily_performance_dates)
 
         if result.incident_rows or result.incident_history_rows:
             self._delete_where(
                 self._table_names.incidents,
-                f"model_key = {_sql_string_literal(model_key)}",
+                model_key_predicate,
             )
 
         self._append_df_to_table(
@@ -1508,7 +1491,7 @@ class SparkRefreshRepository(ControlPlaneRepository):
             .orderBy("window_end", "window_start", "window_id")
         )
         rows: list[dict[str, Any]] = []
-        for row in aggregated.collect():
+        for row in _iter_local_rows(aggregated):
             row_count = int(row["row_count"] or 0)
             null_rates = {
                 feature: round(float(row[alias]) / row_count, 2)
@@ -1619,10 +1602,21 @@ class SparkRefreshRepository(ControlPlaneRepository):
             )
             .withColumn("volume_pct", (F.col("current_row_count") / F.col("_total_current_rows")) * F.lit(100.0))
             .withColumn("contribution", F.col("delta") * F.col("volume_pct") / F.lit(100.0))
+            .select(
+                *window_cols,
+                "feature_name",
+                "bin_label",
+                "metric_name",
+                "baseline_metric",
+                "current_metric",
+                "delta",
+                "volume_pct",
+                "contribution",
+            )
             .orderBy("window_end", "window_start", "feature_name", "bin_label", "metric_name")
         )
         rows: list[dict[str, Any]] = []
-        for row in metrics.collect():
+        for row in _iter_local_rows(joined):
             rows.append({
                 "model_key": config.model_key,
                 "feature_name": str(row["feature_name"]),
@@ -1785,7 +1779,7 @@ class SparkRefreshRepository(ControlPlaneRepository):
             .orderBy("window_end", "window_start", "feature_name")
         )
         rows: list[dict[str, Any]] = []
-        for row in metrics.collect():
+        for row in _iter_local_rows(metrics):
             ref_total_rows = int(row["ref_total_rows"] or 0)
             cur_total_rows = int(row["cur_total_rows"] or 0)
             common_payload = {
@@ -1972,18 +1966,63 @@ class SparkRefreshRepository(ControlPlaneRepository):
             .join(baseline_stats, on=window_cols + ["feature_name"], how="inner")
             .join(current_stats, on=window_cols + ["feature_name"], how="inner")
             .filter((F.col("ref_non_null_count") > 0) & (F.col("cur_non_null_count") > 0))
+            .withColumn("ref_mean", F.col("ref_sum_x") / F.col("ref_non_null_count"))
+            .withColumn("cur_mean", F.col("cur_sum_x") / F.col("cur_non_null_count"))
+            .withColumn(
+                "_ref_variance_numerator",
+                F.greatest(
+                    F.col("ref_variance_terms") - (F.col("ref_non_null_count") * F.pow(F.col("ref_mean"), 2)),
+                    F.lit(0.0),
+                ),
+            )
+            .withColumn(
+                "_cur_variance_numerator",
+                F.greatest(
+                    F.col("cur_variance_terms") - (F.col("cur_non_null_count") * F.pow(F.col("cur_mean"), 2)),
+                    F.lit(0.0),
+                ),
+            )
+            .withColumn("ref_std", F.sqrt(F.col("_ref_variance_numerator") / F.col("ref_non_null_count")))
+            .withColumn("cur_std", F.sqrt(F.col("_cur_variance_numerator") / F.col("cur_non_null_count")))
+            .withColumn(
+                "ref_null_pct",
+                F.when(
+                    F.col("ref_total_rows") > 0,
+                    ((F.col("ref_total_rows") - F.col("ref_non_null_count")) / F.col("ref_total_rows")) * F.lit(100.0),
+                ).otherwise(F.lit(0.0)),
+            )
+            .withColumn(
+                "cur_null_pct",
+                F.when(
+                    F.col("cur_total_rows") > 0,
+                    ((F.col("cur_total_rows") - F.col("cur_non_null_count")) / F.col("cur_total_rows")) * F.lit(100.0),
+                ).otherwise(F.lit(0.0)),
+            )
+            .select(
+                *window_cols,
+                "feature_name",
+                "psi",
+                "kl_divergence",
+                "js_divergence",
+                "ref_mean",
+                "cur_mean",
+                "ref_std",
+                "cur_std",
+                "ref_null_pct",
+                "cur_null_pct",
+                "ref_non_null_count",
+                "cur_non_null_count",
+            )
             .orderBy("window_end", "window_start", "feature_name")
         )
         rows: list[dict[str, Any]] = []
-        for row in joined.collect():
+        for row in _iter_local_rows(metrics):
             ref_count = int(row["ref_non_null_count"] or 0)
             cur_count = int(row["cur_non_null_count"] or 0)
-            ref_mean = float(row["ref_sum_x"]) / ref_count if ref_count > 0 else None
-            cur_mean = float(row["cur_sum_x"]) / cur_count if cur_count > 0 else None
-            ref_variance_numerator = max(float(row["ref_variance_terms"] or 0.0) - (ref_count * (ref_mean or 0.0) ** 2), 0.0)
-            cur_variance_numerator = max(float(row["cur_variance_terms"] or 0.0) - (cur_count * (cur_mean or 0.0) ** 2), 0.0)
-            ref_std = float(np.sqrt(ref_variance_numerator / ref_count)) if ref_count > 0 else None
-            cur_std = float(np.sqrt(cur_variance_numerator / cur_count)) if cur_count > 0 else None
+            ref_mean = _safe_float(row["ref_mean"])
+            cur_mean = _safe_float(row["cur_mean"])
+            ref_std = _safe_float(row["ref_std"])
+            cur_std = _safe_float(row["cur_std"])
             common_payload = {
                 "model_key": config.model_key,
                 "feature_name": str(row["feature_name"]),
@@ -1996,8 +2035,8 @@ class SparkRefreshRepository(ControlPlaneRepository):
                 "cur_mean": float(cur_mean) if cur_mean is not None else float("nan"),
                 "ref_std": float(ref_std) if ref_std is not None else float("nan"),
                 "cur_std": float(cur_std) if cur_std is not None else float("nan"),
-                "ref_null_pct": round(float((int(row["ref_total_rows"] or 0) - ref_count) / max(int(row["ref_total_rows"] or 0), 1) * 100), 2) if int(row["ref_total_rows"] or 0) > 0 else 0.0,
-                "cur_null_pct": round(float((int(row["cur_total_rows"] or 0) - cur_count) / max(int(row["cur_total_rows"] or 0), 1) * 100), 2) if int(row["cur_total_rows"] or 0) > 0 else 0.0,
+                "ref_null_pct": round(float(row["ref_null_pct"] or 0.0), 2),
+                "cur_null_pct": round(float(row["cur_null_pct"] or 0.0), 2),
                 "ref_count": ref_count,
                 "cur_count": cur_count,
                 "computed_at": computed_at,
@@ -2185,10 +2224,9 @@ class SparkRefreshRepository(ControlPlaneRepository):
             source_df.groupBy("_model_lens_profile_date")
             .agg(*agg_exprs)
             .orderBy("_model_lens_profile_date")
-            .collect()
         )
         payload: list[dict[str, Any]] = []
-        for row in rows:
+        for row in _iter_local_rows(rows):
             null_rates = {
                 feature: round(float(row[feature]), 2)
                 for feature in null_rate_features
@@ -2216,6 +2254,24 @@ class SparkRefreshRepository(ControlPlaneRepository):
     ) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         categorical_set = set(config.contract.categorical_columns)
+        numeric_features = [
+            feature
+            for feature in config.contract.feature_columns
+            if feature in source_df.columns and feature not in categorical_set
+        ]
+        categorical_features = [
+            feature
+            for feature in config.contract.feature_columns
+            if feature in source_df.columns and feature in categorical_set
+        ]
+        numeric_stats_map = self._build_daily_numeric_feature_stats_map(
+            source_df=source_df,
+            features=numeric_features,
+        )
+        categorical_stats_map = self._build_daily_categorical_feature_stats_map(
+            source_df=source_df,
+            features=categorical_features,
+        )
         for feature in config.contract.feature_columns:
             if feature not in source_df.columns:
                 continue
@@ -2226,6 +2282,7 @@ class SparkRefreshRepository(ControlPlaneRepository):
                         source_df=source_df,
                         feature=feature,
                         computed_at=computed_at,
+                        stats_by_date=categorical_stats_map.get(feature),
                     )
                 )
             else:
@@ -2236,9 +2293,109 @@ class SparkRefreshRepository(ControlPlaneRepository):
                         feature=feature,
                         computed_at=computed_at,
                         bin_specs=bin_specs,
+                        stats_by_date=numeric_stats_map.get(feature),
                     )
                 )
         return rows
+
+    def _build_daily_numeric_feature_stats_map(
+        self,
+        *,
+        source_df: DataFrame,
+        features: list[str],
+    ) -> dict[str, dict[str, dict[str, Any]]]:
+        if not features:
+            return {}
+        agg_exprs: list[Any] = [
+            F.count("*").alias("_model_lens_row_count"),
+        ]
+        alias_map: dict[str, dict[str, str]] = {}
+        for index, feature in enumerate(features):
+            value_col = _spark_col(feature).cast("double")
+            aliases = {
+                "non_null_count": f"_model_lens_num_{index}_non_null_count",
+                "null_pct": f"_model_lens_num_{index}_null_pct",
+                "mean": f"_model_lens_num_{index}_mean",
+                "std": f"_model_lens_num_{index}_std",
+                "min_value": f"_model_lens_num_{index}_min_value",
+                "max_value": f"_model_lens_num_{index}_max_value",
+            }
+            alias_map[feature] = aliases
+            agg_exprs.extend([
+                F.sum(F.when(value_col.isNotNull(), F.lit(1)).otherwise(F.lit(0))).alias(aliases["non_null_count"]),
+                F.round(
+                    F.avg(F.when(value_col.isNull(), F.lit(100.0)).otherwise(F.lit(0.0))),
+                    2,
+                ).alias(aliases["null_pct"]),
+                F.avg(value_col).alias(aliases["mean"]),
+                F.stddev_samp(value_col).alias(aliases["std"]),
+                F.min(value_col).alias(aliases["min_value"]),
+                F.max(value_col).alias(aliases["max_value"]),
+            ])
+        rows = (
+            source_df.groupBy("_model_lens_profile_date")
+            .agg(*agg_exprs)
+            .orderBy("_model_lens_profile_date")
+        )
+        stats_map = {feature: {} for feature in features}
+        for row in _iter_local_rows(rows):
+            profile_date = str(row["_model_lens_profile_date"])
+            row_count = int(row["_model_lens_row_count"] or 0)
+            for feature in features:
+                aliases = alias_map[feature]
+                stats_map[feature][profile_date] = {
+                    "row_count": row_count,
+                    "non_null_count": int(row[aliases["non_null_count"]] or 0),
+                    "null_pct": round(float(row[aliases["null_pct"]] or 0.0), 2),
+                    "mean": _safe_float(row[aliases["mean"]]),
+                    "std": _safe_float(row[aliases["std"]]),
+                    "min_value": _safe_float(row[aliases["min_value"]]),
+                    "max_value": _safe_float(row[aliases["max_value"]]),
+                }
+        return stats_map
+
+    def _build_daily_categorical_feature_stats_map(
+        self,
+        *,
+        source_df: DataFrame,
+        features: list[str],
+    ) -> dict[str, dict[str, dict[str, Any]]]:
+        if not features:
+            return {}
+        agg_exprs: list[Any] = [
+            F.count("*").alias("_model_lens_row_count"),
+        ]
+        alias_map: dict[str, dict[str, str]] = {}
+        for index, feature in enumerate(features):
+            aliases = {
+                "non_null_count": f"_model_lens_cat_{index}_non_null_count",
+                "null_pct": f"_model_lens_cat_{index}_null_pct",
+            }
+            alias_map[feature] = aliases
+            agg_exprs.extend([
+                F.sum(F.when(_spark_col(feature).isNotNull(), F.lit(1)).otherwise(F.lit(0))).alias(aliases["non_null_count"]),
+                F.round(
+                    F.avg(F.when(_spark_col(feature).isNull(), F.lit(100.0)).otherwise(F.lit(0.0))),
+                    2,
+                ).alias(aliases["null_pct"]),
+            ])
+        rows = (
+            source_df.groupBy("_model_lens_profile_date")
+            .agg(*agg_exprs)
+            .orderBy("_model_lens_profile_date")
+        )
+        stats_map = {feature: {} for feature in features}
+        for row in _iter_local_rows(rows):
+            profile_date = str(row["_model_lens_profile_date"])
+            row_count = int(row["_model_lens_row_count"] or 0)
+            for feature in features:
+                aliases = alias_map[feature]
+                stats_map[feature][profile_date] = {
+                    "row_count": row_count,
+                    "non_null_count": int(row[aliases["non_null_count"]] or 0),
+                    "null_pct": round(float(row[aliases["null_pct"]] or 0.0), 2),
+                }
+        return stats_map
 
     def _build_daily_numeric_feature_rows(
         self,
@@ -2248,25 +2405,9 @@ class SparkRefreshRepository(ControlPlaneRepository):
         feature: str,
         computed_at: str,
         bin_specs: dict[str, tuple[float, ...]],
+        stats_by_date: dict[str, dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         numeric = source_df.withColumn("_model_lens_numeric_value", _spark_col(feature).cast("double"))
-        stats_rows = (
-            numeric.groupBy("_model_lens_profile_date")
-            .agg(
-                F.count("*").alias("row_count"),
-                F.sum(F.when(F.col("_model_lens_numeric_value").isNotNull(), F.lit(1)).otherwise(F.lit(0))).alias("non_null_count"),
-                F.round(
-                    F.avg(F.when(F.col("_model_lens_numeric_value").isNull(), F.lit(100.0)).otherwise(F.lit(0.0))),
-                    2,
-                ).alias("null_pct"),
-                F.avg("_model_lens_numeric_value").alias("mean"),
-                F.stddev_samp("_model_lens_numeric_value").alias("std"),
-                F.min("_model_lens_numeric_value").alias("min_value"),
-                F.max("_model_lens_numeric_value").alias("max_value"),
-            )
-            .orderBy("_model_lens_profile_date")
-            .collect()
-        )
         edges = tuple(float(value) for value in bin_specs.get(feature, ()))
         count_map: dict[str, list[float]] = {}
         if len(edges) >= 2:
@@ -2281,17 +2422,46 @@ class SparkRefreshRepository(ControlPlaneRepository):
                 .groupBy("_model_lens_profile_date", "_model_lens_bin_index")
                 .agg(F.count("*").alias("bin_count"))
                 .orderBy("_model_lens_profile_date", "_model_lens_bin_index")
-                .collect()
             )
-            for row in count_rows:
+            for row in _iter_local_rows(count_rows):
                 key = str(row["_model_lens_profile_date"])
                 counts = count_map.setdefault(key, [0.0] * (len(edges) - 1))
                 bin_index = int(row["_model_lens_bin_index"] or 0)
                 if 0 <= bin_index < len(counts):
                     counts[bin_index] = float(row["bin_count"] or 0.0)
         payload: list[dict[str, Any]] = []
-        for row in stats_rows:
-            profile_date = str(row["_model_lens_profile_date"])
+        feature_stats = stats_by_date or {}
+        if not feature_stats:
+            stats_rows = (
+                numeric.groupBy("_model_lens_profile_date")
+                .agg(
+                    F.count("*").alias("row_count"),
+                    F.sum(F.when(F.col("_model_lens_numeric_value").isNotNull(), F.lit(1)).otherwise(F.lit(0))).alias("non_null_count"),
+                    F.round(
+                        F.avg(F.when(F.col("_model_lens_numeric_value").isNull(), F.lit(100.0)).otherwise(F.lit(0.0))),
+                        2,
+                    ).alias("null_pct"),
+                    F.avg("_model_lens_numeric_value").alias("mean"),
+                    F.stddev_samp("_model_lens_numeric_value").alias("std"),
+                    F.min("_model_lens_numeric_value").alias("min_value"),
+                    F.max("_model_lens_numeric_value").alias("max_value"),
+                )
+                .orderBy("_model_lens_profile_date")
+            )
+            feature_stats = {
+                str(row["_model_lens_profile_date"]): {
+                    "row_count": int(row["row_count"] or 0),
+                    "non_null_count": int(row["non_null_count"] or 0),
+                    "null_pct": round(float(row["null_pct"] or 0.0), 2),
+                    "mean": _safe_float(row["mean"]),
+                    "std": _safe_float(row["std"]),
+                    "min_value": _safe_float(row["min_value"]),
+                    "max_value": _safe_float(row["max_value"]),
+                }
+                for row in _iter_local_rows(stats_rows)
+            }
+        for profile_date in sorted(feature_stats):
+            row = feature_stats[profile_date]
             distribution_payload = {
                 "edges": [round(float(value), 6) for value in edges],
                 "counts": [round(float(value), 6) for value in count_map.get(profile_date, [0.0] * max(len(edges) - 1, 0))],
@@ -2321,6 +2491,7 @@ class SparkRefreshRepository(ControlPlaneRepository):
         source_df: DataFrame,
         feature: str,
         computed_at: str,
+        stats_by_date: dict[str, dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         feature_value = F.coalesce(_spark_col(feature).cast("string"), F.lit("__NULL__")).alias("_model_lens_feature_value")
         counts_df = (
@@ -2344,28 +2515,36 @@ class SparkRefreshRepository(ControlPlaneRepository):
             .groupBy("_model_lens_profile_date", "_model_lens_bucket")
             .agg(F.sum("category_count").alias("bucket_count"))
             .orderBy("_model_lens_profile_date", "_model_lens_bucket")
-            .collect()
         )
         distribution_map: dict[str, dict[str, int]] = {}
-        for row in top_counts_rows:
+        for row in _iter_local_rows(top_counts_rows):
             profile_date = str(row["_model_lens_profile_date"])
             distribution_map.setdefault(profile_date, {})[str(row["_model_lens_bucket"])] = int(row["bucket_count"] or 0)
-        stats_rows = (
-            source_df.groupBy("_model_lens_profile_date")
-            .agg(
-                F.count("*").alias("row_count"),
-                F.sum(F.when(_spark_col(feature).isNotNull(), F.lit(1)).otherwise(F.lit(0))).alias("non_null_count"),
-                F.round(
-                    F.avg(F.when(_spark_col(feature).isNull(), F.lit(100.0)).otherwise(F.lit(0.0))),
-                    2,
-                ).alias("null_pct"),
-            )
-            .orderBy("_model_lens_profile_date")
-            .collect()
-        )
         payload: list[dict[str, Any]] = []
-        for row in stats_rows:
-            profile_date = str(row["_model_lens_profile_date"])
+        feature_stats = stats_by_date or {}
+        if not feature_stats:
+            stats_rows = (
+                source_df.groupBy("_model_lens_profile_date")
+                .agg(
+                    F.count("*").alias("row_count"),
+                    F.sum(F.when(_spark_col(feature).isNotNull(), F.lit(1)).otherwise(F.lit(0))).alias("non_null_count"),
+                    F.round(
+                        F.avg(F.when(_spark_col(feature).isNull(), F.lit(100.0)).otherwise(F.lit(0.0))),
+                        2,
+                    ).alias("null_pct"),
+                )
+                .orderBy("_model_lens_profile_date")
+            )
+            feature_stats = {
+                str(row["_model_lens_profile_date"]): {
+                    "row_count": int(row["row_count"] or 0),
+                    "non_null_count": int(row["non_null_count"] or 0),
+                    "null_pct": round(float(row["null_pct"] or 0.0), 2),
+                }
+                for row in _iter_local_rows(stats_rows)
+            }
+        for profile_date in sorted(feature_stats):
+            row = feature_stats[profile_date]
             payload.append({
                 "model_key": config.model_key,
                 "profile_date": profile_date,
@@ -2390,27 +2569,38 @@ class SparkRefreshRepository(ControlPlaneRepository):
         source_df: DataFrame,
         existing_specs: dict[str, tuple[float, ...]] | None,
     ) -> dict[str, tuple[float, ...]]:
+        categorical_set = set(config.contract.categorical_columns)
         specs = {
             str(feature_name): tuple(float(value) for value in edges)
             for feature_name, edges in (existing_specs or {}).items()
             if feature_name and len(edges) >= 2
         }
-        for feature in config.contract.feature_columns:
-            if feature not in source_df.columns or feature in specs:
-                continue
-            row = (
-                source_df
-                .select(_spark_col(feature).cast("double").alias("_model_lens_value"))
-                .agg(
-                    F.count(F.col("_model_lens_value")).alias("non_null_count"),
-                    F.min("_model_lens_value").alias("min_value"),
-                    F.max("_model_lens_value").alias("max_value"),
-                )
-                .collect()[0]
-            )
-            non_null_count = int(row["non_null_count"] or 0)
-            min_value = _safe_float(row["min_value"])
-            max_value = _safe_float(row["max_value"])
+        candidate_features = [
+            feature
+            for feature in config.contract.feature_columns
+            if feature in source_df.columns and feature not in specs and feature not in categorical_set
+        ]
+        if not candidate_features:
+            return specs
+        agg_exprs: list[Any] = []
+        alias_map: dict[str, tuple[str, str, str]] = {}
+        for index, feature in enumerate(candidate_features):
+            value_col = _spark_col(feature).cast("double")
+            count_alias = f"_model_lens_{index}_non_null_count"
+            min_alias = f"_model_lens_{index}_min_value"
+            max_alias = f"_model_lens_{index}_max_value"
+            alias_map[feature] = (count_alias, min_alias, max_alias)
+            agg_exprs.extend([
+                F.count(value_col).alias(count_alias),
+                F.min(value_col).alias(min_alias),
+                F.max(value_col).alias(max_alias),
+            ])
+        row = source_df.agg(*agg_exprs).first()
+        for feature in candidate_features:
+            count_alias, min_alias, max_alias = alias_map[feature]
+            non_null_count = int(row[count_alias] or 0)
+            min_value = _safe_float(row[min_alias])
+            max_value = _safe_float(row[max_alias])
             if non_null_count < max(2, PERFORMANCE_BIN_COUNT) or min_value is None or max_value is None:
                 continue
             if min_value == max_value:
@@ -2432,54 +2622,71 @@ class SparkRefreshRepository(ControlPlaneRepository):
         if not config.contract.label_col or config.contract.label_col not in source_df.columns:
             return []
         selected_metric_names = tuple(config.performance_metric_names or default_performance_metric_names(config.problem_type))
-        total_rows_map = {
-            str(row["_model_lens_profile_date"]): int(row["row_count"] or 0)
-            for row in (
-                source_df.groupBy("_model_lens_profile_date")
-                .agg(F.count("*").alias("row_count"))
-                .collect()
-            )
-        }
+        total_rows_df = source_df.groupBy("_model_lens_profile_date").agg(F.count("*").alias("_total_rows"))
         regression_mode = (config.problem_type or "classification").strip().lower() == "regression"
-        payload: list[dict[str, Any]] = []
+        metric_frames: list[DataFrame] = []
         for feature, edges in sorted(bin_specs.items()):
             if feature not in source_df.columns:
                 continue
-            metric_rows = (
-                self._daily_regression_metrics_by_bin(config, source_df, feature, edges)
+            metric_frame = (
+                self._daily_regression_metrics_by_bin_df(config, source_df, feature, edges, selected_metric_names)
                 if regression_mode
-                else self._daily_classification_metrics_by_bin(config, source_df, feature, edges)
+                else self._daily_classification_metrics_by_bin_df(config, source_df, feature, edges, selected_metric_names)
             )
-            for row in metric_rows:
-                profile_date = str(row["_model_lens_profile_date"])
-                row_count = int(row["row_count"] or 0)
-                total_rows = max(total_rows_map.get(profile_date, 0), 1)
-                bin_index = int(row["_model_lens_bin_index"])
-                bin_label = f"[{edges[bin_index]:.4g}, {edges[bin_index + 1]:.4g})"
-                for metric_name in selected_metric_names:
-                    metric_value = _safe_float(row.get(metric_name))
-                    if metric_value is None:
-                        continue
-                    payload.append({
-                        "model_key": config.model_key,
-                        "profile_date": profile_date,
-                        "feature_name": feature,
-                        "bin_label": bin_label,
-                        "metric_name": metric_name,
-                        "metric_value": float(metric_value),
-                        "row_count": row_count,
-                        "volume_pct": round(float(row_count / total_rows * 100), 2),
-                        "computed_at": computed_at,
-                    })
+            if metric_frame is not None:
+                metric_frames.append(metric_frame)
+        combined = _union_all(metric_frames)
+        if combined is None:
+            return []
+        final_frame = (
+            combined.join(total_rows_df, on="_model_lens_profile_date", how="left")
+            .withColumn("_total_rows", F.greatest(F.coalesce(F.col("_total_rows"), F.col("row_count")), F.lit(1)))
+            .withColumn("volume_pct", F.round((F.col("row_count") / F.col("_total_rows")) * F.lit(100.0), 2))
+            .select(
+                "model_key",
+                F.date_format(F.col("_model_lens_profile_date"), "yyyy-MM-dd").alias("profile_date"),
+                "feature_name",
+                "bin_label",
+                "metric_name",
+                "metric_value",
+                "row_count",
+                "volume_pct",
+                F.lit(computed_at).alias("computed_at"),
+            )
+            .orderBy("profile_date", "feature_name", "bin_label", "metric_name")
+        )
+        payload: list[dict[str, Any]] = []
+        for row in _iter_local_rows(final_frame):
+            payload.append({
+                "model_key": str(row["model_key"]),
+                "profile_date": str(row["profile_date"]),
+                "feature_name": str(row["feature_name"]),
+                "bin_label": str(row["bin_label"]),
+                "metric_name": str(row["metric_name"]),
+                "metric_value": float(row["metric_value"]),
+                "row_count": int(row["row_count"] or 0),
+                "volume_pct": round(float(row["volume_pct"] or 0.0), 2),
+                "computed_at": computed_at,
+            })
         return payload
 
-    def _daily_classification_metrics_by_bin(
+    def _bin_label_expr(self, edges: tuple[float, ...], *, bin_col: str = "_model_lens_bin_index"):
+        mapping: list[Any] = []
+        for bin_index in range(max(len(edges) - 1, 0)):
+            label = f"[{edges[bin_index]:.4g}, {edges[bin_index + 1]:.4g})"
+            mapping.extend([F.lit(bin_index), F.lit(label)])
+        if not mapping:
+            return F.lit("")
+        return F.coalesce(F.create_map(*mapping)[F.col(bin_col)], F.lit(""))
+
+    def _daily_classification_metrics_by_bin_df(
         self,
         config: MonitorConfig,
         source_df: DataFrame,
         feature: str,
         edges: tuple[float, ...],
-    ) -> list[dict[str, Any]]:
+        metric_names: tuple[str, ...],
+    ) -> DataFrame | None:
         feature_df = (
             source_df
             .select(
@@ -2495,7 +2702,7 @@ class SparkRefreshRepository(ControlPlaneRepository):
             )
         )
         if not feature_df.take(1):
-            return []
+            return None
         bucketizer = Bucketizer(
             splits=list(edges),
             inputCol="_model_lens_feature_value",
@@ -2526,17 +2733,33 @@ class SparkRefreshRepository(ControlPlaneRepository):
                 ).otherwise(F.lit(0.0)),
             )
             .withColumn("accuracy", (F.col("tp") + F.col("tn")) / F.col("row_count"))
-            .orderBy("_model_lens_profile_date", "_model_lens_bin_index")
+            .withColumn("_model_lens_bin_index", F.col("_model_lens_bin_index").cast("int"))
         )
-        return [row.asDict() for row in metric_df.collect()]
+        selected = [metric_name for metric_name in metric_names if metric_name in {"f1", "precision", "recall", "accuracy"}]
+        if not selected:
+            return None
+        stack_expr = ", ".join([f"'{metric_name}', `{metric_name}`" for metric_name in selected])
+        return (
+            metric_df
+            .select(
+                F.lit(config.model_key).alias("model_key"),
+                "_model_lens_profile_date",
+                F.lit(feature).alias("feature_name"),
+                self._bin_label_expr(edges).alias("bin_label"),
+                "row_count",
+                F.expr(f"stack({len(selected)}, {stack_expr}) as (metric_name, metric_value)"),
+            )
+            .filter(F.col("metric_value").isNotNull())
+        )
 
-    def _daily_regression_metrics_by_bin(
+    def _daily_regression_metrics_by_bin_df(
         self,
         config: MonitorConfig,
         source_df: DataFrame,
         feature: str,
         edges: tuple[float, ...],
-    ) -> list[dict[str, Any]]:
+        metric_names: tuple[str, ...],
+    ) -> DataFrame | None:
         feature_df = (
             source_df
             .select(
@@ -2552,7 +2775,7 @@ class SparkRefreshRepository(ControlPlaneRepository):
             )
         )
         if not feature_df.take(1):
-            return []
+            return None
         bucketizer = Bucketizer(
             splits=list(edges),
             inputCol="_model_lens_feature_value",
@@ -2569,9 +2792,24 @@ class SparkRefreshRepository(ControlPlaneRepository):
                 F.avg("_model_lens_abs_error").alias("mae"),
                 F.sqrt(F.avg("_model_lens_squared_error")).alias("rmse"),
             )
-            .orderBy("_model_lens_profile_date", "_model_lens_bin_index")
+            .withColumn("_model_lens_bin_index", F.col("_model_lens_bin_index").cast("int"))
         )
-        return [row.asDict() for row in metric_df.collect()]
+        selected = [metric_name for metric_name in metric_names if metric_name in {"mae", "rmse"}]
+        if not selected:
+            return None
+        stack_expr = ", ".join([f"'{metric_name}', `{metric_name}`" for metric_name in selected])
+        return (
+            metric_df
+            .select(
+                F.lit(config.model_key).alias("model_key"),
+                "_model_lens_profile_date",
+                F.lit(feature).alias("feature_name"),
+                self._bin_label_expr(edges).alias("bin_label"),
+                "row_count",
+                F.expr(f"stack({len(selected)}, {stack_expr}) as (metric_name, metric_value)"),
+            )
+            .filter(F.col("metric_value").isNotNull())
+        )
 
 
 def build_refresh_repository(

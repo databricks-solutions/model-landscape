@@ -125,6 +125,8 @@ Current protections:
 - when the Spark repository is active, the workflow also persists `comparison_windows`, `drift_metrics`, `quality_history`, `performance_metrics`, `daily_*` facts, `performance_bin_specs`, `incidents`, and `incident_history` through Spark/Delta writes instead of row-batch warehouse inserts
 - numeric drift now keeps finite PSI / JS / KL values even when the current distribution moves completely outside the reference-derived range, and those histogram calculations now run in Spark from persisted daily numeric histogram edges/counts instead of flattened sample arrays
 - incident open/recovered/escalated lifecycle rows for the Spark workflow are now also derived inside the Spark repository layer before persistence, so the shared refresh job no longer needs the old Python incident helper on the hot path
+- the remaining Spark derivation rows now stream back to the driver with iterator-based formatting instead of collect-heavy whole-frame pulls for the main performance, drift, and quality-history packaging steps
+- daily per-day feature statistics for wide monitors are now batched across numeric features and across categorical features before the per-feature distribution work, so very wide monitors no longer pay one separate stats aggregation per feature on the hot path
 
 Relevant runtime knobs:
 
@@ -152,7 +154,8 @@ Operational guidance:
 - start with the defaults
 - if a customer has exceptionally wide or high-volume tables, lower the row caps before increasing compute size
 - increase `MAX_PARALLEL_REFRESH_WORKERS` only after validating a dedicated Spark cluster shape for that tenant, and treat Spark-side monitor fanout as an explicit override rather than the default large-tenant mode
-- the next scale step is reusing already-persisted daily facts across even more readback paths and cross-run recompute flows; the current shipping implementation already merges persisted daily facts into Spark-backed incremental derivation for affected spans and uses daily-feature samples in readback, while the UI still reads the stable window/history tables
+- for 20M-100M/day tenants, treat real Databricks Spark execution as the proof point, not the local skipped Spark tests
+- the next scale step is reducing the remaining per-feature distribution/bin passes on very wide monitors and pushing even more final-row packaging/persistence behind DataFrame-native paths; the current shipping implementation already batches daily feature stats, merges persisted daily facts into Spark-backed incremental derivation for affected spans, and uses daily-feature samples in readback while the UI still reads the stable window/history tables
 
 Discovery priorities:
 
@@ -285,6 +288,8 @@ If you override `app_name`, replace the app name in every `databricks apps ...` 
 - set `REFRESH_JOB_ID=<job-id>` before `databricks apps deploy`, or
 - set `REFRESH_JOB_NAME=<app-name>-refresh`
 
+Keep the checked-in `app.yaml` template environment-neutral. Set `REFRESH_JOB_ID` in the deployed app source for each workspace, but do not commit a real workspace job ID back into the repo template.
+
 If you are reusing an existing Databricks App instead of letting the bundle create one, stop here and use [Manual Setup With An Existing Databricks App](/Users/volo.vragov/Desktop/work/model-lens/docs/MANUAL_EXISTING_APP_SETUP.md). That guide now covers both:
 
 - the bind-first bundle path when the operator can manage app resources
@@ -324,6 +329,8 @@ databricks apps get model-lens
 
 Local Spark regressions now run under the normal `pytest` suite. For local execution outside Databricks, install the repo dev dependencies so `pyspark` is available; the Spark-specific tests still skip automatically when no local Java runtime is present.
 
+Because the shared refresh workflow now runs on Spark job compute, `databricks bundle validate -t warehouse_only` also requires `refresh_node_type_id` in addition to the warehouse/catalog/schema variables.
+
 Then explicitly verify the app service principal still has warehouse access. The safest flow is:
 
 ```bash
@@ -332,6 +339,7 @@ databricks apps get model-lens -o json
 
 Use the returned app identity to confirm `CAN_USE` on the SQL warehouse before opening the app.
 If you want onboarding to accelerate the first run immediately, also verify that the same app identity has `CAN MANAGE RUN` on the refresh workflow. Without that permission, the monitor still saves and the shared scheduled job can pick it up on its next hourly run.
+If `REFRESH_JOB_ID` is set, treat that as an explicit grant target and grant the app service principal `CAN_MANAGE_RUN` on that exact job ID.
 
 The app can accelerate the first refresh asynchronously during activation. It resolves the workflow in this order:
 
@@ -340,6 +348,7 @@ The app can accelerate the first refresh asynchronously during activation. It re
 
 Those values are deploy-time app environment variables. Change them in the deployed app source `app.yaml` or in the generated manual existing-app `app.yaml`, then redeploy the app. They are not onboarding inputs inside the UI.
 The shared wheel task now uses named parameters, and the app triggers it with named overrides for `catalog`, `schema`, `scope=bootstrap`, and `model_key`, so the first refresh no longer falls back silently to the job’s hardcoded scheduler defaults when `Run now` is available.
+When Setup or activation reports scheduler-only mode and `REFRESH_JOB_ID` is set, the operator fix should be explicit: grant the app service principal `CAN_MANAGE_RUN` on that job ID.
 
 The shared refresh job itself is also scheduled hourly by default in both the bundle-managed path and the generated manual existing-app path, so saved monitors are not blocked forever when `run_now` permissions are unavailable, as long as that shared workflow actually exists in the workspace.
 

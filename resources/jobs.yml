@@ -46,7 +46,7 @@ resources:
             - pypi:
                 package: plotly>=5.24,<6.0
             - pypi:
-              package: psycopg[binary]>=3.2,<4.0
+                package: psycopg[binary]>=3.2,<4.0
             - pypi:
                 package: scikit-learn>=1.5,<2.0
           max_retries: 2
