@@ -13,7 +13,7 @@ env:
   - name: CONTROL_PLANE_SCHEMA
     value: control_plane
   - name: SQL_WAREHOUSE_ID
-    valueFrom: sql_warehouse
+    value: "148ccb90800933a1"
   - name: LAKEBASE_SCHEMA
     value: model_lens_ui
   - name: REFRESH_JOB_ID
