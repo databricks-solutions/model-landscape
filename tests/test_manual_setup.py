@@ -48,10 +48,11 @@ def test_build_manual_refresh_job_payload_uses_workspace_wheel_path() -> None:
     task = payload["tasks"][0]
     assert task["python_wheel_task"]["package_name"] == "model_lens"
     assert task["python_wheel_task"]["entry_point"] == "model-lens-refresh"
+    assert task["python_wheel_task"]["named_parameters"]["scope"] == "scheduler"
     assert payload["schedule"]["quartz_cron_expression"] == "0 0 * * * ?"
     assert payload["schedule"]["pause_status"] == "UNPAUSED"
     assert payload["environments"][0]["spec"]["dependencies"][0].endswith(".whl")
-    assert "--use-lakebase-read-model" in task["python_wheel_task"]["parameters"]
+    assert task["python_wheel_task"]["named_parameters"]["use-lakebase-read-model"] == "true"
 
 
 def test_prepare_existing_app_source_script_writes_manual_app_yaml(tmp_path: Path) -> None:

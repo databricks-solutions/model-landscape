@@ -86,6 +86,22 @@ def _refresh_job_unavailable_message(model_key: str, error: Exception) -> str:
     )
 
 
+def _manual_refresh_unavailable_message(model_key: str, error: Exception) -> str:
+    detail = (
+        "If the shared refresh workflow already exists and is scheduled, it can still pick up this pending monitor on its next hourly run. "
+        "If no shared refresh workflow exists yet, deploy or create it first, then set REFRESH_JOB_ID (preferred) or REFRESH_JOB_NAME in the app environment and redeploy the app."
+    )
+    if is_refresh_job_configuration_error(error):
+        return (
+            f"Could not trigger the initial refresh for {model_key}: {error}. "
+            f"{detail}"
+        )
+    return (
+        f"Could not trigger the initial refresh for {model_key}: {error}. "
+        "The shared workflow can still pick it up on its next hourly run once job permissions are fixed."
+    )
+
+
 def _status_block(items: list[tuple[str, str]]) -> html.Div:
     return html.Div([_status_alert(message, color) for message, color in items])
 
@@ -2067,8 +2083,9 @@ def register_callbacks(app) -> None:
             ]
         )
         summary_frame = pd.DataFrame([data["summary"]]) if data["summary"] else pd.DataFrame()
+        runtime_state = data.get("runtime_state") or {}
         runtime_frame = pd.DataFrame(
-            [{"field": key, "value": value} for key, value in (data.get("runtime_state") or {}).items()]
+            [{"field": key, "value": value} for key, value in runtime_state.items()]
         )
         recent_runs = data.get("recent_runs") or []
         recent_runs_frame = (
@@ -2135,6 +2152,7 @@ def register_callbacks(app) -> None:
                 "REFRESH_JOB_ID is preferred because it avoids name-matching issues. "
                 "To change either value, update app.yaml or the generated manual existing-app app.yaml and redeploy the app."
             )
+        show_bootstrap_retry = config_status == "active" and str(runtime_state.get("bootstrap_status") or "pending") != "completed"
         schedule_card = dbc.Card(
             dbc.CardBody(
                 [
@@ -2221,6 +2239,26 @@ def register_callbacks(app) -> None:
                         className="g-3",
                     ),
                     dbc.Button("Save Monitor Settings", id="reference-save-schedule-btn", color="primary", className="mt-3"),
+                    (
+                        html.Div(
+                            [
+                                html.Hr(className="border-secondary mt-4"),
+                                html.H6("Initial Refresh", className="text-light mb-2"),
+                                html.P(
+                                    "If this monitor is still pending bootstrap, trigger the shared refresh workflow again for this selected monitor only. This uses bootstrap scope and does not change the shared job schedule.",
+                                    className="text-muted mb-3",
+                                ),
+                                dbc.Button(
+                                    "Run Initial Refresh Now",
+                                    id="reference-run-bootstrap-btn",
+                                    color="secondary",
+                                    outline=True,
+                                ),
+                            ]
+                        )
+                        if show_bootstrap_retry
+                        else html.Div()
+                    ),
                 ]
             ),
             className="mb-4",
@@ -2475,6 +2513,44 @@ def register_callbacks(app) -> None:
             return _status_alert(f"Could not update cadence: {error}", "danger"), no_update
         return (
             _status_alert(f"Updated refresh cadence for {updated.display_name}.", "success"),
+            datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        )
+
+    @app.callback(
+        Output("reference-page-status", "children", allow_duplicate=True),
+        Output("reload-token", "data", allow_duplicate=True),
+        Input("reference-run-bootstrap-btn", "n_clicks"),
+        State("global-model-select", "value"),
+        State("reference-monitor-select", "value"),
+        State("session-config-store", "data"),
+        prevent_initial_call=True,
+    )
+    def trigger_reference_bootstrap(_, global_model_id, reference_model_id, session_data):
+        model_id = _resolve_reference_model_id(global_model_id, reference_model_id)
+        if not model_id:
+            return _status_alert("Select a monitor before triggering its initial refresh.", "warning"), no_update
+        backend = _make_backend(session_data)
+        config = _get_monitor_config_for_reference(backend, model_id)
+        if not config:
+            return _status_alert("Selected monitor no longer exists.", "warning"), no_update
+        try:
+            trigger = trigger_refresh_job(
+                model_key=config.model_key,
+                control_plane_catalog=(session_data or {}).get("control_plane_catalog", settings.control_plane_catalog),
+                control_plane_schema=(session_data or {}).get("control_plane_schema", settings.control_plane_schema),
+                lakebase_instance_name=(session_data or {}).get("lakebase_instance_name", settings.lakebase_instance_name),
+                lakebase_database_name=(session_data or {}).get("lakebase_database_name", settings.lakebase_database_name),
+                lakebase_schema=(session_data or {}).get("lakebase_schema", settings.lakebase_schema),
+                scope="bootstrap",
+            )
+        except Exception as error:
+            return _status_alert(_manual_refresh_unavailable_message(config.model_key, error), "warning"), no_update
+        run_id_text = f", run_id={trigger.run_id}" if trigger.run_id is not None else ""
+        return (
+            _status_alert(
+                f"Triggered the initial refresh for {config.display_name} (job_id={trigger.job_id}{run_id_text}). Check Overview in a minute.",
+                "success",
+            ),
             datetime.now(timezone.utc).isoformat(timespec="seconds"),
         )
 

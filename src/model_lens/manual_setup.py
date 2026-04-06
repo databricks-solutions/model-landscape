@@ -99,27 +99,21 @@ def build_manual_app_yaml(settings: ManualAppSettings) -> str:
 
 
 def build_manual_refresh_job_payload(settings: ManualRefreshJobSettings) -> dict[str, object]:
-    parameters: list[str] = [
-        "--warehouse-id",
-        settings.sql_warehouse_id,
-        "--catalog",
-        settings.control_plane_catalog,
-        "--schema",
-        settings.control_plane_schema,
-    ]
+    named_parameters: dict[str, str] = {
+        "warehouse-id": settings.sql_warehouse_id,
+        "catalog": settings.control_plane_catalog,
+        "schema": settings.control_plane_schema,
+        "scope": "scheduler",
+    }
     if settings.use_lakebase_read_model:
-        parameters.extend(
-            [
-                "--use-lakebase-read-model",
-                "--lakebase-instance-name",
-                settings.lakebase_instance_name,
-                "--lakebase-database-name",
-                settings.lakebase_database_name,
-                "--lakebase-pguser",
-                settings.lakebase_pguser,
-                "--lakebase-schema",
-                settings.lakebase_schema,
-            ]
+        named_parameters.update(
+            {
+                "use-lakebase-read-model": "true",
+                "lakebase-instance-name": settings.lakebase_instance_name,
+                "lakebase-database-name": settings.lakebase_database_name,
+                "lakebase-pguser": settings.lakebase_pguser,
+                "lakebase-schema": settings.lakebase_schema,
+            }
         )
 
     return {
@@ -132,7 +126,7 @@ def build_manual_refresh_job_payload(settings: ManualRefreshJobSettings) -> dict
                 "python_wheel_task": {
                     "package_name": "model_lens",
                     "entry_point": "model-lens-refresh",
-                    "parameters": parameters,
+                    "named_parameters": named_parameters,
                 },
                 "environment_key": "refresh_runtime",
                 "max_retries": 2,

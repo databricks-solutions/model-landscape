@@ -44,6 +44,7 @@ On Databricks CLI `v0.260.0`, the bundle can bind the SQL warehouse to the app b
 - the bundle-managed refresh workflow is one shared job (`<app-name>-refresh`) scheduled hourly by default
 - each monitor stores its own drift/performance cadence in the control plane, so one shared job can service many monitors without creating one Databricks job per model
 - the app can accelerate onboarding refreshes asynchronously by resolving `REFRESH_JOB_ID` first, then falling back to `REFRESH_JOB_NAME` (default `model-lens-refresh`)
+- the shared wheel task uses `named_parameters`, and the app triggers it with `python_named_params`, so `catalog`, `schema`, `scope=bootstrap`, and `model_key` overrides now reach the deployed workflow correctly
 - when `REFRESH_JOB_NAME` is used, the resolver now falls back to full-workspace exact, suffix, and substring matching, so Databricks Asset Bundles development job names such as `[dev user] model-lens-refresh` still resolve reliably
 - `REFRESH_JOB_ID` and `REFRESH_JOB_NAME` are deploy-time app environment variables in `app.yaml`; they are not values the operator edits during onboarding inside the app
 
@@ -380,6 +381,7 @@ Expected result:
 - the app returns immediately instead of blocking on the refresh computation
 - if the app has `CAN MANAGE RUN`, the shared refresh job is triggered asynchronously for bootstrap
 - if the app cannot resolve the workflow or lacks `Run now` permission, the monitor is still saved; automatic pickup only happens if the shared hourly workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`
+- if the monitor stays `pending bootstrap`, the `Reference` page exposes `Run Initial Refresh Now` so the operator can retry the selected monitor after fixing workflow wiring or permissions
 - inside the shared job, monitor refreshes can run concurrently, but only up to the configured `MAX_PARALLEL_REFRESH_WORKERS` cap and never with two scopes for the same model in one scheduler pass
 - if one monitor hits an unexpected worker-level exception, that result is recorded as a failed monitor refresh instead of aborting the whole shared batch
 - each monitor scope is processed from one bounded projected source-range load, and the workflow derives the persisted window/history rows from the daily profile layer built for that range instead of re-querying every comparison window

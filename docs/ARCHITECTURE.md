@@ -133,7 +133,7 @@ The refresh workflow is a serverless Databricks job.
 
 Model Lens uses one shared refresh workflow by default. The bundle-managed workflow and the generated manual existing-app workflow payload are both scheduled hourly, so saved monitors have a default pickup path even when the app cannot call `Run now`, as long as that shared workflow already exists in the workspace and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`.
 
-The app does not run the heavy first refresh inline. During activation it saves the monitor config, resolves the workflow from `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`, and can trigger the job asynchronously so the UI stays responsive. Those are deploy-time app environment variables, not onboarding inputs. `CAN MANAGE RUN` on the refresh job is therefore optional acceleration for the app service principal, while the job's Run as identity still needs the source-data and control-plane privileges required for the actual computation.
+The app does not run the heavy first refresh inline. During activation it saves the monitor config, resolves the workflow from `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`, and can trigger the job asynchronously so the UI stays responsive. Those are deploy-time app environment variables, not onboarding inputs. The shared wheel task is configured with `named_parameters`, and the app triggers it with `python_named_params`, so targeted overrides such as `catalog`, `schema`, `scope=bootstrap`, and `model_key` reach the workflow correctly. `CAN MANAGE RUN` on the refresh job is therefore optional acceleration for the app service principal, while the job's Run as identity still needs the source-data and control-plane privileges required for the actual computation.
 
 Responsibilities:
 
@@ -194,6 +194,7 @@ Primary code:
 9. If Lakebase mode is active, the repository syncs the projected monitor inventory into Lakebase.
 10. The app can immediately trigger the shared refresh job for bootstrap when `Run now` permissions are available.
 11. If that trigger is unavailable, the scheduled hourly shared job still picks up the pending bootstrap automatically, but only if that shared workflow already exists and the app points at it correctly.
+12. If the monitor is still pending after wiring or permission fixes, the `Reference` page exposes `Run Initial Refresh Now` to retry bootstrap for the selected monitor only.
 
 ### Refresh Flow
 

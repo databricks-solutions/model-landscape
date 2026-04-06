@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from model_lens.services import refresh_jobs
 
 
-def test_build_refresh_job_params_uses_namespace_and_model_key(monkeypatch) -> None:
+def test_build_refresh_job_named_params_uses_namespace_and_model_key(monkeypatch) -> None:
     monkeypatch.setattr(
         refresh_jobs,
         "settings",
@@ -19,27 +19,22 @@ def test_build_refresh_job_params_uses_namespace_and_model_key(monkeypatch) -> N
         ),
     )
 
-    params = refresh_jobs.build_refresh_job_params(
+    params = refresh_jobs.build_refresh_job_named_params(
         model_key="fraud_model_demo",
         control_plane_catalog="model_observability",
         control_plane_schema="control_plane",
     )
 
-    assert params == [
-        "--warehouse-id",
-        "wh-123",
-        "--catalog",
-        "model_observability",
-        "--schema",
-        "control_plane",
-        "--scope",
-        "scheduler",
-        "--model-key",
-        "fraud_model_demo",
-    ]
+    assert params == {
+        "warehouse-id": "wh-123",
+        "catalog": "model_observability",
+        "schema": "control_plane",
+        "scope": "scheduler",
+        "model-key": "fraud_model_demo",
+    }
 
 
-def test_build_refresh_job_params_includes_lakebase_when_configured(monkeypatch) -> None:
+def test_build_refresh_job_named_params_includes_lakebase_when_configured(monkeypatch) -> None:
     monkeypatch.setattr(
         refresh_jobs,
         "settings",
@@ -55,18 +50,16 @@ def test_build_refresh_job_params_includes_lakebase_when_configured(monkeypatch)
         ),
     )
 
-    params = refresh_jobs.build_refresh_job_params(
+    params = refresh_jobs.build_refresh_job_named_params(
         model_key="fraud_model_demo",
         control_plane_catalog="model_observability",
         control_plane_schema="control_plane",
         lakebase_database_name="model_lens_ui",
     )
 
-    assert "--use-lakebase-read-model" in params
-    assert "--lakebase-database-name" in params
-    assert "model_lens_ui" in params
-    assert "--lakebase-host" in params
-    assert "lakebase.example.internal" in params
+    assert params["use-lakebase-read-model"] == "true"
+    assert params["lakebase-database-name"] == "model_lens_ui"
+    assert params["lakebase-host"] == "lakebase.example.internal"
 
 
 def test_trigger_refresh_job_uses_configured_job_id(monkeypatch) -> None:
@@ -106,7 +99,8 @@ def test_trigger_refresh_job_uses_configured_job_id(monkeypatch) -> None:
     assert trigger.job_id == 321
     assert trigger.run_id == 999
     assert fake_jobs.run_call["job_id"] == 321
-    assert fake_jobs.run_call["python_params"][-4:] == ["--scope", "bootstrap", "--model-key", "fraud_model_demo"]
+    assert fake_jobs.run_call["python_named_params"]["scope"] == "bootstrap"
+    assert fake_jobs.run_call["python_named_params"]["model-key"] == "fraud_model_demo"
 
 
 def test_trigger_refresh_job_falls_back_to_named_lookup(monkeypatch) -> None:

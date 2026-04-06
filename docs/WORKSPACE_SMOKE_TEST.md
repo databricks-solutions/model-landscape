@@ -312,6 +312,7 @@ Expected result:
 - the monitor is marked `pending bootstrap` in `monitor_runtime_state`
 - if the app has `CAN MANAGE RUN`, the success banner says the monitor was saved and the shared refresh job was triggered asynchronously
 - if the app cannot resolve the workflow or lacks `Run now` permission, the monitor is still saved; automatic pickup only happens if the shared hourly workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`
+- if the monitor remains `pending bootstrap`, the `Reference` page shows `Run Initial Refresh Now` for that selected monitor
 - the monitor appears on the overview page
 - the `Reference` page shows the saved cadence, runtime state, and recent refresh-run history for the selected monitor
 - the `Reference` page also shows recent incident lifecycle rows for that monitor when drift/performance incidents have been opened, escalated, or recovered

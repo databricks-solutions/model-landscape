@@ -233,6 +233,7 @@ At this point, the generated `app.yaml` uses:
 - `REFRESH_JOB_NAME=<existing-app-name>-refresh`
 
 `REFRESH_JOB_ID` and `REFRESH_JOB_NAME` are app environment variables in that generated `app.yaml`. They are not configured from the onboarding wizard. To change refresh-job wiring later, regenerate or edit that `app.yaml`, re-import the prepared source tree, and redeploy the app.
+The generated shared job payload now uses wheel-task `named_parameters`, which matches the app’s `python_named_params` trigger path for targeted bootstrap overrides.
 
 If the app will monitor very large tables, set these environment variables in the generated `app.yaml` and shared refresh job before deploy:
 
@@ -647,6 +648,7 @@ Expected result:
 - the monitor is marked `pending bootstrap` in the control plane
 - if the app has `CAN MANAGE RUN`, it reports that the shared refresh job was triggered
 - if it does not, the shared hourly job still remains the default pickup path only if that workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`
+- if the monitor stays `pending bootstrap`, the `Reference` page exposes `Run Initial Refresh Now` so the operator can retry the selected monitor after fixing workflow wiring or permissions
 - the cadence chosen during activation is stored with the monitor and can be edited later from the `Reference` page
 - the Overview page shows the monitor after the workflow finishes
 

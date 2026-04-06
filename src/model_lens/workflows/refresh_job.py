@@ -7,13 +7,23 @@ from model_lens.services.refresh_engine import refresh_monitor, split_baseline_c
 from model_lens.services.refresh_runner import run_refresh_cycle
 
 
+def _parse_optional_bool(value: str | None) -> bool:
+    normalized = str(value or "").strip().casefold()
+    return normalized in {"1", "true", "yes", "y", "on"}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Refresh control-plane metrics")
     parser.add_argument("--catalog", required=False)
     parser.add_argument("--schema", required=False)
     parser.add_argument("--warehouse-id", required=False)
     parser.add_argument("--model-key", required=False, default="")
-    parser.add_argument("--use-lakebase-read-model", action="store_true")
+    parser.add_argument(
+        "--use-lakebase-read-model",
+        nargs="?",
+        const="true",
+        default="false",
+    )
     parser.add_argument("--lakebase-instance-name", required=False, default="")
     parser.add_argument("--lakebase-database-name", required=False, default="")
     parser.add_argument("--lakebase-host", required=False, default="")
@@ -29,11 +39,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    use_lakebase_read_model = _parse_optional_bool(args.use_lakebase_read_model)
     repository = build_repository(
         warehouse_id=args.warehouse_id or "",
         catalog=args.catalog,
         schema=args.schema,
-        use_lakebase_read_model=args.use_lakebase_read_model,
+        use_lakebase_read_model=use_lakebase_read_model,
         lakebase_instance_name=args.lakebase_instance_name or None,
         lakebase_database_name=args.lakebase_database_name or None,
         lakebase_host=args.lakebase_host or None,

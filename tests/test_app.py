@@ -671,6 +671,7 @@ def test_render_reference_callback_shows_archive_and_delete_actions(monkeypatch)
     assert "Archive Monitor" in str(result)
     assert "Delete Monitor And History" in str(result)
     assert "Monitor Lifecycle" in str(result)
+    assert "Run Initial Refresh Now" in str(result)
     assert "REFRESH_JOB_ID is preferred" in str(result)
 
 
@@ -742,6 +743,40 @@ def test_render_reference_callback_shows_recent_incident_history(monkeypatch) ->
     assert "Recent Incident History" in str(result)
     assert "opened" in str(result)
     assert "amount" in str(result)
+
+
+def test_reference_bootstrap_retry_callback_triggers_shared_job(monkeypatch) -> None:
+    config = SimpleNamespace(model_key="fraud_model_demo", display_name="Fraud Model Demo")
+
+    class _FakeBackend:
+        def get_monitor_config(self, model_id):
+            assert model_id == "fraud_model_demo"
+            return config
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    monkeypatch.setattr(
+        callbacks_module,
+        "trigger_refresh_job",
+        lambda **kwargs: SimpleNamespace(job_id=123, run_id=456),
+    )
+    app = create_app()
+    fn = _find_callback_by_input_and_output(app, "reference-run-bootstrap-btn", "reference-page-status")
+
+    result = fn(
+        1,
+        "fraud_model_demo",
+        None,
+        {
+            "control_plane_catalog": "model_observability",
+            "control_plane_schema": "control_plane",
+            "lakebase_instance_name": "",
+            "lakebase_database_name": "",
+            "lakebase_schema": "",
+        },
+    )
+
+    assert "Triggered the initial refresh for Fraud Model Demo" in str(result[0])
+    assert result[1]
 
 
 def test_archive_reference_monitor_callback_archives_selected_monitor(monkeypatch) -> None:

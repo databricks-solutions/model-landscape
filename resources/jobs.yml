@@ -10,15 +10,11 @@ resources:
           python_wheel_task:
             package_name: model_lens
             entry_point: model-lens-refresh
-            parameters:
-              - --warehouse-id
-              - ${var.sql_warehouse_id}
-              - --catalog
-              - ${var.control_plane_catalog}
-              - --schema
-              - ${var.control_plane_schema}
-              - --scope
-              - scheduler
+            named_parameters:
+              warehouse-id: ${var.sql_warehouse_id}
+              catalog: ${var.control_plane_catalog}
+              schema: ${var.control_plane_schema}
+              scope: scheduler
           environment_key: refresh_runtime
           max_retries: 2
           min_retry_interval_millis: 60000
