@@ -61,9 +61,9 @@ Responsibilities:
 - let operators override inferred columns only when the draft is ambiguous
 - let operators choose either a rolling baseline window or a fixed known-good baseline date range
 - save monitor configs
-- let operators archive monitors from `Reference` by flipping them out of the active set while keeping warehouse history, or permanently delete a monitor and all of its persisted facts when needed
-- let operators restore archived monitors from `Reference` without going back to manual SQL
-- show recent incident lifecycle rows in `Reference` from persisted `incident_history`, so warehouse history is visible in-app even without a dedicated incident-timeline page
+- let operators archive monitors from `Monitor Settings` by flipping them out of the active set while keeping warehouse history, or permanently delete a monitor and all of its persisted facts when needed
+- let operators restore archived monitors from `Monitor Settings` without going back to manual SQL
+- show recent incident lifecycle rows in `Monitor Settings` from persisted `incident_history`, so warehouse history is visible in-app even without a dedicated incident-timeline page
 - trigger the initial refresh workflow asynchronously during monitor activation
 - render monitor summaries and incidents from Lakebase when configured
 - recommend the Lakebase-enabled target when running warehouse-only in a workspace that appears to have Lakebase available
@@ -133,7 +133,7 @@ The refresh workflow is a Spark-capable Databricks job.
 
 Model Lens uses one shared refresh workflow by default. The bundle-managed workflow and the generated manual existing-app workflow payload are both scheduled hourly, so saved monitors have a default pickup path even when the app cannot call `Run now`, as long as that shared workflow already exists in the workspace and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`.
 
-The app does not run the heavy first refresh inline. During activation it saves the monitor config, resolves the workflow from `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`, and can trigger the job asynchronously so the UI stays responsive. Those are deploy-time app environment variables, not onboarding inputs. The shared wheel task is configured with `named_parameters`, and the app triggers it with `python_named_params`, so targeted overrides such as `catalog`, `schema`, `scope=bootstrap`, and `model_key` reach the workflow correctly. `CAN MANAGE RUN` on the refresh job is therefore optional acceleration for the app service principal, while the job's Run as identity still needs the source-data and control-plane privileges required for the actual computation.
+The app does not run the heavy first refresh inline. During activation it saves the monitor config, resolves the workflow from `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`, and can trigger the job asynchronously so the UI stays responsive. Those are deploy-time app environment variables, not onboarding inputs. The shared refresh job now declares job-level parameters, pushes them into the wheel task's named arguments, and the app triggers `jobs/run-now` with `job_parameters`, which is the override path Databricks actually honors for this workflow. The workflow entrypoint also treats `scope=scheduler` plus a single `model_key` as `bootstrap`, so targeted single-monitor runs still land on the bootstrap path even if the caller only overrides `model_key`. `CAN MANAGE RUN` on the refresh job is therefore optional acceleration for the app service principal, while the job's Run as identity still needs the source-data and control-plane privileges required for the actual computation.
 
 The `Setup` step now validates more than the control-plane namespace. `Validate Workspace Wiring` computes a workspace-readiness state with three modes:
 
@@ -205,7 +205,7 @@ Primary code:
 9. If Lakebase mode is active, the repository syncs the projected monitor inventory into Lakebase.
 10. The app can immediately trigger the shared refresh job for bootstrap when `Run now` permissions are available.
 11. If that trigger is unavailable, the scheduled hourly shared job still picks up the pending bootstrap automatically, but only if that shared workflow already exists and the app points at it correctly.
-12. If the monitor is still pending after wiring or permission fixes, the `Reference` page exposes `Run Initial Refresh Now` to retry bootstrap for the selected monitor only.
+12. If the monitor is still pending after wiring or permission fixes, the `Monitor Settings` page exposes `Run First Refresh` to retry bootstrap for the selected monitor only.
 
 ### Refresh Flow
 
@@ -218,7 +218,7 @@ Primary code:
 7. It materializes `daily_quality_profiles`, `daily_feature_profiles`, and `daily_performance_profiles` from that Spark range.
 8. For performance repair, it reuses persisted canonical bin specs so the daily performance buckets stay stable across runs.
 9. It generates all valid daily comparison windows for the configured baseline policy within the comparison horizon, merges any already-persisted daily facts for the affected span, and derives drift, quality history, performance contributors, and incident lifecycle rows from that combined daily-profile layer instead of reloading each window separately.
-10. It rebuilds the monitor-wide `quality_metrics` compatibility row from all persisted `daily_quality_profiles`, so Overview and Reference stay model-wide even after bounded incremental refreshes.
+10. It rebuilds the monitor-wide `quality_metrics` compatibility row from all persisted `daily_quality_profiles`, so Overview and Monitor Settings stay model-wide even after bounded incremental refreshes.
 11. In `auto` mode, it backfills full history when no matching history exists and appends only new windows when history is already aligned.
 12. It writes `refresh_runs` / `monitor_runtime_state` through the control-plane repository and writes the daily facts plus derived metric tables through the Spark repository.
 13. It replaces or appends persisted rows for that model without duplicating logical windows, and recovery windows clear the open-incident projection when no incidents remain active.
@@ -231,7 +231,7 @@ On the app read path, feature distributions prefer sampled values already stored
 
 Current limitation:
 
-- the app UI still emphasizes current/open incidents; `Reference` now shows recent incident lifecycle rows, but there is not yet a dedicated historical incident timeline page even though warehouse incident history is persisted
+- the app UI still emphasizes current/open incidents; `Monitor Settings` now shows recent incident lifecycle rows, but there is not yet a dedicated historical incident timeline page even though warehouse incident history is persisted
 - the next scale step is reducing the remaining per-feature histogram/top-N distribution work on very wide monitors and pushing more final packaging/persistence behind DataFrame-native paths; the current shipping implementation already batches daily feature stats and uses Spark for the heavy source-range layer, but it still rebuilds that daily layer from a bounded source-range load on each affected run
 - readback still centers on the stable window/history tables; only selected paths such as feature distributions and quality-history fallback currently read the daily-profile layer directly
 - local `pytest` coverage is necessary but not sufficient for the Spark path, because the Spark-specific tests still skip automatically without a working local JVM; real Databricks execution remains the release gate for very large tenants

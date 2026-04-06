@@ -354,13 +354,13 @@ def build_refresh_job_named_params(
         raise RuntimeError("SQL_WAREHOUSE_ID is not configured for refresh job execution.")
 
     params: dict[str, str] = {
-        "warehouse-id": warehouse_id,
-        "catalog": _clean(control_plane_catalog),
-        "schema": _clean(control_plane_schema),
+        "warehouse_id": warehouse_id,
+        "control_plane_catalog": _clean(control_plane_catalog),
+        "control_plane_schema": _clean(control_plane_schema),
         "scope": _clean(scope) or "scheduler",
     }
     if _clean(model_key):
-        params["model-key"] = _clean(model_key)
+        params["model_key"] = _clean(model_key)
 
     resolved_lakebase_schema = _clean(lakebase_schema) or _clean(settings.lakebase_schema)
     resolved_lakebase_instance = _clean(lakebase_instance_name)
@@ -368,21 +368,21 @@ def build_refresh_job_named_params(
     resolved_lakebase_host = _clean(settings.lakebase_host)
 
     if resolved_lakebase_database and (resolved_lakebase_instance or resolved_lakebase_host):
-        params["use-lakebase-read-model"] = "true"
+        params["use_lakebase_read_model"] = "true"
         if resolved_lakebase_instance:
-            params["lakebase-instance-name"] = resolved_lakebase_instance
+            params["lakebase_instance_name"] = resolved_lakebase_instance
         if resolved_lakebase_database:
-            params["lakebase-database-name"] = resolved_lakebase_database
+            params["lakebase_database_name"] = resolved_lakebase_database
         if resolved_lakebase_host:
-            params["lakebase-host"] = resolved_lakebase_host
+            params["lakebase_host"] = resolved_lakebase_host
         if settings.lakebase_port:
-            params["lakebase-port"] = str(settings.lakebase_port)
+            params["lakebase_port"] = str(settings.lakebase_port)
         if _clean(settings.lakebase_pguser):
-            params["lakebase-pguser"] = _clean(settings.lakebase_pguser)
+            params["lakebase_pguser"] = _clean(settings.lakebase_pguser)
         if _clean(settings.lakebase_sslmode):
-            params["lakebase-sslmode"] = _clean(settings.lakebase_sslmode)
+            params["lakebase_sslmode"] = _clean(settings.lakebase_sslmode)
         if resolved_lakebase_schema:
-            params["lakebase-schema"] = resolved_lakebase_schema
+            params["lakebase_schema"] = resolved_lakebase_schema
 
     return params
 
@@ -473,7 +473,7 @@ def trigger_refresh_job(
     )
     waiter = client.jobs.run_now(
         job_id=job_id,
-        python_named_params=named_params,
+        job_parameters=named_params,
         idempotency_token=str(uuid4()),
     )
     response = getattr(waiter, "response", None)

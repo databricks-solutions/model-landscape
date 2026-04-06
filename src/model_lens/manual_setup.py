@@ -63,7 +63,10 @@ class ManualRefreshJobSettings:
     timeout_seconds: int = 14400
     lakebase_instance_name: str = ""
     lakebase_database_name: str = ""
+    lakebase_host: str = ""
+    lakebase_port: int = 5432
     lakebase_pguser: str = ""
+    lakebase_sslmode: str = "require"
     lakebase_schema: str = "model_lens_ui"
     use_lakebase_read_model: bool = False
 
@@ -104,22 +107,21 @@ def build_manual_app_yaml(settings: ManualAppSettings) -> str:
 
 
 def build_manual_refresh_job_payload(settings: ManualRefreshJobSettings) -> dict[str, object]:
-    named_parameters: dict[str, str] = {
-        "warehouse-id": settings.sql_warehouse_id,
-        "catalog": settings.control_plane_catalog,
-        "schema": settings.control_plane_schema,
-        "scope": "scheduler",
-    }
-    if settings.use_lakebase_read_model:
-        named_parameters.update(
-            {
-                "use-lakebase-read-model": "true",
-                "lakebase-instance-name": settings.lakebase_instance_name,
-                "lakebase-database-name": settings.lakebase_database_name,
-                "lakebase-pguser": settings.lakebase_pguser,
-                "lakebase-schema": settings.lakebase_schema,
-            }
-        )
+    job_parameters = [
+        {"name": "warehouse_id", "default": settings.sql_warehouse_id},
+        {"name": "control_plane_catalog", "default": settings.control_plane_catalog},
+        {"name": "control_plane_schema", "default": settings.control_plane_schema},
+        {"name": "scope", "default": "scheduler"},
+        {"name": "model_key", "default": ""},
+        {"name": "use_lakebase_read_model", "default": "true" if settings.use_lakebase_read_model else "false"},
+        {"name": "lakebase_instance_name", "default": settings.lakebase_instance_name},
+        {"name": "lakebase_database_name", "default": settings.lakebase_database_name},
+        {"name": "lakebase_host", "default": settings.lakebase_host},
+        {"name": "lakebase_port", "default": str(settings.lakebase_port)},
+        {"name": "lakebase_pguser", "default": settings.lakebase_pguser},
+        {"name": "lakebase_sslmode", "default": settings.lakebase_sslmode},
+        {"name": "lakebase_schema", "default": settings.lakebase_schema},
+    ]
 
     return {
         "name": f"{settings.app_name}-refresh",
@@ -135,13 +137,28 @@ def build_manual_refresh_job_payload(settings: ManualRefreshJobSettings) -> dict
                 },
             }
         ],
+        "parameters": job_parameters,
         "tasks": [
             {
                 "task_key": "refresh_control_plane",
                 "python_wheel_task": {
                     "package_name": "model_lens",
                     "entry_point": "model-lens-refresh",
-                    "named_parameters": named_parameters,
+                    "named_parameters": {
+                        "warehouse-id": "{{job.parameters.warehouse_id}}",
+                        "catalog": "{{job.parameters.control_plane_catalog}}",
+                        "schema": "{{job.parameters.control_plane_schema}}",
+                        "scope": "{{job.parameters.scope}}",
+                        "model-key": "{{job.parameters.model_key}}",
+                        "use-lakebase-read-model": "{{job.parameters.use_lakebase_read_model}}",
+                        "lakebase-instance-name": "{{job.parameters.lakebase_instance_name}}",
+                        "lakebase-database-name": "{{job.parameters.lakebase_database_name}}",
+                        "lakebase-host": "{{job.parameters.lakebase_host}}",
+                        "lakebase-port": "{{job.parameters.lakebase_port}}",
+                        "lakebase-pguser": "{{job.parameters.lakebase_pguser}}",
+                        "lakebase-sslmode": "{{job.parameters.lakebase_sslmode}}",
+                        "lakebase-schema": "{{job.parameters.lakebase_schema}}",
+                    },
                 },
                 "job_cluster_key": "refresh_compute",
                 "libraries": [

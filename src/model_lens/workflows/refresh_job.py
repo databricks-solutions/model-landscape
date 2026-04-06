@@ -39,6 +39,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     use_lakebase_read_model = _parse_optional_bool(args.use_lakebase_read_model)
+    effective_scope = args.scope
+    if (args.model_key or "").strip() and effective_scope == "scheduler":
+        effective_scope = "bootstrap"
     repository = build_refresh_repository(
         warehouse_id=args.warehouse_id or "",
         catalog=args.catalog,
@@ -53,10 +56,10 @@ def main() -> int:
         lakebase_sslmode=args.lakebase_sslmode or None,
         lakebase_schema=args.lakebase_schema or None,
     )
-    counts = run_refresh_cycle(repository, model_key=args.model_key, mode=args.mode, scope=args.scope)
+    counts = run_refresh_cycle(repository, model_key=args.model_key, mode=args.mode, scope=effective_scope)
     print(
         "refresh-control-plane complete: "
-        f"scope={args.scope} mode={args.mode} models={counts.models} drift_rows={counts.drift_rows} "
+        f"scope={effective_scope} mode={args.mode} models={counts.models} drift_rows={counts.drift_rows} "
         f"quality_rows={counts.quality_rows} performance_rows={counts.performance_rows} "
         f"incident_rows={counts.incident_rows}"
     )

@@ -26,11 +26,11 @@ def test_build_refresh_job_named_params_uses_namespace_and_model_key(monkeypatch
     )
 
     assert params == {
-        "warehouse-id": "wh-123",
-        "catalog": "model_observability",
-        "schema": "control_plane",
+        "warehouse_id": "wh-123",
+        "control_plane_catalog": "model_observability",
+        "control_plane_schema": "control_plane",
         "scope": "scheduler",
-        "model-key": "fraud_model_demo",
+        "model_key": "fraud_model_demo",
     }
 
 
@@ -57,9 +57,9 @@ def test_build_refresh_job_named_params_includes_lakebase_when_configured(monkey
         lakebase_database_name="model_lens_ui",
     )
 
-    assert params["use-lakebase-read-model"] == "true"
-    assert params["lakebase-database-name"] == "model_lens_ui"
-    assert params["lakebase-host"] == "lakebase.example.internal"
+    assert params["use_lakebase_read_model"] == "true"
+    assert params["lakebase_database_name"] == "model_lens_ui"
+    assert params["lakebase_host"] == "lakebase.example.internal"
 
 
 def test_trigger_refresh_job_uses_configured_job_id(monkeypatch) -> None:
@@ -99,8 +99,8 @@ def test_trigger_refresh_job_uses_configured_job_id(monkeypatch) -> None:
     assert trigger.job_id == 321
     assert trigger.run_id == 999
     assert fake_jobs.run_call["job_id"] == 321
-    assert fake_jobs.run_call["python_named_params"]["scope"] == "bootstrap"
-    assert fake_jobs.run_call["python_named_params"]["model-key"] == "fraud_model_demo"
+    assert fake_jobs.run_call["job_parameters"]["scope"] == "bootstrap"
+    assert fake_jobs.run_call["job_parameters"]["model_key"] == "fraud_model_demo"
 
 
 def test_trigger_refresh_job_falls_back_to_named_lookup(monkeypatch) -> None:

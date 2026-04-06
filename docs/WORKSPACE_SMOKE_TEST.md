@@ -317,14 +317,14 @@ In the app:
    - confirm `region`
    - confirm `merchant_segment` if you added it to the dataset
 9. Continue to the `Activate` step and confirm the cadence section:
-   - `Drift And Quality`: `Every 6 Hours`
-   - `Performance And Label Repair`: `Daily (7-Day Repair)` when labels are enabled
+   - `Drift / Quality Refresh`: `Every 6 Hours`
+   - `Performance Refresh`: `Daily (7-Day Repair)` when labels are enabled
    - `Enable scheduled refreshes for this monitor`: on
    - `Tracked Performance Metrics`: `F1 Score`, `Precision`, `Recall`
    - `Default Performance Metric`: `F1 Score`
 10. Save the monitor:
 
-- click `Save Monitor And Trigger Refresh`
+- click `Save Monitor`
 
 Expected result:
 
@@ -332,11 +332,11 @@ Expected result:
 - the monitor is marked `pending bootstrap` in `monitor_runtime_state`
 - if the app has `CAN MANAGE RUN`, the success banner says the monitor was saved and the shared refresh job was triggered asynchronously
 - if the app cannot resolve the workflow or lacks `Run now` permission, the monitor is still saved; automatic pickup only happens if the shared hourly workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`
-- if the monitor remains `pending bootstrap`, the `Reference` page shows `Run Initial Refresh Now` for that selected monitor
+- if the monitor remains `pending bootstrap`, the `Monitor Settings` page shows `Run First Refresh` for that selected monitor
 - the monitor appears on the overview page
-- the `Reference` page shows the saved cadence, runtime state, and recent refresh-run history for the selected monitor
-- the `Reference` page also shows recent incident lifecycle rows for that monitor when drift/performance incidents have been opened, escalated, or recovered
-- the `Reference` page also shows an `Active` / `Archived` / `All` filter plus `Archive Monitor`, `Restore Monitor`, and `Delete Monitor And History` controls; archive should hide the monitor from the active app list while keeping history, restore should bring it back without rebuilding the monitor, and delete should fully remove it after reload
+- the `Monitor Settings` page shows the saved cadence, runtime state, and recent refresh-run history for the selected monitor
+- the `Monitor Settings` page also shows recent incident lifecycle rows for that monitor when drift/performance incidents have been opened, escalated, or recovered
+- the `Monitor Settings` page also shows an `Active` / `Archived` / `All` filter plus `Archive Monitor`, `Restore Monitor`, and `Delete Monitor And History` controls; archive should hide the monitor from the active app list while keeping history, restore should bring it back without rebuilding the monitor, and delete should fully remove it after reload
 - after the workflow finishes, Drift and Performance should already show historical windows rather than a single snapshot
 - after the workflow finishes, Data Quality should show window-history charts instead of only the latest summary row
 - with the scratch dataset and `Baseline Days = 7`, you should have 8 daily comparison windows immediately

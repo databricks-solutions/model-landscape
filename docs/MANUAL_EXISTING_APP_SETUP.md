@@ -235,7 +235,7 @@ At this point, the generated `app.yaml` uses:
 - `REFRESH_JOB_NAME=<existing-app-name>-refresh`
 
 `REFRESH_JOB_ID` and `REFRESH_JOB_NAME` are app environment variables in that generated `app.yaml`. They are not configured from the onboarding wizard. To change refresh-job wiring later, regenerate or edit that `app.yaml`, re-import the prepared source tree, and redeploy the app.
-The generated shared job payload now uses wheel-task `named_parameters`, which matches the app’s `python_named_params` trigger path for targeted bootstrap overrides.
+The generated shared job payload now declares job-level parameters and pushes them into the wheel task's named arguments. The app triggers `jobs/run-now` with `job_parameters`, which is the override path Databricks currently honors for targeted bootstrap runs.
 
 If the app will monitor very large tables, set these environment variables in the generated `app.yaml` and shared refresh job before deploy:
 
@@ -624,7 +624,7 @@ If Lakebase sync is enabled, also grant the workflow identity:
 
 Open the app in the browser.
 
-In the `Reference` page, verify:
+In the `Monitor Settings` page, verify:
 
 - `SQL_WAREHOUSE_ID` is populated
 - `REFRESH_JOB_ID` or `REFRESH_JOB_NAME` is populated
@@ -650,7 +650,7 @@ From the app:
 5. enter the source table
 6. optionally enter the labels table and MLflow metadata
 7. confirm the inferred draft
-8. click `Save Monitor And Trigger Refresh`
+8. click `Save Monitor`
 
 Expected result:
 
@@ -659,8 +659,8 @@ Expected result:
 - if the app has `CAN MANAGE RUN`, it reports that the shared refresh job was triggered
 - if it does not, the shared hourly job still remains the default pickup path only if that workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`
 - if the workflow wiring is missing, ambiguous, paused, or unscheduled, setup now keeps onboarding blocked instead of allowing a dead-end monitor save
-- if the monitor stays `pending bootstrap`, the `Reference` page exposes `Run Initial Refresh Now` so the operator can retry the selected monitor after fixing workflow wiring or permissions
-- the cadence chosen during activation is stored with the monitor and can be edited later from the `Reference` page
+- if the monitor stays `pending bootstrap`, the `Monitor Settings` page exposes `Run First Refresh` so the operator can retry the selected monitor after fixing workflow wiring or permissions
+- the cadence chosen during activation is stored with the monitor and can be edited later from the `Monitor Settings` page
 - the Overview page shows the monitor after the workflow finishes
 
 ## Troubleshooting
@@ -679,7 +679,7 @@ This is the same blocker as above.
 Do not rely on adding the `sql_warehouse` app resource through the UI.
 Use Track B and generate a source tree with a literal `SQL_WAREHOUSE_ID`.
 
-### `Save Monitor And Trigger Refresh` Only Saves The Config
+### `Save Monitor` Only Saves The Config
 
 Check:
 
@@ -697,7 +697,7 @@ Check:
 
 - the app service principal still has `CAN USE` on the warehouse
 - in Track B, the deployed app source path came from the generated manual tree
-- the `Reference` page shows the expected `SQL_WAREHOUSE_ID`
+- the `Monitor Settings` page shows the expected `SQL_WAREHOUSE_ID`
 
 ### `apps deploy` Succeeds But The Wrong Source Tree Is Running
 

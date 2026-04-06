@@ -12,8 +12,8 @@ It is built for teams that want an in-house alternative to external observabilit
 - compute drift, quality, and performance-contributor summaries on a refresh workflow
 - store per-monitor refresh cadence presets and runtime state so one shared job can service many monitors
 - keep `quality_metrics` as a monitor-wide latest summary rebuilt from persisted `daily_quality_profiles`, even when incremental refreshes only touch a bounded repair range
-- let operators archive a monitor from the `Reference` page without losing history, restore an archived monitor later, or permanently delete the monitor and its stored history when cleanup is required
-- show recent incident lifecycle events in `Reference` so operators can inspect openings, escalations, and recoveries without leaving the current monitor context
+- let operators archive a monitor from the `Monitor Settings` page without losing history, restore an archived monitor later, or permanently delete the monitor and its stored history when cleanup is required
+- show recent incident lifecycle events in `Monitor Settings` so operators can inspect openings, escalations, and recoveries without leaving the current monitor context
 - backfill drift, quality, and performance window history on the first refresh so timelines are populated immediately
 - keep giant inference tables off the app memory hot path by using Spark-backed exact source reads for refresh computation and only bounded pandas reads for small UI drilldowns
 - read Overview in bulk for large tenants by querying the latest drift and quality snapshots across all active monitors with explicit latest-row windowing instead of replaying full per-monitor history queries on page load
@@ -92,7 +92,7 @@ Current engine behavior:
 - an optional MLflow experiment or registered model can contribute feature ordering, model/version hints, and lineage metadata during onboarding
 - discovery keeps the full numeric feature set by default; Model Lens does not silently trim the first run to a top-N subset
 - the drift/performance path now avoids redundant per-feature numeric coercion during backfills so wide numeric schemas are cheaper to process than the earlier implementation
-- the review step now stores per-monitor cadence presets plus per-monitor performance metrics, and the Reference page can edit those settings later without creating new Databricks jobs
+- the review step now stores per-monitor cadence presets plus per-monitor performance metrics, and the Monitor Settings page can edit those settings later without creating new Databricks jobs
 - classification monitors now track `f1`, `precision`, and `recall` by default, with optional `accuracy`; regression monitors track `rmse` and `mae` by default
 - the Performance page still lets the viewer switch metrics, but the dropdown is now constrained to the metric set configured for that monitor
 - categorical features no longer stop at contract storage only; categorical drift now emits PSI / JS / KL rows alongside numeric drift
@@ -406,7 +406,7 @@ After deploy:
 12. If external labels are not unique on the join key, confirm or fill in `External Labels Order Column`.
 13. Continue to `Activate`, then save the monitor.
 14. Confirm the app acknowledges that the monitor was saved. If `CAN MANAGE RUN` is configured, it should also say the shared refresh job was triggered for bootstrap; otherwise the shared hourly job can pick it up on its next run only if that workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`.
-15. If the monitor is still `pending bootstrap`, open `Reference` and use `Run Initial Refresh Now` after fixing job wiring or permissions. That retry path triggers the shared workflow again for the selected monitor only, using bootstrap scope.
+15. If the monitor is still `pending bootstrap`, open `Monitor Settings` and use `Run First Refresh` after fixing job wiring or permissions. That retry path triggers the shared workflow again for the selected monitor only, using bootstrap scope.
 16. Open the overview and analysis pages after the workflow finishes to confirm the new monitor appears and the initial refresh populated historical readback immediately.
 
 ## Full Docs
