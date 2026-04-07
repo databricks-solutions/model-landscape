@@ -739,6 +739,19 @@ def test_ensure_control_plane_adds_refresh_run_migration_columns() -> None:
     )
 
 
+def test_ensure_control_plane_adds_daily_performance_profile_migration_columns() -> None:
+    warehouse = FakeWarehouse()
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    repository.ensure_control_plane()
+
+    assert any(
+        "ALTER TABLE model_observability.control_plane.daily_performance_profiles" in sql
+        and "volume_pct" in sql.lower()
+        for sql in warehouse.executed
+    )
+
+
 def test_get_existing_window_keys_falls_back_to_drift_metrics_when_comparison_windows_are_empty() -> None:
     warehouse = FakeWarehouse()
     warehouse.drift_window_rows = [{
@@ -891,6 +904,7 @@ def test_append_refresh_result_replaces_daily_profile_rows_by_profile_date() -> 
                     "metric_name": "f1",
                     "metric_value": 0.84,
                     "row_count": 60,
+                    "volume_pct": 60.0,
                     "computed_at": "2026-01-20T00:00:00+00:00",
                 }
             ],
@@ -904,6 +918,12 @@ def test_append_refresh_result_replaces_daily_profile_rows_by_profile_date() -> 
     assert any("INSERT INTO model_observability.control_plane.daily_quality_profiles" in sql for sql, _ in warehouse.batch_calls)
     assert any("INSERT INTO model_observability.control_plane.daily_feature_profiles" in sql for sql, _ in warehouse.batch_calls)
     assert any("INSERT INTO model_observability.control_plane.daily_performance_profiles" in sql for sql, _ in warehouse.batch_calls)
+    performance_insert_rows = next(
+        rows
+        for sql, rows in warehouse.batch_calls
+        if "INSERT INTO model_observability.control_plane.daily_performance_profiles" in sql
+    )
+    assert performance_insert_rows[0][7] == 60.0
 
 
 def test_append_refresh_result_rebuilds_quality_summary_from_persisted_daily_profiles() -> None:

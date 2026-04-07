@@ -21,6 +21,7 @@ from model_lens.domain.models import (
 from model_lens.services.inference_contracts import build_inference_contract
 from model_lens.services.lakebase import LakebaseConnection, LakebaseReadModel
 from model_lens.services.schema import (
+    daily_performance_profile_migration_columns,
     ddl,
     monitor_config_migration_columns,
     refresh_run_migration_columns,
@@ -227,6 +228,7 @@ class ControlPlaneRepository:
         self._ensure_monitor_config_columns()
         self._ensure_refresh_run_columns()
         self._ensure_runtime_state_columns()
+        self._ensure_daily_performance_profile_columns()
         if self._read_model and self._read_model.configured:
             self._read_model.ensure_schema()
 
@@ -310,6 +312,12 @@ class ControlPlaneRepository:
 
     def _ensure_runtime_state_columns(self) -> None:
         self._ensure_table_columns(self._table_names.monitor_runtime_state, runtime_state_migration_columns())
+
+    def _ensure_daily_performance_profile_columns(self) -> None:
+        self._ensure_table_columns(
+            self._table_names.daily_performance_profiles,
+            daily_performance_profile_migration_columns(),
+        )
 
     def scan_source_table(self, table_name: str, preview_rows: int = 5) -> tuple[list[str], pd.DataFrame, pd.DataFrame]:
         validate_identifier(table_name)
@@ -1910,6 +1918,7 @@ class ControlPlaneRepository:
                 row["metric_name"],
                 row["metric_value"],
                 row["row_count"],
+                row["volume_pct"],
                 row["computed_at"],
                 source_run_id or "",
             )
@@ -1919,7 +1928,7 @@ class ControlPlaneRepository:
             f"""
             INSERT INTO {self._table_names.daily_performance_profiles} (
                 model_key, profile_date, feature_name, bin_label,
-                metric_name, metric_value, row_count, computed_at, source_run_id
+                metric_name, metric_value, row_count, volume_pct, computed_at, source_run_id
             ) VALUES
             """.strip(),
             payload,

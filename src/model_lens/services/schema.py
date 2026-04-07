@@ -43,6 +43,12 @@ def runtime_state_migration_columns() -> dict[str, str]:
     }
 
 
+def daily_performance_profile_migration_columns() -> dict[str, str]:
+    return {
+        "volume_pct": "DOUBLE",
+    }
+
+
 def ddl(table_names: TableNames) -> dict[str, str]:
     return {
         "monitor_configs": f"""
@@ -192,6 +198,7 @@ def ddl(table_names: TableNames) -> dict[str, str]:
                 metric_name STRING,
                 metric_value DOUBLE,
                 row_count BIGINT,
+                volume_pct DOUBLE,
                 computed_at TIMESTAMP,
                 source_run_id STRING
             ) USING DELTA
