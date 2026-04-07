@@ -28,6 +28,31 @@ def test_parse_args_accepts_explicit_lakebase_bool_value(monkeypatch) -> None:
     assert args.use_lakebase_read_model == "false"
 
 
+def test_parse_args_accepts_raw_job_parameter_underscore_names(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "model-lens-refresh",
+            "--warehouse_id=wh-123",
+            "--control_plane_catalog=hive_metastore",
+            "--control_plane_schema=model_lens_control_plane",
+            "--model_key=fraud_model_demo",
+            "--use_lakebase_read_model=false",
+            "--lakebase_database_name=",
+        ],
+    )
+
+    args = refresh_job.parse_args()
+
+    assert args.warehouse_id == "wh-123"
+    assert args.catalog == "hive_metastore"
+    assert args.schema == "model_lens_control_plane"
+    assert args.model_key == "fraud_model_demo"
+    assert args.use_lakebase_read_model == "false"
+    assert args.lakebase_database_name == ""
+
+
 def test_refresh_job_defaults_single_model_scheduler_run_to_bootstrap(monkeypatch) -> None:
     captured = {}
 
