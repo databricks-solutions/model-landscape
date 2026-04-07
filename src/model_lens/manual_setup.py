@@ -60,6 +60,7 @@ class ManualRefreshJobSettings:
     control_plane_catalog: str
     control_plane_schema: str
     spark_version: str = "15.4.x-scala2.12"
+    data_security_mode: str = "USER_ISOLATION"
     node_type_id: str = ""
     num_workers: int = 4
     timeout_seconds: int = 14400
@@ -138,6 +139,7 @@ def build_manual_refresh_job_payload(settings: ManualRefreshJobSettings) -> dict
                 "job_cluster_key": "refresh_compute",
                 "new_cluster": {
                     "spark_version": settings.spark_version,
+                    "data_security_mode": settings.data_security_mode,
                     "node_type_id": settings.node_type_id,
                     "num_workers": settings.num_workers,
                 },

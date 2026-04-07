@@ -205,6 +205,8 @@ The default bundle/job-cluster settings for the shared refresh workflow are now:
 
 - `refresh_spark_version`
   default `"15.4.x-scala2.12"`
+- `refresh_data_security_mode`
+  default `USER_ISOLATION`
 - `refresh_node_type_id`
   required workspace-specific node type
 - `refresh_num_workers`
@@ -334,6 +336,7 @@ databricks apps get model-lens
 Local Spark regressions now run under the normal `pytest` suite. For local execution outside Databricks, install the repo dev dependencies so `pyspark` is available; the Spark-specific tests still skip automatically when no local Java runtime is present.
 
 Because the shared refresh workflow now runs on Spark job compute, `databricks bundle validate -t warehouse_only` also requires `refresh_node_type_id` in addition to the warehouse/catalog/schema variables.
+The shared Spark cluster now defaults to `data_security_mode=USER_ISOLATION`, which is required for Unity Catalog access. If your workspace policy requires a different UC-capable mode, override `refresh_data_security_mode` to `SINGLE_USER`.
 There is no longer a repo-wide default control-plane namespace in the bundle. Pass the real workspace namespace explicitly on every deploy or validate call. For example, a Hive Metastore workspace often uses:
 
 ```bash

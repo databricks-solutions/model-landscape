@@ -9,6 +9,7 @@ resources:
         - job_cluster_key: refresh_compute
           new_cluster:
             spark_version: ${var.refresh_spark_version}
+            data_security_mode: ${var.refresh_data_security_mode}
             node_type_id: ${var.refresh_node_type_id}
             num_workers: ${var.refresh_num_workers}
       parameters:

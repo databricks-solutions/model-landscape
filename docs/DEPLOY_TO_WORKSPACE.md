@@ -106,6 +106,8 @@ Optional but important when you do not want the default names:
 - `app_name`
 - `refresh_spark_version`
   default `"15.4.x-scala2.12"`
+- `refresh_data_security_mode`
+  default `USER_ISOLATION`
 - `refresh_num_workers`
   default `4`
 - `refresh_timeout_seconds`
@@ -168,6 +170,7 @@ databricks bundle validate \
 The local test suite now includes Spark-refresh regressions. Run it from an environment with the repo dev dependencies installed so `pyspark` is present; those Spark-specific tests still skip automatically when no local Java runtime is available.
 
 Because the shared refresh workflow now runs on a Spark job cluster, `refresh_node_type_id` is mandatory even for `warehouse_only`.
+The cluster now also defaults to `refresh_data_security_mode=USER_ISOLATION`, which is required for Unity Catalog access. Override it to `SINGLE_USER` only if your workspace policy requires that UC-capable access mode instead.
 
 Lakebase-enabled:
 

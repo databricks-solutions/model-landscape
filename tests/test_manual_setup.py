@@ -57,6 +57,7 @@ def test_build_manual_refresh_job_payload_uses_workspace_wheel_path() -> None:
     assert payload["schedule"]["quartz_cron_expression"] == "0 0 * * * ?"
     assert payload["schedule"]["pause_status"] == "UNPAUSED"
     assert payload["job_clusters"][0]["new_cluster"]["node_type_id"] == "m5d.large"
+    assert payload["job_clusters"][0]["new_cluster"]["data_security_mode"] == "USER_ISOLATION"
     assert payload["job_clusters"][0]["new_cluster"]["num_workers"] == 4
     assert task["job_cluster_key"] == "refresh_compute"
     assert task["libraries"][0]["whl"].endswith(".whl")

@@ -64,6 +64,7 @@ def test_bundle_declares_spark_refresh_job_variables() -> None:
     text = (REPO_ROOT / "databricks.yml").read_text()
 
     assert "refresh_spark_version:" in text
+    assert "refresh_data_security_mode:" in text
     assert "refresh_node_type_id:" in text
     assert "refresh_num_workers:" in text
     assert "refresh_timeout_seconds:" in text

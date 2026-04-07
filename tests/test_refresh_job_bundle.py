@@ -17,4 +17,5 @@ def test_bundle_refresh_job_uses_job_parameters_and_pushdown() -> None:
     assert "python_wheel_task:" in text
     assert "job_clusters:" in text
     assert "job_cluster_key: refresh_compute" in text
+    assert "data_security_mode: ${var.refresh_data_security_mode}" in text
     assert "timeout_seconds: ${var.refresh_timeout_seconds}" in text

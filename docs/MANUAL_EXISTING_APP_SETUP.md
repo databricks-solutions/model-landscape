@@ -249,6 +249,7 @@ If you want a separate large-tenant bootstrap/backfill lane later, the same gene
 Those optional values only affect direct bootstrap/backfill triggers. The default product shape remains one shared scheduled job.
 
 The generated shared job payload now declares job-level parameters and pushes them into the wheel task's named arguments. The app triggers `jobs/run-now` with `job_parameters`, which is the override path Databricks currently honors for targeted bootstrap runs.
+The generated Spark job cluster also defaults to `data_security_mode=USER_ISOLATION` so the workflow can access Unity Catalog tables. If your workspace policy requires it, change the generated payload to `SINGLE_USER` before `jobs create` or `jobs reset`.
 
 If the app will monitor very large tables, set these environment variables in the generated `app.yaml` and shared refresh job before deploy:
 

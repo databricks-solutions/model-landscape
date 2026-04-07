@@ -31,6 +31,9 @@ variables:
     default: model_lens_ui
   refresh_spark_version:
     default: "15.4.x-scala2.12"
+  refresh_data_security_mode:
+    description: Databricks access mode for the shared Spark refresh job cluster (USER_ISOLATION or SINGLE_USER for Unity Catalog access)
+    default: USER_ISOLATION
   refresh_node_type_id:
     description: Existing Databricks node type for the shared Spark refresh job
   refresh_num_workers:

@@ -351,6 +351,7 @@ Expected result:
 - if the app cannot resolve the workflow or lacks `Run now` permission, the monitor is still saved; automatic pickup only happens if the shared hourly workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`
 - if the monitor remains `pending bootstrap`, the `Monitor Settings` page shows `Run First Refresh` for that selected monitor
 - if a scheduled or direct bootstrap run still logs `refresh-control-plane complete: scope=bootstrap mode=auto models=0`, the same job log now includes `refresh-control-plane selection:` lines for every active monitor considered, including reasons such as `bootstrap_already_completed`, `bootstrap_run_already_running`, `recent_failure_backoff`, or `max_bootstraps_per_run_reached`
+- if the shared refresh cluster cannot read Unity Catalog tables, verify the job cluster access mode is UC-capable (`USER_ISOLATION` by default in the bundle/manual payload, or `SINGLE_USER` if your workspace policy requires it)
 - the monitor appears on the overview page
 - the new `Incidents` page loads without errors, even before any incidents exist
 - the `Monitor Settings` page shows the saved cadence, runtime state, and recent refresh-run history for the selected monitor
