@@ -64,6 +64,8 @@ Responsibilities:
 - let operators archive monitors from `Monitor Settings` by flipping them out of the active set while keeping warehouse history, or permanently delete a monitor and all of its persisted facts when needed
 - let operators restore archived monitors from `Monitor Settings` without going back to manual SQL
 - show recent incident lifecycle rows in `Monitor Settings` from persisted `incident_history`, so warehouse history is visible in-app even without a dedicated incident-timeline page
+- show a dedicated `Incidents` page that reads cross-monitor open incidents from `incidents` and recent lifecycle rows from `incident_history`
+- show `Refresh Diagnostics` in `Monitor Settings`, interpreting recent `refresh_runs` telemetry into bottleneck categories and trend guidance
 - trigger the initial refresh workflow asynchronously during monitor activation
 - render monitor summaries and incidents from Lakebase when configured
 - recommend the Lakebase-enabled target when running warehouse-only in a workspace that appears to have Lakebase available
@@ -91,8 +93,8 @@ The warehouse is the compute access layer and the authoritative read/write path 
 
 The durable monitoring state lives in Delta tables under a customer-selected Unity Catalog namespace:
 
-- catalog: deployment input, default `model_observability`
-- schema: deployment input, default `control_plane`
+- catalog: deployment input, no repo-wide default; pass the real workspace catalog at deploy time
+- schema: deployment input, no repo-wide default; pass the real workspace schema at deploy time
 
 Current tables:
 
@@ -112,6 +114,8 @@ Current tables:
 - `monitor_runtime_state`
 
 This is the system of record.
+
+The app also derives a monitor-level diagnostics summary from recent `refresh_runs` rows so operators can see whether source scans, daily profile generation, derivation, or persistence are dominating the last few runs.
 
 `monitor_configs` now also stores the monitor's configured performance metric set and default Performance-tab metric. The persisted performance tables stay generic on `metric_name`, so refresh and readback can handle different built-in metric combinations per monitor without changing the warehouse schema again.
 
@@ -173,6 +177,7 @@ Responsibilities:
 - batch daily per-day feature statistics across numeric features and across categorical features before the per-feature histogram/top-N distribution passes, so wide monitors no longer pay one separate stats aggregation per feature
 - record one refresh-run row per model execution with requested mode, effective mode, counts, status, and data range
 - create that `refresh_runs` row before source-range discovery so every attempted monitor execution leaves an audit trail, even when validation or source inspection fails early
+- record stage timings on those `refresh_runs` rows (`source_metadata_ms`, `daily_profiles_ms`, `derivation_ms`, `persistence_ms`, `total_duration_ms`) so `Monitor Settings` can classify recent bottlenecks without another warehouse-side fact table
 - reconcile stale `running` refresh rows at scheduler startup after `REFRESH_STALE_RUN_MINUTES` so killed workers do not wedge monitors permanently
 - persist one `monitor_runtime_state` row per monitor so the shared job can track bootstrap state, next due timestamps, and the latest error without requiring per-monitor Databricks jobs
 - persist one comparison-window row per logical baseline/current pairing
@@ -240,7 +245,7 @@ On the app read path, feature distributions prefer sampled values already stored
 
 Current limitation:
 
-- the app UI still emphasizes current/open incidents; `Monitor Settings` now shows recent incident lifecycle rows, but there is not yet a dedicated historical incident timeline page even though warehouse incident history is persisted
+- the app now has a dedicated `Incidents` page for cross-monitor open incidents and recent lifecycle history, but it is still table-first and does not yet provide acknowledgements, assignee workflow, or alert delivery
 - the next scale step is reducing the remaining per-feature histogram/top-N distribution work on very wide monitors and pushing more final packaging/persistence behind DataFrame-native paths; the current shipping implementation already batches daily feature stats and uses Spark for the heavy source-range layer, but it still rebuilds that daily layer from a bounded source-range load on each affected run
 - readback still centers on the stable window/history tables; only selected paths such as feature distributions and quality-history fallback currently read the daily-profile layer directly
 - local `pytest` coverage is necessary but not sufficient for the Spark path, because the Spark-specific tests still skip automatically without a working local JVM; real Databricks execution remains the release gate for very large tenants

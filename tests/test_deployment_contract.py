@@ -33,6 +33,19 @@ def test_app_yaml_does_not_require_unsupported_job_binding() -> None:
 
     assert "valueFrom: refresh_job" not in text
     assert 'value: ""' in text
+    assert '  - name: CONTROL_PLANE_CATALOG\n    value: ""' in text
+    assert '  - name: CONTROL_PLANE_SCHEMA\n    value: ""' in text
+
+
+def test_bundle_requires_explicit_control_plane_namespace_vars() -> None:
+    text = (REPO_ROOT / "databricks.yml").read_text()
+
+    assert "control_plane_catalog:" in text
+    assert "control_plane_schema:" in text
+    assert "description: Existing control-plane catalog for this workspace" in text
+    assert "description: Existing control-plane schema for this workspace" in text
+    assert "control_plane_catalog:\n    default:" not in text
+    assert "control_plane_schema:\n    default:" not in text
 
 
 def test_wrapper_scripts_avoid_serverless_fragile_path_patterns() -> None:

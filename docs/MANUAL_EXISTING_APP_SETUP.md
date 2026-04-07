@@ -79,6 +79,12 @@ That script is:
 
 Track B is the recommended path when the app already exists and the operator cannot manage app resources.
 
+Important:
+
+- the generated `app.yaml` and the generated `refresh-job.json` must use the same `control_plane_catalog` and `control_plane_schema`
+- on Hive Metastore workspaces, that often means `hive_metastore` plus a schema such as `model_lens_control_plane`
+- do not rely on any repo default for the control-plane namespace; pass it explicitly every time
+
 ## What You Need
 
 Collect these values first:

@@ -35,6 +35,10 @@ class FakeWarehouse:
         self.distinct_model_ids = 2
         self.duplicate_label_keys = 0
         self.alter_field_already_exists = False
+        self.schema_exists = False
+        self.existing_tables: set[str] = set()
+        self.fail_create_schema = False
+        self.fail_create_table = False
         self.comparison_window_rows: list[dict[str, object]] = []
         self.drift_window_rows: list[dict[str, object]] = []
         self.monitor_row = {
@@ -73,6 +77,15 @@ class FakeWarehouse:
         }
 
     def execute(self, sql: str) -> None:
+        if "CREATE SCHEMA IF NOT EXISTS" in sql:
+            if self.fail_create_schema:
+                raise Exception("[PERMISSION_DENIED] Missing CREATE privilege")
+            self.schema_exists = True
+        if "CREATE TABLE IF NOT EXISTS" in sql:
+            if self.fail_create_table:
+                raise Exception("[PERMISSION_DENIED] Missing CREATE privilege")
+            table_name = sql.split("CREATE TABLE IF NOT EXISTS", 1)[1].split("(", 1)[0].strip()
+            self.existing_tables.add(table_name)
         if self.alter_field_already_exists and "ALTER TABLE" in sql and "ADD COLUMNS" in sql:
             raise Exception("[FIELD_ALREADY_EXISTS] Column already exists")
         self.executed.append(sql)
@@ -134,6 +147,16 @@ class FakeWarehouse:
     def query(self, sql: str, cache: bool = False) -> pd.DataFrame:
         del cache
         self.queries.append(sql)
+        if sql == "SHOW SCHEMAS IN model_observability LIKE 'control_plane'":
+            if self.schema_exists:
+                return pd.DataFrame([{"databaseName": "control_plane"}])
+            return pd.DataFrame(columns=["databaseName"])
+        if sql.startswith("SHOW TABLES IN model_observability.control_plane LIKE '"):
+            table_name = sql.split("LIKE '", 1)[1].rsplit("'", 1)[0]
+            qualified_name = f"model_observability.control_plane.{table_name}"
+            if qualified_name in self.existing_tables:
+                return pd.DataFrame([{"tableName": table_name}])
+            return pd.DataFrame(columns=["tableName"])
         if "COUNT(*) AS total_rows" in sql and "FROM catalog.schema.inference_logs s" in sql:
             return pd.DataFrame([{
                 "total_rows": 21,
@@ -647,6 +670,39 @@ def test_ensure_control_plane_ignores_field_already_exists_during_migration() ->
 
     assert any("CREATE SCHEMA IF NOT EXISTS" in sql for sql in warehouse.executed)
     assert any("CREATE TABLE IF NOT EXISTS" in sql for sql in warehouse.executed)
+
+
+def test_ensure_control_plane_skips_create_when_schema_and_tables_already_exist() -> None:
+    warehouse = FakeWarehouse()
+    warehouse.schema_exists = True
+    warehouse.existing_tables = {
+        "model_observability.control_plane.monitor_configs",
+        "model_observability.control_plane.drift_metrics",
+        "model_observability.control_plane.quality_metrics",
+        "model_observability.control_plane.quality_history",
+        "model_observability.control_plane.daily_quality_profiles",
+        "model_observability.control_plane.daily_feature_profiles",
+        "model_observability.control_plane.performance_metrics",
+        "model_observability.control_plane.daily_performance_profiles",
+        "model_observability.control_plane.performance_bin_specs",
+        "model_observability.control_plane.incidents",
+        "model_observability.control_plane.incident_history",
+        "model_observability.control_plane.refresh_runs",
+        "model_observability.control_plane.comparison_windows",
+        "model_observability.control_plane.monitor_runtime_state",
+    }
+    warehouse.fail_create_schema = True
+    warehouse.fail_create_table = True
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    repository.ensure_control_plane()
+
+    assert not any("CREATE SCHEMA IF NOT EXISTS" in sql for sql in warehouse.executed)
+    assert not any("CREATE TABLE IF NOT EXISTS" in sql for sql in warehouse.executed)
+    assert any(
+        "ALTER TABLE model_observability.control_plane.refresh_runs" in sql and "scope" in sql.lower()
+        for sql in warehouse.executed
+    )
 
 
 def test_ensure_control_plane_adds_refresh_run_migration_columns() -> None:

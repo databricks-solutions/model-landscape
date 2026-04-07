@@ -9,9 +9,9 @@ env:
   - name: PYTHONPATH
     value: src
   - name: CONTROL_PLANE_CATALOG
-    value: model_observability
+    value: ""
   - name: CONTROL_PLANE_SCHEMA
-    value: control_plane
+    value: ""
   - name: SQL_WAREHOUSE_ID
     value: ""
   - name: LAKEBASE_SCHEMA

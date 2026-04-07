@@ -1,8 +1,31 @@
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 
 from model_lens.workflows import refresh_job
+
+
+def test_parse_args_accepts_explicit_lakebase_bool_value(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "model-lens-refresh",
+            "--catalog",
+            "model_observability",
+            "--schema",
+            "control_plane",
+            "--warehouse-id",
+            "wh-123",
+            "--use-lakebase-read-model",
+            "false",
+        ],
+    )
+
+    args = refresh_job.parse_args()
+
+    assert args.use_lakebase_read_model == "false"
 
 
 def test_refresh_job_defaults_single_model_scheduler_run_to_bootstrap(monkeypatch) -> None:

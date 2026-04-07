@@ -151,6 +151,10 @@ def _is_field_already_exists_error(error: Exception) -> bool:
     return "FIELD_ALREADY_EXISTS" in message or "ALREADY EXISTS" in message
 
 
+def _sql_like_literal(value: str) -> str:
+    return value.replace("'", "''")
+
+
 def _resolve_source_labels_join_col(
     source_columns: list[str] | tuple[str, ...],
     entity_id_col: str | None,
@@ -207,14 +211,61 @@ class ControlPlaneRepository:
     def ensure_control_plane(self, *, create_catalog: bool = False) -> None:
         if create_catalog:
             self._warehouse.execute(f"CREATE CATALOG IF NOT EXISTS {self._table_names.catalog}")
-        self._warehouse.execute(f"CREATE SCHEMA IF NOT EXISTS {self._table_names.namespace}")
-        for statement in ddl(self._table_names).values():
-            self._warehouse.execute(statement)
+        self._ensure_schema_exists()
+        for table_name, statement in self._ddl_statements().items():
+            self._ensure_table_exists(table_name, statement)
         self._ensure_monitor_config_columns()
         self._ensure_refresh_run_columns()
         self._ensure_runtime_state_columns()
         if self._read_model and self._read_model.configured:
             self._read_model.ensure_schema()
+
+    def _ddl_statements(self) -> dict[str, str]:
+        return {
+            getattr(self._table_names, logical_name): statement
+            for logical_name, statement in ddl(self._table_names).items()
+        }
+
+    def _schema_exists(self) -> bool:
+        schema_name = _sql_like_literal(self._table_names.schema)
+        try:
+            schemas = self._warehouse.query(
+                f"SHOW SCHEMAS IN {self._table_names.catalog} LIKE '{schema_name}'"
+            )
+        except Exception:
+            return False
+        return not schemas.empty
+
+    def _table_exists(self, table_name: str) -> bool:
+        table_basename = _sql_like_literal(table_name.rsplit(".", 1)[-1])
+        try:
+            tables = self._warehouse.query(
+                f"SHOW TABLES IN {self._table_names.namespace} LIKE '{table_basename}'"
+            )
+        except Exception:
+            return False
+        return not tables.empty
+
+    def _ensure_schema_exists(self) -> None:
+        if self._schema_exists():
+            return
+        statement = f"CREATE SCHEMA IF NOT EXISTS {self._table_names.namespace}"
+        try:
+            self._warehouse.execute(statement)
+        except Exception:
+            if self._schema_exists():
+                return
+            raise
+
+    def _ensure_table_exists(self, table_name: str, create_statement: str) -> None:
+        if self._table_exists(table_name):
+            return
+        try:
+            self._warehouse.execute(create_statement)
+        except Exception:
+            if self._table_exists(table_name):
+                return
+            raise
 
     def _ensure_table_columns(self, table_name: str, migration_columns: dict[str, str]) -> None:
         try:
@@ -1283,6 +1334,19 @@ class ControlPlaneRepository:
             LIMIT {max(1, limit)}
             """,
             (model_key,),
+        )
+        if frame.empty:
+            return []
+        return [row.to_dict() for _, row in frame.iterrows()]
+
+    def get_recent_incident_history_all(self, limit: int = 50) -> list[dict[str, Any]]:
+        frame = self._warehouse.query(
+            f"""
+            SELECT *
+            FROM {self._table_names.incident_history}
+            ORDER BY observed_at DESC, window_end DESC
+            LIMIT {max(1, limit)}
+            """
         )
         if frame.empty:
             return []

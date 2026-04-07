@@ -227,6 +227,304 @@ def _format_runtime_setting_value(field: str, value: object) -> str:
     return str(value)
 
 
+def _format_duration_ms(value: object) -> str:
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        return "—"
+    milliseconds = float(numeric)
+    if milliseconds >= 60_000:
+        return f"{milliseconds / 60_000:.1f} min"
+    if milliseconds >= 1_000:
+        return f"{milliseconds / 1_000:.1f} s"
+    return f"{int(milliseconds)} ms"
+
+
+def _incident_options(data: dict | None) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    payload = data or {}
+    models = payload.get("models") or []
+    open_incidents = payload.get("open_incidents")
+    history = payload.get("history")
+    model_options = [
+        {
+            "label": f"{row['name']} ({'Archived' if row.get('status') == 'inactive' else 'Active'})",
+            "value": row["id"],
+        }
+        for row in models
+    ]
+    metric_values: set[str] = set()
+    for frame in (open_incidents, history):
+        if isinstance(frame, pd.DataFrame) and not frame.empty and "metric_name" in frame.columns:
+            metric_values.update(
+                str(value).strip()
+                for value in frame["metric_name"].dropna().tolist()
+                if str(value).strip()
+            )
+    metric_options = [{"label": metric, "value": metric} for metric in sorted(metric_values)]
+    return model_options, metric_options
+
+
+def _filter_incident_frame(
+    frame: pd.DataFrame,
+    *,
+    model_id: str | None,
+    severity: str | None,
+    status: str | None,
+    metric_name: str | None,
+) -> pd.DataFrame:
+    if frame is None or frame.empty:
+        return pd.DataFrame()
+    filtered = frame.copy()
+    if model_id and "model_key" in filtered.columns:
+        filtered = filtered[filtered["model_key"] == model_id]
+    severity_value = str(severity or "all").strip().lower()
+    if severity_value and severity_value != "all" and "severity" in filtered.columns:
+        filtered = filtered[filtered["severity"].astype(str).str.lower() == severity_value]
+    status_value = str(status or "all").strip().lower()
+    if status_value and status_value != "all" and "status" in filtered.columns:
+        filtered = filtered[filtered["status"].astype(str).str.lower() == status_value]
+    metric_value = str(metric_name or "").strip()
+    if metric_value and "metric_name" in filtered.columns:
+        filtered = filtered[filtered["metric_name"].astype(str) == metric_value]
+    return filtered
+
+
+def _render_refresh_diagnostics(diagnostics: dict | None) -> html.Div:
+    payload = diagnostics or {}
+    summary = payload.get("summary") or {}
+    state = str(payload.get("state") or "no_runs").strip() or "no_runs"
+    recent_runs = payload.get("recent_runs") or []
+    if state == "no_runs":
+        return html.Div("No refresh runs yet.", className="text-muted")
+
+    recommendations = [str(item).strip() for item in summary.get("recommendations") or [] if str(item).strip()]
+    recommendation_block = (
+        html.Ul([html.Li(text) for text in recommendations], className="text-muted mb-3")
+        if recommendations
+        else html.Div()
+    )
+    state_alert = None
+    if state == "insufficient_data":
+        state_alert = dbc.Alert(
+            "Not enough successful timed runs yet to diagnose bottlenecks reliably.",
+            color="secondary",
+            className="py-2 mb-3",
+        )
+    elif state == "failure_heavy":
+        state_alert = dbc.Alert(
+            "Recent failures limit timing guidance. Review recent error messages first.",
+            color="warning",
+            className="py-2 mb-3",
+        )
+
+    summary_cards = dbc.Row(
+        [
+            dbc.Col(
+                make_metric_card(
+                    "Recent Median Duration",
+                    _format_duration_ms(summary.get("median_duration_ms")),
+                    "Successful runs",
+                ),
+                md=3,
+            ),
+            dbc.Col(
+                make_metric_card(
+                    "Dominant Bottleneck",
+                    str(summary.get("dominant_bottleneck") or "Insufficient Data"),
+                    "Recent successful runs",
+                    "warning" if state == "ready" else "secondary",
+                ),
+                md=3,
+            ),
+            dbc.Col(
+                make_metric_card(
+                    "Trend",
+                    str(summary.get("trend") or "Not Enough History"),
+                    "Recent vs previous runs",
+                ),
+                md=3,
+            ),
+            dbc.Col(
+                make_metric_card(
+                    "Success Rate",
+                    f"{float(summary.get('success_rate_pct') or 0.0):.1f}%",
+                    f"{int(summary.get('successful_run_count') or 0)}/{int(summary.get('recent_run_count') or 0)} recent runs",
+                    "success" if float(summary.get("success_rate_pct") or 0.0) >= 80.0 else "warning",
+                ),
+                md=3,
+            ),
+        ],
+        className="g-3 mb-3",
+    )
+    recent_runs_frame = (
+        pd.DataFrame(recent_runs)[
+            [
+                "started_at",
+                "scope",
+                "status",
+                "total_duration_ms",
+                "dominant_stage",
+                "recommendation",
+            ]
+        ]
+        if recent_runs
+        else pd.DataFrame()
+    )
+    if not recent_runs_frame.empty:
+        recent_runs_frame = recent_runs_frame.rename(
+            columns={
+                "started_at": "Started At",
+                "scope": "Scope",
+                "status": "Status",
+                "total_duration_ms": "Total Duration",
+                "dominant_stage": "Dominant Stage",
+                "recommendation": "Recommendation",
+            }
+        )
+        recent_runs_frame["Total Duration"] = recent_runs_frame["Total Duration"].apply(_format_duration_ms)
+    return html.Div(
+        [
+            state_alert if state_alert is not None else html.Div(),
+            summary_cards,
+            html.H6("Recommendations", className="text-light mb-2"),
+            recommendation_block if recommendations else html.Div("No diagnostics recommendations yet.", className="text-muted mb-3"),
+            html.H6("Recent Diagnosed Runs", className="text-light mb-2"),
+            _render_frame(recent_runs_frame, "No diagnosed runs yet.", max_rows=8),
+        ]
+    )
+
+
+def _render_incidents_page(
+    data: dict | None,
+    *,
+    model_id: str | None,
+    severity: str | None,
+    status: str | None,
+    metric_name: str | None,
+) -> html.Div:
+    payload = data or {}
+    open_incidents = payload.get("open_incidents")
+    history = payload.get("history")
+    open_filtered = _filter_incident_frame(
+        open_incidents if isinstance(open_incidents, pd.DataFrame) else pd.DataFrame(),
+        model_id=model_id,
+        severity=severity,
+        status=status,
+        metric_name=metric_name,
+    )
+    history_filtered = _filter_incident_frame(
+        history if isinstance(history, pd.DataFrame) else pd.DataFrame(),
+        model_id=model_id,
+        severity=severity,
+        status=status,
+        metric_name=metric_name,
+    )
+    if open_filtered.empty and history_filtered.empty:
+        return make_empty_state("No incidents recorded yet.", icon="fas fa-triangle-exclamation")
+
+    critical_open = (
+        int(
+            (
+                open_filtered["severity"].astype(str).str.lower() == "critical"
+            ).sum()
+        )
+        if not open_filtered.empty and "severity" in open_filtered.columns
+        else 0
+    )
+    affected_monitors = (
+        int(open_filtered["model_key"].astype(str).nunique())
+        if not open_filtered.empty and "model_key" in open_filtered.columns
+        else 0
+    )
+    summary_row = dbc.Row(
+        [
+            dbc.Col(make_metric_card("Open Incidents", str(len(open_filtered)), "Current open rows"), md=3),
+            dbc.Col(make_metric_card("Critical", str(critical_open), "Open critical incidents", "danger" if critical_open else "secondary"), md=3),
+            dbc.Col(make_metric_card("Affected Monitors", str(affected_monitors), "With open incidents"), md=3),
+            dbc.Col(make_metric_card("Recent Events", str(len(history_filtered)), "Lifecycle rows in view"), md=3),
+        ],
+        className="g-3 mb-4",
+    )
+
+    open_frame = (
+        open_filtered[
+            [
+                column
+                for column in (
+                    "display_name",
+                    "model_key",
+                    "feature_name",
+                    "metric_name",
+                    "severity",
+                    "metric_value",
+                    "window_end",
+                    "observed_at",
+                )
+                if column in open_filtered.columns
+            ]
+        ]
+        .rename(
+            columns={
+                "display_name": "Monitor",
+                "model_key": "Model Key",
+                "feature_name": "Feature",
+                "metric_name": "Metric",
+                "severity": "Severity",
+                "metric_value": "Value",
+                "window_end": "Window End",
+                "observed_at": "Observed At",
+            }
+        )
+        if not open_filtered.empty
+        else pd.DataFrame()
+    )
+    history_frame = (
+        history_filtered[
+            [
+                column
+                for column in (
+                    "display_name",
+                    "model_key",
+                    "event_type",
+                    "feature_name",
+                    "metric_name",
+                    "severity",
+                    "status",
+                    "metric_value",
+                    "window_end",
+                    "observed_at",
+                )
+                if column in history_filtered.columns
+            ]
+        ]
+        .rename(
+            columns={
+                "display_name": "Monitor",
+                "model_key": "Model Key",
+                "event_type": "Event",
+                "feature_name": "Feature",
+                "metric_name": "Metric",
+                "severity": "Severity",
+                "status": "Status",
+                "metric_value": "Value",
+                "window_end": "Window End",
+                "observed_at": "Observed At",
+            }
+        )
+        if not history_filtered.empty
+        else pd.DataFrame()
+    )
+    return html.Div(
+        [
+            summary_row,
+            html.H6("Open Incidents", className="text-light mb-2"),
+            _render_frame(open_frame, "No open incidents for the current filters.", max_rows=20),
+            html.Hr(),
+            html.H6("Recent Incident History", className="text-light mb-2"),
+            _render_frame(history_frame, "No incident history for the current filters.", max_rows=20),
+        ]
+    )
+
+
 def _option_list(columns: list[str], include_blank: bool = False) -> list[dict]:
     options = [{"label": column, "value": column} for column in columns]
     if include_blank:
@@ -1909,6 +2207,52 @@ def register_callbacks(app) -> None:
         return html.Div([summary_row, dbc.Row(model_cards, className="mb-4"), make_chart_card(summary_chart), _render_frame(details, "No overview detail available.")])
 
     @app.callback(
+        Output("incidents-monitor-filter", "options"),
+        Output("incidents-monitor-filter", "value"),
+        Output("incidents-metric-filter", "options"),
+        Output("incidents-metric-filter", "value"),
+        Input("url", "pathname"),
+        Input("reload-token", "data"),
+        Input("session-config-store", "data"),
+        State("incidents-monitor-filter", "value"),
+        State("incidents-metric-filter", "value"),
+    )
+    def populate_incident_filters(pathname, _, session_data, current_model_id, current_metric_name):
+        if pathname != "/incidents":
+            return no_update, no_update, no_update, no_update
+        backend = _make_backend(session_data)
+        incidents_data = backend.get_incidents_data(limit_history=100)
+        model_options, metric_options = _incident_options(incidents_data)
+        model_values = {option["value"] for option in model_options}
+        metric_values = {option["value"] for option in metric_options}
+        resolved_model = current_model_id if current_model_id in model_values else None
+        resolved_metric = current_metric_name if current_metric_name in metric_values else None
+        return model_options, resolved_model, metric_options, resolved_metric
+
+    @app.callback(
+        Output("incidents-page-body", "children"),
+        Input("url", "pathname"),
+        Input("incidents-monitor-filter", "value"),
+        Input("incidents-severity-filter", "value"),
+        Input("incidents-status-filter", "value"),
+        Input("incidents-metric-filter", "value"),
+        Input("reload-token", "data"),
+        Input("session-config-store", "data"),
+    )
+    def render_incidents_page(pathname, model_id, severity, status, metric_name, _, session_data):
+        if pathname != "/incidents":
+            return no_update
+        backend = _make_backend(session_data)
+        incidents_data = backend.get_incidents_data(limit_history=100)
+        return _render_incidents_page(
+            incidents_data,
+            model_id=model_id,
+            severity=severity,
+            status=status,
+            metric_name=metric_name,
+        )
+
+    @app.callback(
         Output("drift-heatmap-container", "children"),
         Output("drift-categorical-note", "children"),
         Output("drift-timeline-container", "children"),
@@ -2339,6 +2683,7 @@ def register_callbacks(app) -> None:
             [{"field": key, "value": value} for key, value in runtime_state.items()]
         )
         recent_runs = data.get("recent_runs") or []
+        refresh_diagnostics = data.get("refresh_diagnostics") or {}
         recent_runs_frame = (
             pd.DataFrame(recent_runs)[
                 [
@@ -2348,12 +2693,12 @@ def register_callbacks(app) -> None:
                         "status",
                         "started_at",
                         "completed_at",
-                        "window_count",
-                        "drift_row_count",
-                        "quality_row_count",
-                        "performance_row_count",
-                        "incident_row_count",
+                        "total_duration_ms",
                         "error_message",
+                        "source_metadata_ms",
+                        "daily_profiles_ms",
+                        "derivation_ms",
+                        "persistence_ms",
                     )
                     if recent_runs and column in recent_runs[0]
                 ]
@@ -2361,6 +2706,24 @@ def register_callbacks(app) -> None:
             if recent_runs
             else pd.DataFrame()
         )
+        if not recent_runs_frame.empty and "total_duration_ms" in recent_runs_frame.columns:
+            recent_runs_frame = recent_runs_frame.rename(
+                columns={
+                    "scope": "Scope",
+                    "status": "Status",
+                    "started_at": "Started At",
+                    "completed_at": "Completed At",
+                    "total_duration_ms": "Total Duration",
+                    "error_message": "Error",
+                    "source_metadata_ms": "Source Metadata",
+                    "daily_profiles_ms": "Daily Profiles",
+                    "derivation_ms": "Derivation",
+                    "persistence_ms": "Persistence",
+                }
+            )
+            for column in ("Total Duration", "Source Metadata", "Daily Profiles", "Derivation", "Persistence"):
+                if column in recent_runs_frame.columns:
+                    recent_runs_frame[column] = recent_runs_frame[column].apply(_format_duration_ms)
         recent_incident_history = data.get("recent_incident_history") or []
         recent_incident_history_frame = (
             pd.DataFrame(recent_incident_history)[
@@ -2638,6 +3001,9 @@ def register_callbacks(app) -> None:
                 html.Hr(),
                 html.H6("Runtime State", className="text-light mb-2"),
                 _render_frame(runtime_frame, "No runtime state yet."),
+                html.Hr(),
+                html.H6("Refresh Diagnostics", className="text-light mb-2"),
+                _render_refresh_diagnostics(refresh_diagnostics),
                 html.Hr(),
                 html.H6("Recent Refresh Runs", className="text-light mb-2"),
                 _render_frame(recent_runs_frame, "No refresh runs recorded yet."),

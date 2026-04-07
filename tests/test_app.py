@@ -128,6 +128,11 @@ def test_app_layout_exposes_slimmed_onboarding_flow() -> None:
         "model-version-value-input",
         "labels-order-col-input",
         "reference-page-status",
+        "incidents-page-body",
+        "incidents-monitor-filter",
+        "incidents-severity-filter",
+        "incidents-status-filter",
+        "incidents-metric-filter",
     }.issubset(ids)
 
     components_by_id = {component.id: component for component in page_components}
@@ -898,8 +903,168 @@ def test_render_reference_callback_shows_archive_and_delete_actions(monkeypatch)
     assert "Archive Monitor" in str(result)
     assert "Delete Monitor And History" in str(result)
     assert "Monitor Lifecycle" in str(result)
-    assert "Run Initial Refresh Now" in str(result)
-    assert "REFRESH_JOB_ID is preferred" in str(result)
+
+
+def test_render_reference_callback_shows_refresh_diagnostics(monkeypatch) -> None:
+    config = SimpleNamespace(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.demo.inference",
+        contract=SimpleNamespace(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            model_version_col=None,
+            label_col="label",
+            entity_id_col="entity_id",
+            feature_columns=("amount",),
+            categorical_columns=("segment",),
+            slice_columns=("segment",),
+        ),
+        model_id_value="fraud_model_v1",
+        model_version_value=None,
+        labels_table=None,
+        labels_join_col=None,
+        labels_order_col=None,
+        mlflow=SimpleNamespace(
+            experiment_name=None,
+            experiment_id=None,
+            run_id=None,
+            registered_model_name=None,
+            model_version=None,
+        ),
+        baseline=SimpleNamespace(kind="rolling", n_days=7, baseline_start=None, baseline_end=None),
+        problem_type="classification",
+        drift_cadence_preset="6h",
+        performance_cadence_preset="daily_7d_repair",
+        schedule_enabled=True,
+        status="active",
+    )
+
+    class _FakeBackend:
+        def get_reference_data(self, model_id):
+            assert model_id == "fraud_model_demo"
+            return {
+                "config": config,
+                "summary": {},
+                "runtime_state": {},
+                "recent_runs": [],
+                "refresh_diagnostics": {
+                    "state": "ready",
+                    "summary": {
+                        "recent_run_count": 4,
+                        "successful_run_count": 4,
+                        "success_rate_pct": 100.0,
+                        "median_duration_ms": 240000,
+                        "dominant_bottleneck": "Daily Profiles Bound",
+                        "trend": "Stable",
+                        "recommendations": [
+                            "Daily profile generation dominates. Consider more Spark workers for this workload."
+                        ],
+                    },
+                    "recent_runs": [
+                        {
+                            "started_at": "2026-01-21T10:00:00",
+                            "scope": "drift_quality",
+                            "status": "completed",
+                            "total_duration_ms": 240000,
+                            "dominant_stage": "Daily Profiles",
+                            "recommendation": "Daily profile generation dominates. Consider more Spark workers for this workload.",
+                        }
+                    ],
+                },
+                "recent_incident_history": [],
+                "settings": {"refresh_job_id": "", "refresh_job_name": "model-lens-refresh"},
+            }
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_output(app, "reference-page-body")
+
+    result = fn("/reference", "fraud_model_demo", None, 0, {})
+
+    assert "Refresh Diagnostics" in str(result)
+    assert "Recent Median Duration" in str(result)
+    assert "Daily Profiles Bound" in str(result)
+    assert "Recent Diagnosed Runs" in str(result)
+
+
+def test_render_incidents_page_shows_open_and_recent_rows(monkeypatch) -> None:
+    class _FakeBackend:
+        def get_incidents_data(self, limit_history=100):
+            assert limit_history == 100
+            return {
+                "models": [
+                    {"id": "fraud_model_demo", "name": "Fraud Model Demo", "status": "active"},
+                    {"id": "payments_model_demo", "name": "Payments Demo", "status": "inactive"},
+                ],
+                "open_incidents": pd.DataFrame(
+                    [
+                        {
+                            "model_key": "fraud_model_demo",
+                            "display_name": "Fraud Model Demo",
+                            "feature_name": "amount",
+                            "metric_name": "psi",
+                            "severity": "critical",
+                            "metric_value": 0.22,
+                            "window_end": "2026-01-21",
+                            "observed_at": "2026-01-21T10:00:00",
+                            "status": "open",
+                        }
+                    ]
+                ),
+                "history": pd.DataFrame(
+                    [
+                        {
+                            "model_key": "fraud_model_demo",
+                            "display_name": "Fraud Model Demo",
+                            "event_type": "opened",
+                            "feature_name": "amount",
+                            "metric_name": "psi",
+                            "severity": "critical",
+                            "status": "open",
+                            "metric_value": 0.22,
+                            "window_end": "2026-01-21",
+                            "observed_at": "2026-01-21T10:00:00",
+                        }
+                    ]
+                ),
+            }
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_output(app, "incidents-page-body")
+
+    result = fn("/incidents", None, "all", "all", None, 0, {})
+
+    assert "Open Incidents" in str(result)
+    assert "Recent Incident History" in str(result)
+    assert "Fraud Model Demo" in str(result)
+    assert "Critical" in str(result)
+
+
+def test_populate_incident_filters_uses_incident_data(monkeypatch) -> None:
+    class _FakeBackend:
+        def get_incidents_data(self, limit_history=100):
+            return {
+                "models": [{"id": "fraud_model_demo", "name": "Fraud Model Demo", "status": "active"}],
+                "open_incidents": pd.DataFrame([{"metric_name": "psi"}]),
+                "history": pd.DataFrame([{"metric_name": "js_divergence"}]),
+            }
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_output(app, "incidents-monitor-filter")
+
+    model_options, model_value, metric_options, metric_value = fn("/incidents", 0, {}, None, None)
+
+    assert model_value is None
+    assert metric_value is None
+    assert model_options == [{"label": "Fraud Model Demo (Active)", "value": "fraud_model_demo"}]
+    assert metric_options == [
+        {"label": "js_divergence", "value": "js_divergence"},
+        {"label": "psi", "value": "psi"},
+    ]
 
 
 def test_render_reference_callback_shows_recent_incident_history(monkeypatch) -> None:

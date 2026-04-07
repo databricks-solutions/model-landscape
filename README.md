@@ -14,6 +14,8 @@ It is built for teams that want an in-house alternative to external observabilit
 - keep `quality_metrics` as a monitor-wide latest summary rebuilt from persisted `daily_quality_profiles`, even when incremental refreshes only touch a bounded repair range
 - let operators archive a monitor from the `Monitor Settings` page without losing history, restore an archived monitor later, or permanently delete the monitor and its stored history when cleanup is required
 - show recent incident lifecycle events in `Monitor Settings` so operators can inspect openings, escalations, and recoveries without leaving the current monitor context
+- show an `Incidents` page with cross-monitor open incidents and recent lifecycle history, so operators can answer “what is broken right now?” without filtering one monitor at a time
+- show `Refresh Diagnostics` in `Monitor Settings`, translating recent `refresh_runs` stage telemetry into bottleneck labels, trend hints, and sizing guidance during scale validation
 - backfill drift, quality, and performance window history on the first refresh so timelines are populated immediately
 - keep giant inference tables off the app memory hot path by using Spark-backed exact source reads for refresh computation and only bounded pandas reads for small UI drilldowns
 - read Overview in bulk for large tenants by querying the latest drift and quality snapshots across all active monitors with explicit latest-row windowing instead of replaying full per-monitor history queries on page load
@@ -257,6 +259,7 @@ Permission matrix by identity:
   `CAN_USE` on the SQL warehouse; `CAN MANAGE RUN` on the refresh workflow; source data `USE CATALOG`, `USE SCHEMA`, `SELECT`; control plane `USE CATALOG`, `USE SCHEMA`, `SELECT`, `MODIFY`.
 - App service principal, if Setup should create missing objects:
   `CREATE TABLE` in the control-plane schema; `CREATE SCHEMA` if the schema may not exist yet; `CREATE CATALOG` only if you want the `Create catalog if missing` toggle to work.
+  If the target control-plane schema and tables are already present, Setup now checks for them first and can reuse them without `CREATE SCHEMA` / `CREATE TABLE`.
 - Refresh workflow identity:
   the same warehouse, source-data, and control-plane permissions as the app, because the workflow reads source data and writes monitoring results.
 - Optional MLflow-assisted onboarding:
@@ -289,7 +292,7 @@ If you override `app_name`, replace the app name in every `databricks apps ...` 
 - set `REFRESH_JOB_NAME=<app-name>-refresh`
 
 Keep the checked-in `app.yaml` template environment-neutral. Set `REFRESH_JOB_ID` in the deployed app source for each workspace, but do not commit a real workspace job ID back into the repo template.
-For Git-based app deployments, also replace the blank `SQL_WAREHOUSE_ID` in the deployed `app.yaml` with a literal warehouse ID because Git deploys do not get the bundle-managed `sql_warehouse` binding automatically.
+For Git-based app deployments, also replace the blank `SQL_WAREHOUSE_ID`, `CONTROL_PLANE_CATALOG`, and `CONTROL_PLANE_SCHEMA` values in the deployed `app.yaml` with the same literal workspace values you pass to the bundle or manual job creation path. Git deploys do not get the bundle-managed `sql_warehouse` binding automatically, and the shared refresh job reads its namespace from bundle variables, not from the app UI session.
 
 If you are reusing an existing Databricks App instead of letting the bundle create one, stop here and use [Manual Setup With An Existing Databricks App](/Users/volo.vragov/Desktop/work/model-lens/docs/MANUAL_EXISTING_APP_SETUP.md). That guide now covers both:
 
@@ -331,6 +334,12 @@ databricks apps get model-lens
 Local Spark regressions now run under the normal `pytest` suite. For local execution outside Databricks, install the repo dev dependencies so `pyspark` is available; the Spark-specific tests still skip automatically when no local Java runtime is present.
 
 Because the shared refresh workflow now runs on Spark job compute, `databricks bundle validate -t warehouse_only` also requires `refresh_node_type_id` in addition to the warehouse/catalog/schema variables.
+There is no longer a repo-wide default control-plane namespace in the bundle. Pass the real workspace namespace explicitly on every deploy or validate call. For example, a Hive Metastore workspace often uses:
+
+```bash
+--var "control_plane_catalog=hive_metastore" \
+--var "control_plane_schema=model_lens_control_plane"
+```
 
 Then explicitly verify the app service principal still has warehouse access. The safest flow is:
 
@@ -418,6 +427,7 @@ After deploy:
 13. Continue to `Activate`, then save the monitor.
 14. Confirm the app acknowledges that the monitor was saved. If `CAN MANAGE RUN` is configured, it should also say the shared refresh job was triggered for bootstrap; otherwise the shared hourly job can pick it up on its next run only if that workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`.
 15. If the monitor is still `pending bootstrap`, open `Monitor Settings` and use `Run First Refresh` after fixing job wiring or permissions. That retry path triggers the shared workflow again for the selected monitor only, using bootstrap scope.
+16. Open `Monitor Settings` after a few runs and review `Refresh Diagnostics`. It now classifies recent runs as source-scan, daily-profile, derivation, persistence, or mixed bottlenecks, then suggests the next tuning step from the recorded timings.
 16. Open the overview and analysis pages after the workflow finishes to confirm the new monitor appears and the initial refresh populated historical readback immediately.
 
 ## Full Docs
@@ -465,7 +475,7 @@ python3 scripts/model_lens_refresh.py \
   --catalog <control-plane-catalog> \
   --schema <control-plane-schema> \
   --mode auto \
-  --use-lakebase-read-model \
+  --use-lakebase-read-model true \
   --lakebase-instance-name <lakebase-instance-name> \
   --lakebase-database-name <lakebase-database-name> \
   --lakebase-pguser <lakebase-db-user>

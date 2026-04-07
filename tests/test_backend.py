@@ -926,7 +926,41 @@ def test_get_reference_data_includes_recent_incident_history_when_available() ->
         list_monitor_configs=lambda status="active": [config],
         get_monitor_summary=lambda: pd.DataFrame([{"model_key": "fraud_model_demo", "total_rows": 840}]),
         get_monitor_runtime_state=lambda model_id: None,
-        get_recent_refresh_runs=lambda model_id, limit=8: [{"scope": "bootstrap", "status": "completed"}],
+        get_recent_refresh_runs=lambda model_id, limit=12: [
+            {
+                "scope": "bootstrap",
+                "status": "completed",
+                "started_at": "2026-01-21T10:00:00",
+                "completed_at": "2026-01-21T10:06:00",
+                "source_metadata_ms": 90_000,
+                "daily_profiles_ms": 120_000,
+                "derivation_ms": 90_000,
+                "persistence_ms": 60_000,
+                "total_duration_ms": 360_000,
+            },
+            {
+                "scope": "drift_quality",
+                "status": "completed",
+                "started_at": "2026-01-20T10:00:00",
+                "completed_at": "2026-01-20T10:05:00",
+                "source_metadata_ms": 75_000,
+                "daily_profiles_ms": 130_000,
+                "derivation_ms": 65_000,
+                "persistence_ms": 30_000,
+                "total_duration_ms": 300_000,
+            },
+            {
+                "scope": "drift_quality",
+                "status": "completed",
+                "started_at": "2026-01-19T10:00:00",
+                "completed_at": "2026-01-19T10:05:10",
+                "source_metadata_ms": 80_000,
+                "daily_profiles_ms": 140_000,
+                "derivation_ms": 60_000,
+                "persistence_ms": 30_000,
+                "total_duration_ms": 310_000,
+            },
+        ],
         get_recent_incident_history=lambda model_id, limit=8: [
             {
                 "event_type": "opened",
@@ -944,7 +978,9 @@ def test_get_reference_data_includes_recent_incident_history_when_available() ->
 
     reference = backend.get_reference_data("fraud_model_demo")
 
-    assert reference["recent_runs"] == [{"scope": "bootstrap", "status": "completed"}]
+    assert reference["recent_runs"][0]["scope"] == "bootstrap"
+    assert reference["refresh_diagnostics"]["summary"]["dominant_bottleneck"] == "Mixed"
+    assert reference["refresh_diagnostics"]["summary"]["successful_run_count"] == 3
     assert reference["recent_incident_history"] == [
         {
             "event_type": "opened",
@@ -957,3 +993,60 @@ def test_get_reference_data_includes_recent_incident_history_when_available() ->
             "observed_at": "2026-01-21T10:00:00",
         }
     ]
+
+
+def test_get_incidents_data_enriches_rows_with_monitor_names() -> None:
+    config = MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.model_lens_demo.inference_logs",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=("amount",),
+            slice_columns=("region",),
+            categorical_columns=("region",),
+        ),
+        baseline=BaselinePolicy(n_days=7),
+        model_id_value="fraud_model_v1",
+    )
+    repository = SimpleNamespace(
+        _warehouse=_FakeWarehouse(),
+        list_monitor_configs=lambda status=None: [config],
+        get_open_incidents=lambda: pd.DataFrame(
+            [
+                {
+                    "model_key": "fraud_model_demo",
+                    "feature_name": "amount",
+                    "metric_name": "psi",
+                    "severity": "critical",
+                    "metric_value": 0.22,
+                    "window_end": "2026-01-21",
+                    "observed_at": "2026-01-21T10:00:00",
+                }
+            ]
+        ),
+        get_recent_incident_history_all=lambda limit=50: [
+            {
+                "model_key": "fraud_model_demo",
+                "event_type": "opened",
+                "feature_name": "amount",
+                "metric_name": "psi",
+                "severity": "critical",
+                "status": "open",
+                "metric_value": 0.22,
+                "window_end": "2026-01-21",
+                "observed_at": "2026-01-21T10:00:00",
+            }
+        ],
+    )
+    backend = DashboardBackend(repository=repository)
+
+    incidents = backend.get_incidents_data(limit_history=20)
+
+    assert incidents["models"] == [{"id": "fraud_model_demo", "name": "Fraud Model Demo", "status": "active"}]
+    assert incidents["open_incidents"].iloc[0]["display_name"] == "Fraud Model Demo"
+    assert incidents["open_incidents"].iloc[0]["status"] == "open"
+    assert incidents["history"].iloc[0]["display_name"] == "Fraud Model Demo"

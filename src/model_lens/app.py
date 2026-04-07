@@ -14,7 +14,7 @@ from model_lens.callbacks import (
     register_callbacks,
 )
 from model_lens.config import settings
-from model_lens.pages import data_quality, drift_analysis, feature_deep_dive, onboarding, overview, performance, reference
+from model_lens.pages import data_quality, drift_analysis, feature_deep_dive, incidents, onboarding, overview, performance, reference
 from model_lens.ui.sidebar import build_sidebar
 from model_lens.ui.styles import INDEX_STRING
 
@@ -24,6 +24,8 @@ def _page_layout(pathname: str):
         return onboarding.layout()
     if pathname == "/drift":
         return drift_analysis.layout()
+    if pathname == "/incidents":
+        return incidents.layout()
     if pathname == "/features":
         return feature_deep_dive.layout()
     if pathname == "/performance":
@@ -67,6 +69,7 @@ def create_app() -> dash.Dash:
                 [
                     overview.layout(),
                     onboarding.layout(),
+                    incidents.layout(),
                     drift_analysis.layout(),
                     feature_deep_dive.layout(),
                     performance.layout(),

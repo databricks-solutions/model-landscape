@@ -19,9 +19,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-key", required=False, default="")
     parser.add_argument(
         "--use-lakebase-read-model",
-        nargs="?",
-        const="true",
         default="false",
+        metavar="{true,false}",
     )
     parser.add_argument("--lakebase-instance-name", required=False, default="")
     parser.add_argument("--lakebase-database-name", required=False, default="")

@@ -75,6 +75,7 @@ Treat permissions as identity-specific:
   `CAN MANAGE RUN` on the shared refresh workflow.
 - App service principal, if Setup should create missing objects:
   `CREATE TABLE` in the control-plane schema; `CREATE SCHEMA` if the schema may not exist yet; `CREATE CATALOG` only if you intend to use the `Create catalog if missing` toggle.
+  If the schema and tables already exist, Setup now reuses them and does not require those create privileges just to pass the control-plane step.
 - Refresh workflow identity:
   the same warehouse, source-data, and control-plane permissions as the app, because the workflow reads source data and writes monitoring results.
 - Optional MLflow-assisted onboarding:
@@ -90,6 +91,15 @@ For `warehouse_only`, Model Lens expects:
 - `control_plane_catalog`
 - `control_plane_schema`
 - `refresh_node_type_id`
+
+There is no checked-in bundle default for `control_plane_catalog` or `control_plane_schema` anymore. Pass the real namespace for every workspace explicitly so the shared refresh job and the app point at the same control plane.
+
+Example for a Hive Metastore deployment:
+
+```bash
+--var "control_plane_catalog=hive_metastore" \
+--var "control_plane_schema=model_lens_control_plane"
+```
 
 Optional but important when you do not want the default names:
 
@@ -325,6 +335,7 @@ Recommended:
 - point the app at a pre-created namespace
 - leave `Create catalog if missing` off unless you are using an admin identity and intentionally want Model Lens to create the catalog
 - keep the app namespace fields aligned with the bundle `control_plane_catalog` / `control_plane_schema` vars so the workflow and the app write to the same place
+- for Git/manual app deploys, stamp those same catalog/schema values into the deployed `app.yaml`; the repo template is intentionally blank and should not be treated as a workspace default
 - if you want app-side Lakebase reads immediately, fill in `Lakebase Instance Name` and `Lakebase Database Name` first
 - prefer `REFRESH_JOB_ID` over `REFRESH_JOB_NAME`; name lookup is still supported but treated as a fallback
 

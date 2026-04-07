@@ -65,6 +65,7 @@ Identity checklist for this smoke test:
   `CAN MANAGE RUN` on the shared refresh workflow
 - app service principal, if Setup should create missing objects:
   `CREATE TABLE` in the control-plane schema; `CREATE SCHEMA` if the schema is missing; `CREATE CATALOG` only if you plan to use the toggle
+  If the control-plane schema and tables are already present, Setup now checks for them first and can succeed without those create grants.
 - refresh workflow identity:
   the same warehouse, source-data, and control-plane permissions as the app
 - optional MLflow-assisted onboarding:
@@ -105,6 +106,13 @@ Expected result:
 - both wrapper scripts parse
 - wheel build succeeds
 - bundle validation passes
+
+Use the real workspace namespace every time. There is no repo-wide default control-plane catalog/schema in the bundle now. For example, a Hive Metastore test workspace often uses:
+
+```bash
+--var "control_plane_catalog=hive_metastore" \
+--var "control_plane_schema=model_lens_control_plane"
+```
 
 Note: the local test suite now includes Spark-refresh regressions. Run it from an environment with the repo dev dependencies installed so `pyspark` is available; the Spark-specific tests still skip automatically when no local Java runtime is present.
 For large-tenant rollout, treat those local skipped tests as insufficient proof by themselves; the real release gate is successful Databricks Spark execution for bootstrap and incremental runs.
@@ -343,9 +351,13 @@ Expected result:
 - if the app cannot resolve the workflow or lacks `Run now` permission, the monitor is still saved; automatic pickup only happens if the shared hourly workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`
 - if the monitor remains `pending bootstrap`, the `Monitor Settings` page shows `Run First Refresh` for that selected monitor
 - the monitor appears on the overview page
+- the new `Incidents` page loads without errors, even before any incidents exist
 - the `Monitor Settings` page shows the saved cadence, runtime state, and recent refresh-run history for the selected monitor
+- the `Refresh Diagnostics` section in `Monitor Settings` classifies recent runs as `Source Scan Bound`, `Daily Profiles Bound`, `Derivation Bound`, `Persistence Bound`, or `Mixed` once enough successful timed runs exist
+- the `Refresh Diagnostics` recommendations match the recorded timings rather than a generic fixed banner
 - the `Monitor Settings` page also shows recent incident lifecycle rows for that monitor when drift/performance incidents have been opened, escalated, or recovered
 - the `Monitor Settings` page also shows an `Active` / `Archived` / `All` filter plus `Archive Monitor`, `Restore Monitor`, and `Delete Monitor And History` controls; archive should hide the monitor from the active app list while keeping history, restore should bring it back without rebuilding the monitor, and delete should fully remove it after reload
+- once incidents exist, the `Incidents` page shows cross-monitor open incidents and recent lifecycle rows, and its monitor/severity/status/metric filters all work without reloading the app
 - after the workflow finishes, Drift and Performance should already show historical windows rather than a single snapshot
 - after the workflow finishes, Data Quality should show window-history charts instead of only the latest summary row
 - with the scratch dataset and `Baseline Days = 7`, you should have 8 daily comparison windows immediately

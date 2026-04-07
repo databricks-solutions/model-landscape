@@ -16,9 +16,9 @@ variables:
   sql_warehouse_id:
     description: Existing SQL warehouse for the app and refresh workflow
   control_plane_catalog:
-    default: model_observability
+    description: Existing control-plane catalog for this workspace (for example hive_metastore)
   control_plane_schema:
-    default: control_plane
+    description: Existing control-plane schema for this workspace (for example model_lens_control_plane)
   lakebase_instance_name:
     description: Existing Lakebase instance for fast Model Lens UI reads
     default: ""

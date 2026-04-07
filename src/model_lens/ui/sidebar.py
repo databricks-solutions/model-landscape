@@ -9,6 +9,7 @@ from model_lens.ui.styles import COLORS
 
 PRIMARY_NAV_ITEMS = [
     {"label": "Overview", "icon": "fas fa-chart-line", "href": "/"},
+    {"label": "Incidents", "icon": "fas fa-triangle-exclamation", "href": "/incidents"},
     {"label": "Drift Analysis", "icon": "fas fa-wave-square", "href": "/drift"},
     {"label": "Feature Deep Dive", "icon": "fas fa-search", "href": "/features"},
     {"label": "Performance", "icon": "fas fa-tachometer-alt", "href": "/performance"},

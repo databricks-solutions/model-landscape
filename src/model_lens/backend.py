@@ -10,6 +10,7 @@ from model_lens.domain.models import MonitorConfig, MonitorDiscoveryResult, Moni
 from model_lens.services.control_plane import ControlPlaneRepository, build_repository
 from model_lens.services.monitor_discovery import MonitorDiscoveryService
 from model_lens.services.onboarding import baseline_label
+from model_lens.services.refresh_diagnostics import build_refresh_diagnostics
 from model_lens.services.refresh_engine import split_baseline_current
 
 
@@ -882,16 +883,18 @@ class DashboardBackend:
         summary = self.repository.get_monitor_summary()
         summary_row = summary[summary["model_key"] == model_id]
         runtime_state = self.repository.get_monitor_runtime_state(model_id) if hasattr(self.repository, "get_monitor_runtime_state") else None
+        recent_runs = (
+            self.repository.get_recent_refresh_runs(model_id, limit=12)
+            if hasattr(self.repository, "get_recent_refresh_runs")
+            else []
+        )
         return {
             "config": config,
             "status": config.status if config else "",
             "summary": summary_row.iloc[0].to_dict() if not summary_row.empty else {},
             "runtime_state": runtime_state.__dict__ if runtime_state else {},
-            "recent_runs": (
-                self.repository.get_recent_refresh_runs(model_id, limit=8)
-                if hasattr(self.repository, "get_recent_refresh_runs")
-                else []
-            ),
+            "recent_runs": recent_runs,
+            "refresh_diagnostics": build_refresh_diagnostics(recent_runs),
             "recent_incident_history": (
                 self.repository.get_recent_incident_history(model_id, limit=8)
                 if hasattr(self.repository, "get_recent_incident_history")
@@ -910,6 +913,51 @@ class DashboardBackend:
                 "lakebase_database_name": settings.lakebase_database_name,
                 "genie_space_id": settings.genie_space_id,
             },
+        }
+
+    def get_incidents_data(self, *, limit_history: int = 50) -> dict:
+        configs = self.repository.list_monitor_configs(status=None)
+        model_metadata = {
+            config.model_key: {
+                "display_name": config.display_name,
+                "status": getattr(config, "status", "active"),
+            }
+            for config in configs
+        }
+        models = [
+            {
+                "id": config.model_key,
+                "name": config.display_name,
+                "status": getattr(config, "status", "active"),
+            }
+            for config in configs
+        ]
+        open_incidents = self.repository.get_open_incidents().copy()
+        if not open_incidents.empty:
+            open_incidents["status"] = "open"
+            open_incidents["display_name"] = open_incidents["model_key"].map(
+                lambda value: model_metadata.get(str(value), {}).get("display_name", str(value))
+            )
+            open_incidents["monitor_status"] = open_incidents["model_key"].map(
+                lambda value: model_metadata.get(str(value), {}).get("status", "")
+            )
+        history_rows = (
+            self.repository.get_recent_incident_history_all(limit=limit_history)
+            if hasattr(self.repository, "get_recent_incident_history_all")
+            else []
+        )
+        incident_history = pd.DataFrame(history_rows)
+        if not incident_history.empty:
+            incident_history["display_name"] = incident_history["model_key"].map(
+                lambda value: model_metadata.get(str(value), {}).get("display_name", str(value))
+            )
+            incident_history["monitor_status"] = incident_history["model_key"].map(
+                lambda value: model_metadata.get(str(value), {}).get("status", "")
+            )
+        return {
+            "models": models,
+            "open_incidents": open_incidents,
+            "history": incident_history,
         }
 
 
