@@ -752,6 +752,24 @@ def test_ensure_control_plane_adds_daily_performance_profile_migration_columns()
     )
 
 
+def test_ensure_control_plane_adds_window_id_to_drift_and_performance_metrics() -> None:
+    warehouse = FakeWarehouse()
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    repository.ensure_control_plane()
+
+    assert any(
+        "ALTER TABLE model_observability.control_plane.drift_metrics" in sql
+        and "window_id" in sql.lower()
+        for sql in warehouse.executed
+    )
+    assert any(
+        "ALTER TABLE model_observability.control_plane.performance_metrics" in sql
+        and "window_id" in sql.lower()
+        for sql in warehouse.executed
+    )
+
+
 def test_get_existing_window_keys_falls_back_to_drift_metrics_when_comparison_windows_are_empty() -> None:
     warehouse = FakeWarehouse()
     warehouse.drift_window_rows = [{
@@ -995,6 +1013,75 @@ def test_append_refresh_result_rebuilds_quality_summary_from_persisted_daily_pro
     assert round(float(payload[4]), 4) == 0.3333
     assert json.loads(payload[6]) == {"2026-01-19": 100, "2026-01-20": 50}
     assert json.loads(payload[7]) == {"amount": 6.67}
+
+
+def test_append_refresh_result_persists_window_id_for_drift_and_performance_metrics() -> None:
+    warehouse = FakeWarehouse()
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    repository.append_refresh_result(
+        "payments_risk_v1",
+        RefreshResult(
+            drift_rows=[
+                {
+                    "model_key": "payments_risk_v1",
+                    "window_id": "window-1",
+                    "feature_name": "amount",
+                    "metric_name": "psi",
+                    "metric_value": 0.12,
+                    "window_start": "2026-01-08",
+                    "window_end": "2026-01-14",
+                    "baseline_start": "2026-01-01",
+                    "baseline_end": "2026-01-07",
+                    "ref_mean": 10.0,
+                    "cur_mean": 12.0,
+                    "ref_std": 1.0,
+                    "cur_std": 1.2,
+                    "ref_null_pct": 0.0,
+                    "cur_null_pct": 0.0,
+                    "ref_count": 100,
+                    "cur_count": 100,
+                    "computed_at": "2026-01-14T00:00:00+00:00",
+                }
+            ],
+            quality_rows=[],
+            performance_rows=[
+                {
+                    "model_key": "payments_risk_v1",
+                    "window_id": "window-1",
+                    "feature_name": "amount",
+                    "bin_label": "[0, 100)",
+                    "baseline_metric": 0.7,
+                    "current_metric": 0.8,
+                    "delta": 0.1,
+                    "volume_pct": 60.0,
+                    "contribution": 0.06,
+                    "metric_name": "f1",
+                    "window_start": "2026-01-08",
+                    "window_end": "2026-01-14",
+                    "computed_at": "2026-01-14T00:00:00+00:00",
+                }
+            ],
+            incident_rows=[],
+            incident_history_rows=[],
+            quality_history_rows=[],
+            window_rows=[],
+        ),
+        source_run_id="run-window-id",
+    )
+
+    drift_insert_rows = next(
+        rows
+        for sql, rows in warehouse.batch_calls
+        if "INSERT INTO model_observability.control_plane.drift_metrics" in sql
+    )
+    performance_insert_rows = next(
+        rows
+        for sql, rows in warehouse.batch_calls
+        if "INSERT INTO model_observability.control_plane.performance_metrics" in sql
+    )
+    assert drift_insert_rows[0][1] == "window-1"
+    assert performance_insert_rows[0][1] == "window-1"
 
 
 def test_replace_performance_bin_specs_persists_canonical_edges() -> None:

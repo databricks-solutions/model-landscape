@@ -21,9 +21,11 @@ from model_lens.domain.models import (
 from model_lens.services.inference_contracts import build_inference_contract
 from model_lens.services.lakebase import LakebaseConnection, LakebaseReadModel
 from model_lens.services.schema import (
+    drift_metric_migration_columns,
     daily_performance_profile_migration_columns,
     ddl,
     monitor_config_migration_columns,
+    performance_metric_migration_columns,
     refresh_run_migration_columns,
     runtime_state_migration_columns,
 )
@@ -228,6 +230,8 @@ class ControlPlaneRepository:
         self._ensure_monitor_config_columns()
         self._ensure_refresh_run_columns()
         self._ensure_runtime_state_columns()
+        self._ensure_drift_metric_columns()
+        self._ensure_performance_metric_columns()
         self._ensure_daily_performance_profile_columns()
         if self._read_model and self._read_model.configured:
             self._read_model.ensure_schema()
@@ -312,6 +316,18 @@ class ControlPlaneRepository:
 
     def _ensure_runtime_state_columns(self) -> None:
         self._ensure_table_columns(self._table_names.monitor_runtime_state, runtime_state_migration_columns())
+
+    def _ensure_drift_metric_columns(self) -> None:
+        self._ensure_table_columns(
+            self._table_names.drift_metrics,
+            drift_metric_migration_columns(),
+        )
+
+    def _ensure_performance_metric_columns(self) -> None:
+        self._ensure_table_columns(
+            self._table_names.performance_metrics,
+            performance_metric_migration_columns(),
+        )
 
     def _ensure_daily_performance_profile_columns(self) -> None:
         self._ensure_table_columns(
@@ -1708,6 +1724,7 @@ class ControlPlaneRepository:
         payload = [
             (
                 row["model_key"],
+                row["window_id"],
                 row["feature_name"],
                 row["metric_name"],
                 row["metric_value"],
@@ -1730,7 +1747,7 @@ class ControlPlaneRepository:
         self._warehouse.execute_batch(
             f"""
             INSERT INTO {self._table_names.drift_metrics} (
-                model_key, feature_name, metric_name, metric_value,
+                model_key, window_id, feature_name, metric_name, metric_value,
                 window_start, window_end, baseline_start, baseline_end,
                 ref_mean, cur_mean, ref_std, cur_std,
                 ref_null_pct, cur_null_pct, ref_count, cur_count, computed_at
@@ -1882,6 +1899,7 @@ class ControlPlaneRepository:
         payload = [
             (
                 row["model_key"],
+                row["window_id"],
                 row["feature_name"],
                 row["bin_label"],
                 row["baseline_metric"],
@@ -1899,7 +1917,7 @@ class ControlPlaneRepository:
         self._warehouse.execute_batch(
             f"""
             INSERT INTO {self._table_names.performance_metrics} (
-                model_key, feature_name, bin_label,
+                model_key, window_id, feature_name, bin_label,
                 baseline_metric, current_metric, delta,
                 volume_pct, contribution, metric_name,
                 window_start, window_end, computed_at

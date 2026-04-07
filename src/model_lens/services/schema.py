@@ -49,6 +49,18 @@ def daily_performance_profile_migration_columns() -> dict[str, str]:
     }
 
 
+def drift_metric_migration_columns() -> dict[str, str]:
+    return {
+        "window_id": "STRING",
+    }
+
+
+def performance_metric_migration_columns() -> dict[str, str]:
+    return {
+        "window_id": "STRING",
+    }
+
+
 def ddl(table_names: TableNames) -> dict[str, str]:
     return {
         "monitor_configs": f"""
@@ -96,6 +108,7 @@ def ddl(table_names: TableNames) -> dict[str, str]:
         "drift_metrics": f"""
             CREATE TABLE IF NOT EXISTS {table_names.drift_metrics} (
                 model_key STRING,
+                window_id STRING,
                 feature_name STRING,
                 metric_name STRING,
                 metric_value DOUBLE,
@@ -176,6 +189,7 @@ def ddl(table_names: TableNames) -> dict[str, str]:
         "performance_metrics": f"""
             CREATE TABLE IF NOT EXISTS {table_names.performance_metrics} (
                 model_key STRING,
+                window_id STRING,
                 feature_name STRING,
                 bin_label STRING,
                 baseline_metric DOUBLE,

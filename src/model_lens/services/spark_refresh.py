@@ -331,7 +331,10 @@ class SparkRefreshRepository(ControlPlaneRepository):
         return self._spark.table(table_name)
 
     def _delete_where(self, table_name: str, predicate_sql: str) -> None:
-        self._spark.sql(f"DELETE FROM {table_name} WHERE {predicate_sql}")
+        # Use table alias to avoid AMBIGUOUS_REFERENCE on UC-enabled clusters
+        # where unqualified column names in DELETE predicates can conflict
+        # with fully-qualified table column references.
+        self._spark.sql(f"DELETE FROM {table_name} AS _t WHERE {predicate_sql}")
 
     def _append_df_to_table(self, table_name: str, frame: DataFrame) -> None:
         if not frame.take(1):
@@ -1007,6 +1010,38 @@ class SparkRefreshRepository(ControlPlaneRepository):
         persisted_remaining = persisted_df.join(current_keys, on=list(key_columns), how="left_anti")
         return persisted_remaining.unionByName(current_df)
 
+    def _join_profile_range_to_metadata(
+        self,
+        profile_df: DataFrame,
+        metadata_df: DataFrame,
+        *,
+        start_col: str,
+        end_col: str,
+    ) -> DataFrame:
+        profile_alias = profile_df.alias("profile")
+        metadata_alias = metadata_df.alias("metadata")
+        profile_columns = [column for column in profile_df.columns if column != "model_key"]
+        return (
+            profile_alias.join(
+                metadata_alias,
+                (
+                    (F.col("profile.model_key") == F.col("metadata.model_key"))
+                    & (F.col("profile.profile_date") >= F.col(f"metadata.{start_col}"))
+                    & (F.col("profile.profile_date") <= F.col(f"metadata.{end_col}"))
+                ),
+                "inner",
+            )
+            .select(
+                F.col("metadata.window_id").alias("window_id"),
+                F.col("metadata.model_key").alias("model_key"),
+                F.col("metadata.window_start").alias("window_start"),
+                F.col("metadata.window_end").alias("window_end"),
+                F.col("metadata.baseline_start").alias("baseline_start"),
+                F.col("metadata.baseline_end").alias("baseline_end"),
+                *[F.col(f"profile.{column}").alias(column) for column in profile_columns],
+            )
+        )
+
     def _incident_threshold_columns(self) -> tuple[F.Column, F.Column]:
         warning_threshold = (
             F.when(F.col("metric_name") == F.lit("psi"), F.lit(float(DEFAULT_THRESHOLDS["psi"]["warning"])))
@@ -1551,13 +1586,11 @@ class SparkRefreshRepository(ControlPlaneRepository):
             "_null_rates_map",
             F.from_json(F.col("null_rates"), _NULL_RATE_SCHEMA),
         )
-        joined = quality_with_maps.join(
+        joined = self._join_profile_range_to_metadata(
+            quality_with_maps,
             metadata_df,
-            (
-                (quality_with_maps.profile_date >= metadata_df.window_start)
-                & (quality_with_maps.profile_date <= metadata_df.window_end)
-            ),
-            "inner",
+            start_col="window_start",
+            end_col="window_end",
         )
         if not joined.take(1):
             return []
@@ -1665,13 +1698,11 @@ class SparkRefreshRepository(ControlPlaneRepository):
             "baseline_end",
         ]
         baseline_rows = (
-            performance_df.join(
+            self._join_profile_range_to_metadata(
+                performance_df,
                 metadata_df,
-                (
-                    (performance_df.profile_date >= metadata_df.baseline_start)
-                    & (performance_df.profile_date <= metadata_df.baseline_end)
-                ),
-                "inner",
+                start_col="baseline_start",
+                end_col="baseline_end",
             )
             .groupBy(*window_cols, "feature_name", "bin_label", "metric_name")
             .agg(
@@ -1680,13 +1711,11 @@ class SparkRefreshRepository(ControlPlaneRepository):
             )
         )
         current_rows = (
-            performance_df.join(
+            self._join_profile_range_to_metadata(
+                performance_df,
                 metadata_df,
-                (
-                    (performance_df.profile_date >= metadata_df.window_start)
-                    & (performance_df.profile_date <= metadata_df.window_end)
-                ),
-                "inner",
+                start_col="window_start",
+                end_col="window_end",
             )
             .groupBy(*window_cols, "feature_name", "bin_label", "metric_name")
             .agg(
@@ -1697,13 +1726,11 @@ class SparkRefreshRepository(ControlPlaneRepository):
         if not baseline_rows.take(1) or not current_rows.take(1):
             return []
         current_quality_totals = (
-            quality_df.join(
+            self._join_profile_range_to_metadata(
+                quality_df,
                 metadata_df,
-                (
-                    (quality_df.profile_date >= metadata_df.window_start)
-                    & (quality_df.profile_date <= metadata_df.window_end)
-                ),
-                "inner",
+                start_col="window_start",
+                end_col="window_end",
             )
             .groupBy(*window_cols)
             .agg(F.sum("row_count").alias("total_current_rows"))
@@ -1800,13 +1827,11 @@ class SparkRefreshRepository(ControlPlaneRepository):
             "baseline_end",
         ]
         baseline_stats = (
-            categorical_df.join(
+            self._join_profile_range_to_metadata(
+                categorical_df,
                 metadata_df,
-                (
-                    (categorical_df.profile_date >= metadata_df.baseline_start)
-                    & (categorical_df.profile_date <= metadata_df.baseline_end)
-                ),
-                "inner",
+                start_col="baseline_start",
+                end_col="baseline_end",
             )
             .groupBy(*window_cols, "feature_name")
             .agg(
@@ -1815,13 +1840,11 @@ class SparkRefreshRepository(ControlPlaneRepository):
             )
         )
         current_stats = (
-            categorical_df.join(
+            self._join_profile_range_to_metadata(
+                categorical_df,
                 metadata_df,
-                (
-                    (categorical_df.profile_date >= metadata_df.window_start)
-                    & (categorical_df.profile_date <= metadata_df.window_end)
-                ),
-                "inner",
+                start_col="window_start",
+                end_col="window_end",
             )
             .groupBy(*window_cols, "feature_name")
             .agg(
@@ -1830,13 +1853,11 @@ class SparkRefreshRepository(ControlPlaneRepository):
             )
         )
         baseline_counts = (
-            categorical_df.join(
+            self._join_profile_range_to_metadata(
+                categorical_df,
                 metadata_df,
-                (
-                    (categorical_df.profile_date >= metadata_df.baseline_start)
-                    & (categorical_df.profile_date <= metadata_df.baseline_end)
-                ),
-                "inner",
+                start_col="baseline_start",
+                end_col="baseline_end",
             )
             .select(
                 *window_cols,
@@ -1848,13 +1869,11 @@ class SparkRefreshRepository(ControlPlaneRepository):
             .withColumn("role", F.lit("baseline"))
         )
         current_counts = (
-            categorical_df.join(
+            self._join_profile_range_to_metadata(
+                categorical_df,
                 metadata_df,
-                (
-                    (categorical_df.profile_date >= metadata_df.window_start)
-                    & (categorical_df.profile_date <= metadata_df.window_end)
-                ),
-                "inner",
+                start_col="window_start",
+                end_col="window_end",
             )
             .select(
                 *window_cols,
@@ -1993,13 +2012,11 @@ class SparkRefreshRepository(ControlPlaneRepository):
             "baseline_end",
         ]
         def _aggregate_numeric_range(date_start_col: str, date_end_col: str, prefix: str) -> tuple[DataFrame, DataFrame]:
-            joined = numeric_df.join(
+            joined = self._join_profile_range_to_metadata(
+                numeric_df,
                 metadata_df,
-                (
-                    (numeric_df.profile_date >= F.col(date_start_col))
-                    & (numeric_df.profile_date <= F.col(date_end_col))
-                ),
-                "inner",
+                start_col=date_start_col,
+                end_col=date_end_col,
             )
             stats = (
                 joined.groupBy(*window_cols, "feature_name")

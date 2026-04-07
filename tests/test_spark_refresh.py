@@ -357,6 +357,75 @@ def test_spark_refresh_repository_derives_window_rows_from_spark_daily_profiles(
     assert result.performance_rows
 
 
+def test_spark_refresh_repository_qualifies_model_key_when_joining_quality_profiles_to_window_metadata() -> None:
+    spark = _spark()
+    repository = PersistedSparkRefreshRepository(
+        spark=spark,
+        persisted_quality_rows=[],
+        persisted_feature_rows=[],
+        persisted_performance_rows=[],
+    )
+    config = MonitorConfig(
+        model_key="fraud_v1",
+        display_name="Fraud V1",
+        source_table="unused_source",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            prediction_col="prediction",
+            feature_columns=("amount",),
+        ),
+        problem_type="classification",
+    )
+
+    result = repository.derive_refresh_result_from_daily_profile_rows(
+        config=config,
+        metadata_list=[{
+            "window_id": "fraud_v1:daily:2026-01-03:2026-01-03:2026-01-01:2026-01-02",
+            "model_key": "fraud_v1",
+            "window_grain": "daily",
+            "window_start": "2026-01-03",
+            "window_end": "2026-01-03",
+            "baseline_start": "2026-01-01",
+            "baseline_end": "2026-01-02",
+            "baseline_kind": "rolling",
+        }],
+        current_daily_quality_profile_rows=[
+            {
+                "model_key": "fraud_v1",
+                "profile_date": "2026-01-03",
+                "row_count": 10,
+                "prediction_mean": 0.5,
+                "prediction_std": 0.1,
+                "null_rates": '{"amount": 0.0}',
+                "label_row_count": 0,
+                "computed_at": "2026-01-05T00:00:00+00:00",
+            }
+        ],
+        current_daily_feature_profile_rows=[],
+        current_daily_performance_profile_rows=[],
+        derivation_start="2026-01-03",
+        derivation_end="2026-01-03",
+        computed_at="2026-01-05T00:00:00+00:00",
+        prior_open_incidents={},
+        include_drift_quality=False,
+        include_performance=False,
+    )
+
+    assert result.quality_history_rows == [{
+        "model_key": "fraud_v1",
+        "window_id": "fraud_v1:daily:2026-01-03:2026-01-03:2026-01-01:2026-01-02",
+        "window_start": "2026-01-03",
+        "window_end": "2026-01-03",
+        "baseline_start": "2026-01-01",
+        "baseline_end": "2026-01-02",
+        "row_count": 10,
+        "prediction_mean": 0.5,
+        "prediction_std": 0.1,
+        "null_rates": '{"amount": 0.0}',
+        "computed_at": "2026-01-05T00:00:00+00:00",
+    }]
+
+
 def test_spark_refresh_repository_derives_recovered_incident_history_without_new_drift_rows() -> None:
     spark = _spark()
     repository = PersistedSparkRefreshRepository(
