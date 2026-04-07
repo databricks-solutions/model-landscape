@@ -272,6 +272,35 @@ def _sql_date_literal(value: str) -> str:
     return f"CAST({_sql_string_literal(value)} AS DATE)"
 
 
+def _normalize_rows_with_model_key(
+    rows: list[dict[str, Any]],
+    *,
+    default_model_key: str | None = None,
+    row_kind: str,
+) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    normalized_default = str(default_model_key or "").strip() or None
+    normalized_rows: list[dict[str, Any]] = []
+    for index, row in enumerate(rows):
+        payload = dict(row)
+        current_model_key = str(payload.get("model_key") or "").strip() or None
+        if current_model_key is None:
+            if normalized_default is None:
+                raise ValueError(
+                    f"{row_kind} row at index {index} is missing model_key and no default model key was supplied"
+                )
+            payload["model_key"] = normalized_default
+        elif normalized_default is not None and current_model_key != normalized_default:
+            raise ValueError(
+                f"{row_kind} row at index {index} has model_key={current_model_key!r}, expected {normalized_default!r}"
+            )
+        else:
+            payload["model_key"] = current_model_key
+        normalized_rows.append(payload)
+    return normalized_rows
+
+
 class SparkRefreshRepository(ControlPlaneRepository):
     def __init__(
         self,
@@ -316,45 +345,69 @@ class SparkRefreshRepository(ControlPlaneRepository):
         schema: StructType,
         date_columns: tuple[str, ...] = (),
         timestamp_columns: tuple[str, ...] = (),
+        default_model_key: str | None = None,
+        row_kind: str = "rows",
     ) -> DataFrame:
-        frame = self._spark.createDataFrame(rows or [], schema=schema)
+        normalized_rows = rows or []
+        requires_model_key = any(field.name == "model_key" and not field.nullable for field in schema.fields)
+        if requires_model_key:
+            normalized_rows = _normalize_rows_with_model_key(
+                normalized_rows,
+                default_model_key=default_model_key,
+                row_kind=row_kind,
+            )
+        frame = self._spark.createDataFrame(normalized_rows, schema=schema)
         for column_name in date_columns:
             frame = frame.withColumn(column_name, F.to_date(F.col(column_name)))
         for column_name in timestamp_columns:
             frame = frame.withColumn(column_name, F.to_timestamp(F.col(column_name)))
         return frame
 
-    def _quality_metric_df_from_rows(self, rows: list[dict[str, Any]]) -> DataFrame:
+    def _quality_metric_df_from_rows(self, rows: list[dict[str, Any]], *, default_model_key: str | None = None) -> DataFrame:
         return self._typed_df_from_rows(
             rows,
             schema=QUALITY_METRIC_SCHEMA,
             date_columns=("min_date", "max_date"),
             timestamp_columns=("computed_at",),
+            default_model_key=default_model_key,
+            row_kind="quality_metric",
         )
 
-    def _drift_df_from_rows(self, rows: list[dict[str, Any]]) -> DataFrame:
+    def _drift_df_from_rows(self, rows: list[dict[str, Any]], *, default_model_key: str | None = None) -> DataFrame:
         return self._typed_df_from_rows(
             rows,
             schema=DRIFT_METRIC_SCHEMA,
             date_columns=("window_start", "window_end", "baseline_start", "baseline_end"),
             timestamp_columns=("computed_at",),
+            default_model_key=default_model_key,
+            row_kind="drift_metric",
         )
 
-    def _window_df_from_rows(self, rows: list[dict[str, Any]], *, source_run_id: str | None = None) -> DataFrame:
+    def _window_df_from_rows(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        source_run_id: str | None = None,
+        default_model_key: str | None = None,
+    ) -> DataFrame:
         payload = [{**row, "source_run_id": source_run_id or ""} for row in rows]
         return self._typed_df_from_rows(
             payload,
             schema=WINDOW_WRITE_SCHEMA,
             date_columns=("window_start", "window_end", "baseline_start", "baseline_end"),
             timestamp_columns=("created_at",),
+            default_model_key=default_model_key,
+            row_kind="comparison_window",
         )
 
-    def _quality_history_df_from_rows(self, rows: list[dict[str, Any]]) -> DataFrame:
+    def _quality_history_df_from_rows(self, rows: list[dict[str, Any]], *, default_model_key: str | None = None) -> DataFrame:
         return self._typed_df_from_rows(
             rows,
             schema=QUALITY_HISTORY_WRITE_SCHEMA,
             date_columns=("window_start", "window_end", "baseline_start", "baseline_end"),
             timestamp_columns=("computed_at",),
+            default_model_key=default_model_key,
+            row_kind="quality_history",
         )
 
     def _daily_quality_profile_persist_df_from_rows(
@@ -362,6 +415,7 @@ class SparkRefreshRepository(ControlPlaneRepository):
         rows: list[dict[str, Any]],
         *,
         source_run_id: str | None = None,
+        default_model_key: str | None = None,
     ) -> DataFrame:
         payload = [{**row, "source_run_id": source_run_id or ""} for row in rows]
         return self._typed_df_from_rows(
@@ -369,6 +423,8 @@ class SparkRefreshRepository(ControlPlaneRepository):
             schema=DAILY_QUALITY_WRITE_SCHEMA,
             date_columns=("profile_date",),
             timestamp_columns=("computed_at",),
+            default_model_key=default_model_key,
+            row_kind="daily_quality_profile",
         )
 
     def _daily_feature_profile_persist_df_from_rows(
@@ -376,6 +432,7 @@ class SparkRefreshRepository(ControlPlaneRepository):
         rows: list[dict[str, Any]],
         *,
         source_run_id: str | None = None,
+        default_model_key: str | None = None,
     ) -> DataFrame:
         payload = [{**row, "source_run_id": source_run_id or ""} for row in rows]
         return self._typed_df_from_rows(
@@ -383,14 +440,18 @@ class SparkRefreshRepository(ControlPlaneRepository):
             schema=DAILY_FEATURE_WRITE_SCHEMA,
             date_columns=("profile_date",),
             timestamp_columns=("computed_at",),
+            default_model_key=default_model_key,
+            row_kind="daily_feature_profile",
         )
 
-    def _performance_df_from_rows(self, rows: list[dict[str, Any]]) -> DataFrame:
+    def _performance_df_from_rows(self, rows: list[dict[str, Any]], *, default_model_key: str | None = None) -> DataFrame:
         return self._typed_df_from_rows(
             rows,
             schema=PERFORMANCE_METRIC_SCHEMA,
             date_columns=("window_start", "window_end"),
             timestamp_columns=("computed_at",),
+            default_model_key=default_model_key,
+            row_kind="performance_metric",
         )
 
     def _daily_performance_profile_persist_df_from_rows(
@@ -398,6 +459,7 @@ class SparkRefreshRepository(ControlPlaneRepository):
         rows: list[dict[str, Any]],
         *,
         source_run_id: str | None = None,
+        default_model_key: str | None = None,
     ) -> DataFrame:
         payload = [{**row, "source_run_id": source_run_id or ""} for row in rows]
         return self._typed_df_from_rows(
@@ -405,22 +467,33 @@ class SparkRefreshRepository(ControlPlaneRepository):
             schema=DAILY_PERFORMANCE_WRITE_SCHEMA,
             date_columns=("profile_date",),
             timestamp_columns=("computed_at",),
+            default_model_key=default_model_key,
+            row_kind="daily_performance_profile",
         )
 
-    def _incident_df_from_rows(self, rows: list[dict[str, Any]]) -> DataFrame:
+    def _incident_df_from_rows(self, rows: list[dict[str, Any]], *, default_model_key: str | None = None) -> DataFrame:
         return self._typed_df_from_rows(
             rows,
             schema=INCIDENT_SCHEMA,
             date_columns=("window_end",),
             timestamp_columns=("observed_at",),
+            default_model_key=default_model_key,
+            row_kind="incident",
         )
 
-    def _incident_history_df_from_rows(self, rows: list[dict[str, Any]]) -> DataFrame:
+    def _incident_history_df_from_rows(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        default_model_key: str | None = None,
+    ) -> DataFrame:
         return self._typed_df_from_rows(
             rows,
             schema=INCIDENT_HISTORY_SCHEMA,
             date_columns=("window_start", "window_end", "baseline_start", "baseline_end"),
             timestamp_columns=("observed_at",),
+            default_model_key=default_model_key,
+            row_kind="incident_history",
         )
 
     def _performance_bin_spec_df_from_specs(self, model_key: str, specs: dict[str, tuple[float, ...]]) -> DataFrame:
@@ -837,20 +910,55 @@ class SparkRefreshRepository(ControlPlaneRepository):
         finally:
             df.unpersist()
 
-    def _daily_quality_profile_df_from_rows(self, rows: list[dict[str, Any]]) -> DataFrame:
-        frame = self._spark.createDataFrame(rows or [], schema=QUALITY_PROFILE_SCHEMA)
+    def _daily_quality_profile_df_from_rows(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        default_model_key: str | None = None,
+    ) -> DataFrame:
+        frame = self._typed_df_from_rows(
+            rows,
+            schema=QUALITY_PROFILE_SCHEMA,
+            default_model_key=default_model_key,
+            row_kind="daily_quality_profile_current",
+        )
         return frame.withColumn("profile_date", F.to_date(F.col("profile_date")))
 
-    def _daily_feature_profile_df_from_rows(self, rows: list[dict[str, Any]]) -> DataFrame:
-        frame = self._spark.createDataFrame(rows or [], schema=FEATURE_PROFILE_SCHEMA)
+    def _daily_feature_profile_df_from_rows(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        default_model_key: str | None = None,
+    ) -> DataFrame:
+        frame = self._typed_df_from_rows(
+            rows,
+            schema=FEATURE_PROFILE_SCHEMA,
+            default_model_key=default_model_key,
+            row_kind="daily_feature_profile_current",
+        )
         return frame.withColumn("profile_date", F.to_date(F.col("profile_date")))
 
-    def _daily_performance_profile_df_from_rows(self, rows: list[dict[str, Any]]) -> DataFrame:
-        frame = self._spark.createDataFrame(rows or [], schema=PERFORMANCE_PROFILE_SCHEMA)
+    def _daily_performance_profile_df_from_rows(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        default_model_key: str | None = None,
+    ) -> DataFrame:
+        frame = self._typed_df_from_rows(
+            rows,
+            schema=PERFORMANCE_PROFILE_SCHEMA,
+            default_model_key=default_model_key,
+            row_kind="daily_performance_profile_current",
+        )
         return frame.withColumn("profile_date", F.to_date(F.col("profile_date")))
 
-    def _metadata_df(self, metadata_list: list[dict[str, str]]) -> DataFrame:
-        frame = self._spark.createDataFrame(metadata_list or [], schema=METADATA_SCHEMA)
+    def _metadata_df(self, metadata_list: list[dict[str, str]], *, default_model_key: str | None = None) -> DataFrame:
+        frame = self._typed_df_from_rows(
+            metadata_list,
+            schema=METADATA_SCHEMA,
+            default_model_key=default_model_key,
+            row_kind="comparison_window_metadata",
+        )
         return (
             frame
             .withColumn("window_start", F.to_date(F.col("window_start")))
@@ -1232,40 +1340,52 @@ class SparkRefreshRepository(ControlPlaneRepository):
             self._delete_where(table_name, f"model_key = {_sql_string_literal(model_key)}")
         self._append_df_to_table(
             self._table_names.comparison_windows,
-            self._window_df_from_rows(result.window_rows, source_run_id=source_run_id),
+            self._window_df_from_rows(result.window_rows, source_run_id=source_run_id, default_model_key=model_key),
         )
         self._append_df_to_table(
             self._table_names.drift_metrics,
-            self._drift_df_from_rows(result.drift_rows),
+            self._drift_df_from_rows(result.drift_rows, default_model_key=model_key),
         )
         self._append_df_to_table(
             self._table_names.quality_history,
-            self._quality_history_df_from_rows(result.quality_history_rows),
+            self._quality_history_df_from_rows(result.quality_history_rows, default_model_key=model_key),
         )
         self._append_df_to_table(
             self._table_names.daily_quality_profiles,
-            self._daily_quality_profile_persist_df_from_rows(result.daily_quality_profile_rows, source_run_id=source_run_id),
+            self._daily_quality_profile_persist_df_from_rows(
+                result.daily_quality_profile_rows,
+                source_run_id=source_run_id,
+                default_model_key=model_key,
+            ),
         )
         self._append_df_to_table(
             self._table_names.daily_feature_profiles,
-            self._daily_feature_profile_persist_df_from_rows(result.daily_feature_profile_rows, source_run_id=source_run_id),
+            self._daily_feature_profile_persist_df_from_rows(
+                result.daily_feature_profile_rows,
+                source_run_id=source_run_id,
+                default_model_key=model_key,
+            ),
         )
         self._append_df_to_table(
             self._table_names.performance_metrics,
-            self._performance_df_from_rows(result.performance_rows),
+            self._performance_df_from_rows(result.performance_rows, default_model_key=model_key),
         )
         self._append_df_to_table(
             self._table_names.daily_performance_profiles,
-            self._daily_performance_profile_persist_df_from_rows(result.daily_performance_profile_rows, source_run_id=source_run_id),
+            self._daily_performance_profile_persist_df_from_rows(
+                result.daily_performance_profile_rows,
+                source_run_id=source_run_id,
+                default_model_key=model_key,
+            ),
         )
         self.replace_performance_bin_specs(model_key, result.performance_bin_specs)
         self._append_df_to_table(
             self._table_names.incidents,
-            self._incident_df_from_rows(result.incident_rows),
+            self._incident_df_from_rows(result.incident_rows, default_model_key=model_key),
         )
         self._append_df_to_table(
             self._table_names.incident_history,
-            self._incident_history_df_from_rows(result.incident_history_rows),
+            self._incident_history_df_from_rows(result.incident_history_rows, default_model_key=model_key),
         )
         self._rewrite_quality_summary(model_key)
         self._sync_read_model()
@@ -1364,31 +1484,43 @@ class SparkRefreshRepository(ControlPlaneRepository):
 
         self._append_df_to_table(
             self._table_names.comparison_windows,
-            self._window_df_from_rows(result.window_rows, source_run_id=source_run_id),
+            self._window_df_from_rows(result.window_rows, source_run_id=source_run_id, default_model_key=model_key),
         )
         self._append_df_to_table(
             self._table_names.drift_metrics,
-            self._drift_df_from_rows(result.drift_rows),
+            self._drift_df_from_rows(result.drift_rows, default_model_key=model_key),
         )
         self._append_df_to_table(
             self._table_names.quality_history,
-            self._quality_history_df_from_rows(result.quality_history_rows),
+            self._quality_history_df_from_rows(result.quality_history_rows, default_model_key=model_key),
         )
         self._append_df_to_table(
             self._table_names.daily_quality_profiles,
-            self._daily_quality_profile_persist_df_from_rows(result.daily_quality_profile_rows, source_run_id=source_run_id),
+            self._daily_quality_profile_persist_df_from_rows(
+                result.daily_quality_profile_rows,
+                source_run_id=source_run_id,
+                default_model_key=model_key,
+            ),
         )
         self._append_df_to_table(
             self._table_names.daily_feature_profiles,
-            self._daily_feature_profile_persist_df_from_rows(result.daily_feature_profile_rows, source_run_id=source_run_id),
+            self._daily_feature_profile_persist_df_from_rows(
+                result.daily_feature_profile_rows,
+                source_run_id=source_run_id,
+                default_model_key=model_key,
+            ),
         )
         self._append_df_to_table(
             self._table_names.performance_metrics,
-            self._performance_df_from_rows(result.performance_rows),
+            self._performance_df_from_rows(result.performance_rows, default_model_key=model_key),
         )
         self._append_df_to_table(
             self._table_names.daily_performance_profiles,
-            self._daily_performance_profile_persist_df_from_rows(result.daily_performance_profile_rows, source_run_id=source_run_id),
+            self._daily_performance_profile_persist_df_from_rows(
+                result.daily_performance_profile_rows,
+                source_run_id=source_run_id,
+                default_model_key=model_key,
+            ),
         )
         if result.performance_bin_specs:
             persisted_specs = self.get_performance_bin_specs(model_key)
@@ -1396,11 +1528,11 @@ class SparkRefreshRepository(ControlPlaneRepository):
             self.replace_performance_bin_specs(model_key, persisted_specs)
         self._append_df_to_table(
             self._table_names.incidents,
-            self._incident_df_from_rows(result.incident_rows),
+            self._incident_df_from_rows(result.incident_rows, default_model_key=model_key),
         )
         self._append_df_to_table(
             self._table_names.incident_history,
-            self._incident_history_df_from_rows(result.incident_history_rows),
+            self._incident_history_df_from_rows(result.incident_history_rows, default_model_key=model_key),
         )
         self._rewrite_quality_summary(model_key)
         self._sync_read_model()
@@ -2090,10 +2222,19 @@ class SparkRefreshRepository(ControlPlaneRepository):
         include_drift_quality: bool = True,
         include_performance: bool = True,
     ) -> RefreshResult:
-        metadata_df = self._metadata_df(metadata_list)
-        current_quality_df = self._daily_quality_profile_df_from_rows(current_daily_quality_profile_rows)
-        current_feature_df = self._daily_feature_profile_df_from_rows(current_daily_feature_profile_rows)
-        current_performance_df = self._daily_performance_profile_df_from_rows(current_daily_performance_profile_rows)
+        metadata_df = self._metadata_df(metadata_list, default_model_key=config.model_key)
+        current_quality_df = self._daily_quality_profile_df_from_rows(
+            current_daily_quality_profile_rows,
+            default_model_key=config.model_key,
+        )
+        current_feature_df = self._daily_feature_profile_df_from_rows(
+            current_daily_feature_profile_rows,
+            default_model_key=config.model_key,
+        )
+        current_performance_df = self._daily_performance_profile_df_from_rows(
+            current_daily_performance_profile_rows,
+            default_model_key=config.model_key,
+        )
 
         quality_df = current_quality_df
         feature_df = current_feature_df

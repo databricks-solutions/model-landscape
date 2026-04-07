@@ -180,6 +180,44 @@ def test_build_daily_profiles_uses_spark_for_quality_feature_and_performance_row
     assert {"f1", "precision", "recall"} <= metric_names
 
 
+def test_append_refresh_result_backfills_missing_model_key_before_persisting() -> None:
+    spark = _spark()
+    repository = RecordingSparkAppendRepository(
+        spark=spark,
+        table_names=TableNames(catalog="main", schema="default"),
+        table_frames={},
+    )
+
+    repository.append_refresh_result(
+        "fraud_v1",
+        RefreshResult(
+            drift_rows=[],
+            quality_rows=[],
+            performance_rows=[],
+            incident_rows=[],
+            daily_quality_profile_rows=[
+                {
+                    "profile_date": "2026-01-01",
+                    "row_count": 5,
+                    "prediction_mean": 0.5,
+                    "prediction_std": 0.1,
+                    "null_rates": "{}",
+                    "label_row_count": 5,
+                    "computed_at": "2026-01-02T00:00:00+00:00",
+                }
+            ],
+        ),
+        source_run_id="run-1",
+    )
+
+    daily_quality_rows = next(
+        rows
+        for table_name, rows in repository.appended
+        if table_name == repository._table_names.daily_quality_profiles
+    )
+    assert daily_quality_rows[0]["model_key"] == "fraud_v1"
+
+
 def test_spark_refresh_repository_uses_shared_external_join_key_without_entity_id() -> None:
     spark = _spark()
     source_table = _source_table_name()
