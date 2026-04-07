@@ -182,6 +182,16 @@ def _monitor_status_filter(status: str | list[str] | tuple[str, ...] | None) -> 
     return f" WHERE status IN ({placeholders})", statuses
 
 
+def _normalized_status_values(status: str | list[str] | tuple[str, ...] | None) -> tuple[str, ...]:
+    if status in (None, "", "all"):
+        return ()
+    if isinstance(status, str):
+        normalized = str(status).strip().lower()
+        return (normalized,) if normalized else ()
+    values = tuple(str(value).strip().lower() for value in status if str(value).strip())
+    return tuple(dict.fromkeys(values))
+
+
 class ControlPlaneRepository:
     def __init__(
         self,
@@ -521,7 +531,25 @@ class ControlPlaneRepository:
             frame = self._warehouse.query_params(query, params)
         else:
             frame = self._warehouse.query(query)
-        return [self._row_to_monitor_config(row) for _, row in frame.iterrows()]
+        configs = [self._row_to_monitor_config(row) for _, row in frame.iterrows()]
+        requested_statuses = _normalized_status_values(status)
+        if configs or not requested_statuses:
+            return configs
+
+        fallback_query = f"SELECT * FROM {self._table_names.monitor_configs} ORDER BY updated_at DESC"
+        fallback_frame = self._warehouse.query(fallback_query)
+        fallback_configs = [self._row_to_monitor_config(row) for _, row in fallback_frame.iterrows()]
+        if not fallback_configs:
+            return []
+
+        recovered = [config for config in fallback_configs if config.status in requested_statuses]
+        if recovered:
+            logger.warning(
+                "status-filtered monitor config query returned no rows; recovered %s configs via unfiltered fallback in namespace %s",
+                len(recovered),
+                self._table_names.namespace,
+            )
+        return recovered
 
     def archive_monitor(self, model_key: str) -> None:
         now = pd.Timestamp.utcnow().isoformat()

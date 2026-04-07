@@ -77,6 +77,12 @@ class RefreshTarget:
     scheduled_at: pd.Timestamp
 
 
+@dataclass(frozen=True)
+class TargetSelectionResult:
+    targets: tuple[RefreshTarget, ...]
+    debug_lines: tuple[str, ...] = ()
+
+
 def _utc_now() -> pd.Timestamp:
     return pd.Timestamp.now(tz=timezone.utc)
 
@@ -240,6 +246,32 @@ def _is_running(repository: ControlPlaneRepository, model_key: str, scope: str) 
     return _get_latest_refresh_run(repository, model_key, scope, statuses=("running",)) is not None
 
 
+def _safe_state_value(state: MonitorRuntimeState | object | None, field: str, default: object = "") -> object:
+    if state is None:
+        return default
+    return getattr(state, field, default)
+
+
+def _normalized_bootstrap_status(state: MonitorRuntimeState | object | None) -> str:
+    value = str(_safe_state_value(state, "bootstrap_status", "pending") or "").strip().lower()
+    return value or "pending"
+
+
+def _positive_selection_limit(configured_limit: int, *, stage: str, debug_lines: list[str]) -> int:
+    if configured_limit >= 1:
+        return configured_limit
+    debug_lines.append(
+        f"stage={stage} outcome=warning reason=non_positive_limit_clamped "
+        f"configured_limit={configured_limit} effective_limit=1"
+    )
+    return 1
+
+
+def _emit_selection_debug_lines(debug_lines: tuple[str, ...]) -> None:
+    for line in debug_lines:
+        print(f"refresh-control-plane selection: {line}")
+
+
 def _is_due(next_due_at: str | None, now: pd.Timestamp) -> bool:
     if not next_due_at:
         return False
@@ -255,19 +287,33 @@ def _select_targets(
     *,
     model_key: str,
     scope: RefreshScope,
-) -> list[RefreshTarget]:
+) -> TargetSelectionResult:
     now = _utc_now()
     runtime_states = _list_runtime_states(repository, configs)
     config_map = {config.model_key: config for config in configs}
+    table_names = getattr(repository, "table_names", None)
+    namespace = getattr(table_names, "namespace", "")
+    warehouse_id = getattr(getattr(repository, "_warehouse", None), "_warehouse_id", "")
+    debug_lines = [
+        f"requested_scope={scope} requested_model_key={model_key or ''} active_configs={len(configs)} "
+        f"namespace={namespace} warehouse_id={warehouse_id}",
+    ]
 
     if model_key:
         config = config_map.get(model_key)
         if not config:
-            return []
+            debug_lines.append(f"requested_model_key={model_key} outcome=missing_active_config")
+            return TargetSelectionResult(targets=(), debug_lines=tuple(debug_lines))
         forced_scope = "bootstrap" if scope == "scheduler" else scope
         if forced_scope == "scheduler":
             forced_scope = "bootstrap"
-        return [RefreshTarget(config=config, scope=forced_scope, scheduled_at=now)]
+        debug_lines.append(
+            f"stage={forced_scope} model_key={model_key} outcome=selected reason=explicit_target"
+        )
+        return TargetSelectionResult(
+            targets=(RefreshTarget(config=config, scope=forced_scope, scheduled_at=now),),
+            debug_lines=tuple(debug_lines),
+        )
 
     def runtime_state_for(config: MonitorConfig) -> MonitorRuntimeState:
         return runtime_states.get(config.model_key) or _get_runtime_state(repository, config, now=now)
@@ -277,28 +323,69 @@ def _select_targets(
 
     if scope in {"scheduler", "bootstrap"}:
         pending_bootstraps = []
+        configured_bootstrap_limit = settings.max_bootstraps_per_run
+        bootstrap_limit = _positive_selection_limit(
+            configured_bootstrap_limit,
+            stage="bootstrap",
+            debug_lines=debug_lines,
+        )
         for config in configs:
             state = runtime_state_for(config)
-            if state.bootstrap_status == "completed":
+            bootstrap_status = _normalized_bootstrap_status(state)
+            if bootstrap_status == "completed":
+                debug_lines.append(
+                    f"stage=bootstrap model_key={config.model_key} outcome=skipped "
+                    f"reason=bootstrap_already_completed bootstrap_status={bootstrap_status}"
+                )
                 continue
             if _is_running(repository, config.model_key, "bootstrap"):
+                debug_lines.append(
+                    f"stage=bootstrap model_key={config.model_key} outcome=skipped "
+                    f"reason=bootstrap_run_already_running"
+                )
                 continue
             if _failed_recently(state, now):
+                backoff_until = str(_safe_state_value(state, "backoff_until", "") or "")
+                debug_lines.append(
+                    f"stage=bootstrap model_key={config.model_key} outcome=skipped "
+                    f"reason=recent_failure_backoff backoff_until={backoff_until}"
+                )
                 continue
             pending_bootstraps.append(RefreshTarget(config=config, scope="bootstrap", scheduled_at=now))
-        selected_bootstraps = pending_bootstraps[: settings.max_bootstraps_per_run]
+        selected_bootstraps = pending_bootstraps[:bootstrap_limit]
         targets.extend(selected_bootstraps)
         selected_model_keys.update(target.config.model_key for target in selected_bootstraps)
+        for target in selected_bootstraps:
+            debug_lines.append(
+                f"stage=bootstrap model_key={target.config.model_key} outcome=selected "
+                f"reason=pending_bootstrap"
+            )
+        for target in pending_bootstraps[bootstrap_limit:]:
+            debug_lines.append(
+                f"stage=bootstrap model_key={target.config.model_key} outcome=skipped "
+                f"reason=max_bootstraps_per_run_reached configured_limit={configured_bootstrap_limit} "
+                f"effective_limit={bootstrap_limit}"
+            )
+        debug_lines.append(
+            f"stage=bootstrap candidates={len(pending_bootstraps)} selected={len(selected_bootstraps)} "
+            f"configured_limit={configured_bootstrap_limit} effective_limit={bootstrap_limit}"
+        )
         if scope == "bootstrap":
-            return targets
+            return TargetSelectionResult(targets=tuple(targets), debug_lines=tuple(debug_lines))
 
     if scope in {"scheduler", "drift_quality"}:
         due_drift: list[RefreshTarget] = []
+        configured_drift_limit = settings.max_drift_monitors_per_run
+        drift_limit = _positive_selection_limit(
+            configured_drift_limit,
+            stage="drift_quality",
+            debug_lines=debug_lines,
+        )
         for config in configs:
             if scope == "scheduler" and config.model_key in selected_model_keys:
                 continue
             state = runtime_state_for(config)
-            if state.bootstrap_status != "completed":
+            if _normalized_bootstrap_status(state) != "completed":
                 continue
             if not config.schedule_enabled or config.drift_cadence_preset == "manual":
                 continue
@@ -310,18 +397,24 @@ def _select_targets(
                 continue
             due_drift.append(RefreshTarget(config=config, scope="drift_quality", scheduled_at=now))
         if scope == "drift_quality":
-            return due_drift[: settings.max_drift_monitors_per_run]
-        selected_drift = due_drift[: settings.max_drift_monitors_per_run]
+            return TargetSelectionResult(targets=tuple(due_drift[:drift_limit]), debug_lines=tuple(debug_lines))
+        selected_drift = due_drift[:drift_limit]
         targets.extend(selected_drift)
         selected_model_keys.update(target.config.model_key for target in selected_drift)
 
     if scope in {"scheduler", "performance_repair"}:
         due_performance: list[RefreshTarget] = []
+        configured_performance_limit = settings.max_performance_monitors_per_run
+        performance_limit = _positive_selection_limit(
+            configured_performance_limit,
+            stage="performance_repair",
+            debug_lines=debug_lines,
+        )
         for config in configs:
             if scope == "scheduler" and config.model_key in selected_model_keys:
                 continue
             state = runtime_state_for(config)
-            if state.bootstrap_status != "completed":
+            if _normalized_bootstrap_status(state) != "completed":
                 continue
             if not config.schedule_enabled or not config.has_labels:
                 continue
@@ -335,10 +428,10 @@ def _select_targets(
                 continue
             due_performance.append(RefreshTarget(config=config, scope="performance_repair", scheduled_at=now))
         if scope == "performance_repair":
-            return due_performance[: settings.max_performance_monitors_per_run]
-        targets.extend(due_performance[: settings.max_performance_monitors_per_run])
+            return TargetSelectionResult(targets=tuple(due_performance[:performance_limit]), debug_lines=tuple(debug_lines))
+        targets.extend(due_performance[:performance_limit])
 
-    return targets
+    return TargetSelectionResult(targets=tuple(targets), debug_lines=tuple(debug_lines))
 
 
 def _list_runtime_states(repository: ControlPlaneRepository, configs: list[MonitorConfig]) -> dict[str, MonitorRuntimeState]:
@@ -1147,7 +1240,10 @@ def run_refresh_cycle(
 ) -> RefreshBatchResult:
     _reconcile_stale_running_runs(repository, _utc_now())
     configs = repository.list_monitor_configs(status="active")
-    targets = _select_targets(repository, configs, model_key=model_key, scope=scope)
+    selection = _select_targets(repository, configs, model_key=model_key, scope=scope)
+    targets = list(selection.targets)
+    if scope == "bootstrap" or model_key or not targets:
+        _emit_selection_debug_lines(selection.debug_lines)
 
     max_workers = max(1, settings.max_parallel_refresh_workers)
     recommended_worker_cap = getattr(repository, "recommended_max_parallel_refresh_workers", None)

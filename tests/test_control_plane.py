@@ -516,6 +516,28 @@ def test_list_monitor_configs_round_trips_fixed_baseline_dates() -> None:
     assert config.baseline.baseline_end == "2026-01-07"
 
 
+def test_list_monitor_configs_recovers_when_filtered_status_query_returns_empty(caplog) -> None:
+    class _FallbackWarehouse(FakeWarehouse):
+        def query(self, sql: str, cache: bool = False) -> pd.DataFrame:
+            if "SELECT * FROM model_observability.control_plane.monitor_configs ORDER BY updated_at DESC" in sql:
+                return pd.DataFrame([self.monitor_row])
+            return super().query(sql, cache=cache)
+
+        def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
+            if "SELECT * FROM model_observability.control_plane.monitor_configs WHERE status = %s" in sql:
+                return pd.DataFrame()
+            return super().query_params(sql, params)
+
+    warehouse = _FallbackWarehouse()
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    with caplog.at_level("WARNING"):
+        configs = repository.list_monitor_configs(status="active")
+
+    assert [config.model_key for config in configs] == ["payments_risk_v1"]
+    assert any("recovered 1 configs via unfiltered fallback" in message for message in caplog.messages)
+
+
 def test_validate_monitor_source_requires_model_id_value_for_shared_tables() -> None:
     warehouse = FakeWarehouse()
     warehouse.distinct_model_ids = 3
@@ -1150,6 +1172,41 @@ class StubRepository:
         self.appended.append(model_key)
 
 
+def _runtime_state(model_key: str, **overrides: object):
+    payload: dict[str, object] = {
+        "model_key": model_key,
+        "bootstrap_status": "pending",
+        "last_drift_refresh_at": None,
+        "last_performance_refresh_at": None,
+        "next_drift_due_at": None,
+        "next_performance_due_at": None,
+        "last_label_watermark": None,
+        "last_run_status": None,
+        "last_run_error": None,
+        "last_run_started_at": None,
+        "last_run_completed_at": None,
+        "backoff_until": None,
+        "consecutive_failures": 0,
+    }
+    payload.update(overrides)
+    return type("State", (), payload)()
+
+
+class BootstrapSelectionSkipRepository(StubRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.runtime_states: dict[str, object] = {}
+        self.running_bootstraps: set[str] = set()
+
+    def get_monitor_runtime_state(self, model_key: str):
+        return self.runtime_states.get(model_key)
+
+    def get_latest_refresh_run(self, model_key: str, scope: str, statuses: tuple[str, ...] | None = None):
+        if scope == "bootstrap" and statuses == ("running",) and model_key in self.running_bootstraps:
+            return {"run_id": f"running-{model_key}"}
+        return None
+
+
 def test_run_refresh_cycle_skips_replacing_results_when_not_enough_data() -> None:
     repository = StubRepository()
 
@@ -1164,6 +1221,26 @@ def test_run_refresh_cycle_skips_replacing_results_when_not_enough_data() -> Non
     assert repository.appended == []
     assert repository.started_runs[0]["run_kind"] == "backfill"
     assert repository.completed_runs[0]["status"] == "skipped"
+
+
+def test_run_refresh_cycle_bootstrap_logs_skip_reason_for_backoff(capsys) -> None:
+    repository = BootstrapSelectionSkipRepository()
+    repository.runtime_states[repository.config.model_key] = _runtime_state(
+        repository.config.model_key,
+        backoff_until="2026-12-31T00:00:00+00:00",
+        last_run_status="failed",
+        consecutive_failures=1,
+    )
+
+    counts = run_refresh_cycle(repository, mode="auto", scope="bootstrap")
+
+    captured = capsys.readouterr()
+    assert counts.models == 0
+    assert repository.started_runs == []
+    assert "requested_scope=bootstrap" in captured.out
+    assert f"model_key={repository.config.model_key}" in captured.out
+    assert "reason=recent_failure_backoff" in captured.out
+    assert "stage=bootstrap candidates=0 selected=0" in captured.out
 
 
 class MultiWindowRepository(StubRepository):
@@ -1891,6 +1968,15 @@ class SparkSerialSchedulerRepository(ParallelSchedulerRepository):
         return 1
 
 
+class ParallelBootstrapSelectionRepository(ParallelSchedulerRepository):
+    def get_monitor_runtime_state(self, model_key: str):
+        return _runtime_state(model_key)
+
+    def get_latest_refresh_run(self, model_key: str, scope: str, statuses: tuple[str, ...] | None = None):
+        del model_key, scope, statuses
+        return None
+
+
 def test_run_refresh_cycle_scheduler_parallelizes_across_monitors_with_one_scope_each() -> None:
     repository = ParallelSchedulerRepository()
     original = settings.max_parallel_refresh_workers
@@ -1911,6 +1997,23 @@ def test_run_refresh_cycle_scheduler_parallelizes_across_monitors_with_one_scope
         "payments_risk_v3",
     }
     assert {run["scope"] for run in repository.started_runs} == {"drift_quality"}
+
+
+def test_run_refresh_cycle_bootstrap_clamps_non_positive_bootstrap_limit(capsys) -> None:
+    repository = ParallelBootstrapSelectionRepository()
+    original = settings.max_bootstraps_per_run
+    object.__setattr__(settings, "max_bootstraps_per_run", 0)
+    try:
+        counts = run_refresh_cycle(repository, mode="auto", scope="bootstrap")
+    finally:
+        object.__setattr__(settings, "max_bootstraps_per_run", original)
+
+    captured = capsys.readouterr()
+    assert len(repository.started_runs) == 1
+    assert counts.models == 1
+    assert "reason=non_positive_limit_clamped" in captured.out
+    assert "configured_limit=0 effective_limit=1" in captured.out
+    assert "reason=max_bootstraps_per_run_reached" in captured.out
 
 
 def test_run_refresh_cycle_scheduler_isolates_unexpected_worker_failure_in_parallel(monkeypatch) -> None:
