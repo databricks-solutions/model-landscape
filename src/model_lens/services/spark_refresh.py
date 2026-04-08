@@ -274,6 +274,10 @@ def _sql_date_literal(value: str) -> str:
     return f"CAST({_sql_string_literal(value)} AS DATE)"
 
 
+def _current_utc_timestamp_string() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
 def _normalize_rows_with_model_key(
     rows: list[dict[str, Any]],
     *,
@@ -320,6 +324,22 @@ def _normalize_rows_with_required_string_field(
                 f"{row_kind} row at index {index} is missing {field_name}"
             )
         payload[field_name] = current_value
+        normalized_rows.append(payload)
+    return normalized_rows
+
+
+def _normalize_rows_with_computed_at(
+    rows: list[dict[str, Any]],
+    *,
+    row_kind: str,
+) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    default_timestamp = _current_utc_timestamp_string()
+    normalized_rows: list[dict[str, Any]] = []
+    for row in rows:
+        payload = dict(row)
+        payload["computed_at"] = str(payload.get("computed_at") or "").strip() or default_timestamp
         normalized_rows.append(payload)
     return normalized_rows
 
@@ -389,11 +409,20 @@ class SparkRefreshRepository(ControlPlaneRepository):
                 field_name="window_id",
                 row_kind=row_kind,
             )
+        requires_computed_at = any(field.name == "computed_at" and not field.nullable for field in schema.fields)
+        if requires_computed_at:
+            normalized_rows = _normalize_rows_with_computed_at(
+                normalized_rows,
+                row_kind=row_kind,
+            )
         frame = self._spark.createDataFrame(normalized_rows, schema=schema)
         for column_name in date_columns:
             frame = frame.withColumn(column_name, F.to_date(F.col(column_name)))
         for column_name in timestamp_columns:
-            frame = frame.withColumn(column_name, F.to_timestamp(F.col(column_name)))
+            parsed = F.to_timestamp(F.col(column_name))
+            if column_name == "computed_at" and requires_computed_at:
+                parsed = F.coalesce(parsed, F.current_timestamp())
+            frame = frame.withColumn(column_name, parsed)
         return frame
 
     def _quality_metric_df_from_rows(self, rows: list[dict[str, Any]], *, default_model_key: str | None = None) -> DataFrame:
@@ -530,13 +559,14 @@ class SparkRefreshRepository(ControlPlaneRepository):
         )
 
     def _performance_bin_spec_df_from_specs(self, model_key: str, specs: dict[str, tuple[float, ...]]) -> DataFrame:
+        computed_at = _current_utc_timestamp_string()
         frame = self._spark.createDataFrame(
             [
                 {
                     "model_key": model_key,
                     "feature_name": feature_name,
                     "edges_json": json.dumps([float(value) for value in edges]),
-                    "computed_at": None,
+                    "computed_at": computed_at,
                 }
                 for feature_name, edges in sorted(specs.items())
                 if feature_name and len(edges) >= 2

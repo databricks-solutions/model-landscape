@@ -172,6 +172,7 @@ Responsibilities:
 - materialize daily quality, feature, and performance profiles from the Spark range load, then derive the persisted comparison-window history from those daily profiles in the same refresh pass
 - for non-bootstrap runs, read the affected persisted daily facts back through the Spark repository, merge them with the current run’s daily facts there, and derive the window/history tables from that Spark-side union instead of a Python list merge
 - when the Spark repository is active, persist the affected derived/fact tables back into Delta through Spark writes instead of row-batch warehouse inserts
+- before those strict Spark writes, normalize required metadata fields such as `model_key`, `window_id`, and `computed_at` at the repository boundary so nullability-only row-contract gaps do not abort bootstrap persistence
 - with the Spark repository active, numeric drift histogram aggregation and incident lifecycle derivation also stay inside the Spark refresh layer rather than dropping back to Python helpers on the hot path
 - stream the final derived rows that still need Python-side packaging with iterator-based reads rather than whole-frame `collect()` calls, so the driver sees only already-aggregated outputs
 - batch daily per-day feature statistics across numeric features and across categorical features before the per-feature histogram/top-N distribution passes, so wide monitors no longer pay one separate stats aggregation per feature

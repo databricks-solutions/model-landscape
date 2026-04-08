@@ -218,6 +218,60 @@ def test_append_refresh_result_backfills_missing_model_key_before_persisting() -
     assert daily_quality_rows[0]["model_key"] == "fraud_v1"
 
 
+def test_append_refresh_result_backfills_missing_computed_at_before_persisting() -> None:
+    spark = _spark()
+    repository = RecordingSparkAppendRepository(
+        spark=spark,
+        table_names=TableNames(catalog="main", schema="default"),
+        table_frames={},
+    )
+
+    repository.append_refresh_result(
+        "fraud_v1",
+        RefreshResult(
+            drift_rows=[],
+            quality_rows=[],
+            performance_rows=[],
+            incident_rows=[],
+            daily_quality_profile_rows=[
+                {
+                    "model_key": "fraud_v1",
+                    "profile_date": "2026-01-01",
+                    "row_count": 5,
+                    "prediction_mean": 0.5,
+                    "prediction_std": 0.1,
+                    "null_rates": "{}",
+                    "label_row_count": 5,
+                }
+            ],
+        ),
+        source_run_id="run-1",
+    )
+
+    daily_quality_rows = next(
+        rows
+        for table_name, rows in repository.appended
+        if table_name == repository._table_names.daily_quality_profiles
+    )
+    assert daily_quality_rows[0]["computed_at"] is not None
+
+
+def test_performance_bin_spec_df_sets_computed_at_before_strict_schema_write() -> None:
+    spark = _spark()
+    repository = SparkRefreshRepository(
+        warehouse=DummyWarehouse(spark),  # type: ignore[arg-type]
+        table_names=TableNames(catalog="main", schema="default"),
+        spark=spark,
+    )
+
+    rows = repository._performance_bin_spec_df_from_specs(
+        "fraud_v1",
+        {"amount": (0.0, 1.0, 2.0)},
+    ).collect()
+
+    assert rows[0]["computed_at"] is not None
+
+
 def test_spark_refresh_repository_uses_shared_external_join_key_without_entity_id() -> None:
     spark = _spark()
     source_table = _source_table_name()
