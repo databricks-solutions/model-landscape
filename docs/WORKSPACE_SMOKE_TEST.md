@@ -695,6 +695,7 @@ Expected:
 - both monitor cards render
 - the page loads successfully using the bulk latest-quality plus historical-drift-summary read path in a real Databricks workspace
 - if one monitor had severe drift earlier but the newest window recovered, Overview still ranks that monitor by the historical max PSI instead of showing it as fully healthy
+- a newly created or not-yet-derived monitor appears as `Computing/Pending`, not as a healthy zero-PSI card
 - the page shows a loading spinner instead of blank content while the warehouse read is running
 
 ### Severe numeric drift
@@ -708,6 +709,7 @@ Expected:
 - PSI / JS / KL stay finite
 - the page shows a real severe-drift signal instead of blank output or warning-driven gaps
 - the Top N feature ranking reflects the highest historical drift across the stored windows, not only the newest window
+- the heatmap title reflects the active granularity and only includes the ranked Top N features instead of every feature in the monitor
 
 ### Same-day current-window detail
 
@@ -716,8 +718,9 @@ Expected:
 
 Expected:
 
-- those same-day rows are included
-- detail views do not silently truncate rows after midnight on `window_end`
+- those same-day rows are included when the repository supports bounded current-window reads
+- if the repository cannot serve a bounded raw read, the deep-dive page shows an explicit unavailable state rather than silently scanning the full source table
+- the feature context card shows the active baseline/current dates plus whether the distribution came from persisted profile data or a bounded source-window read
 
 ## Step 12: Pre-Client Acceptance Checklist
 

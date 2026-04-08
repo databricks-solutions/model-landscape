@@ -3,12 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-
-DEFAULT_THRESHOLDS = {
-    "psi": {"warning": 0.1, "critical": 0.25},
-    "js_divergence": {"warning": 0.05, "critical": 0.15},
-    "kl_divergence": {"warning": 0.1, "critical": 0.25},
-}
+from model_lens.services.thresholds import DEFAULT_THRESHOLDS
 
 _SEVERITY_RANK = {"warning": 1, "critical": 2}
 

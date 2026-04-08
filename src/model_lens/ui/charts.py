@@ -6,6 +6,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from model_lens.services.thresholds import drift_severity, get_thresholds
 from model_lens.ui.styles import COLORS
 
 
@@ -24,28 +25,66 @@ def _apply_layout(fig, **kwargs):
     return fig
 
 
+def _metric_color(value: float | int | None, metric: str) -> str:
+    severity = drift_severity(value, metric)
+    if severity == "critical":
+        return COLORS["high"]
+    if severity == "warning":
+        return COLORS["moderate"]
+    return COLORS["low"]
+
+
+def _numeric_array(values) -> np.ndarray:
+    series = pd.to_numeric(pd.Series(list(values) if not isinstance(values, pd.Series) else values), errors="coerce").dropna()
+    return series.to_numpy(dtype=float)
+
+
+def _heatmap_colorscale(metric: str, *, zmax: float) -> list[list[float | str]]:
+    warning, critical = get_thresholds(metric)
+    safe_max = max(float(zmax), float(critical) * 1.5, 1e-9)
+    warning_stop = min(max(warning / safe_max, 0.0), 1.0)
+    critical_stop = min(max(critical / safe_max, warning_stop), 1.0)
+    return [
+        [0.0, COLORS["low"]],
+        [warning_stop, COLORS["low"]],
+        [warning_stop, COLORS["moderate"]],
+        [critical_stop, COLORS["moderate"]],
+        [critical_stop, COLORS["high"]],
+        [1.0, COLORS["high"]],
+    ]
+
+
 def build_drift_heatmap(df: pd.DataFrame, metric: str = "psi", title: str = "Feature Drift Over Time"):
     if df.empty:
         fig = go.Figure()
         fig.add_annotation(text="No drift data available", showarrow=False)
         return _apply_layout(fig, title=title)
 
-    pivot = df.pivot_table(index="feature", columns="period", values=metric).sort_index()
+    pivot = df.pivot_table(index="feature", columns="period", values=metric, aggfunc="max").sort_index()
+    values = pd.to_numeric(pd.Series(pivot.values.ravel()), errors="coerce").dropna()
+    warning, critical = get_thresholds(metric)
+    zmax = max(values.max(), critical * 1.5) if not values.empty else critical * 1.5
     fig = go.Figure(
         data=go.Heatmap(
             z=pivot.values,
             x=[str(column) for column in pivot.columns],
             y=pivot.index,
-            colorscale=[
-                [0.0, COLORS["low"]],
-                [0.3, "#27ae60"],
-                [0.5, COLORS["moderate"]],
-                [0.7, "#e67e22"],
-                [1.0, COLORS["high"]],
-            ],
+            zmin=0,
+            zmax=zmax,
+            colorscale=_heatmap_colorscale(metric, zmax=zmax),
             colorbar=dict(title=metric.upper(), tickfont=dict(color=COLORS["text"])),
             hovertemplate="<b>%{y}</b><br>Period: %{x}<br>" + f"{metric.upper()}: %{{z:.4f}}<extra></extra>",
         )
+    )
+    fig.add_annotation(
+        text=f"Warning {warning:.2f} | Critical {critical:.2f}",
+        xref="paper",
+        yref="paper",
+        x=1,
+        y=1.1,
+        xanchor="right",
+        showarrow=False,
+        font=dict(size=11, color=COLORS["muted"]),
     )
     return _apply_layout(
         fig,
@@ -64,9 +103,9 @@ def build_drift_timeline(df: pd.DataFrame, features: list[str], metric: str = "p
 
     fig = go.Figure()
     colors = px.colors.qualitative.Set2
-    selected_features = [feature for feature in features if feature in set(df["feature"].astype(str))][:8]
+    selected_features = [feature for feature in features if feature in set(df["feature"].astype(str))]
     if not selected_features:
-        selected_features = df["feature"].dropna().astype(str).drop_duplicates().tolist()[:8]
+        selected_features = df["feature"].dropna().astype(str).drop_duplicates().tolist()
     period_count = int(df["period"].nunique()) if "period" in df.columns else 0
 
     for index, feature in enumerate(selected_features):
@@ -138,10 +177,7 @@ def build_top_drifters_bar(df: pd.DataFrame, metric: str = "psi", top_n: int = 1
         .max()
         .nlargest(top_n, metric)
     )
-    colors = [
-        COLORS["high"] if value > 0.2 else COLORS["moderate"] if value > 0.1 else COLORS["low"]
-        for value in latest[metric]
-    ]
+    colors = [_metric_color(value, metric) for value in latest[metric]]
     fig = go.Figure(
         go.Bar(
             x=latest[metric],
@@ -161,8 +197,8 @@ def build_top_drifters_bar(df: pd.DataFrame, metric: str = "psi", top_n: int = 1
 
 
 def build_feature_distribution(reference, current, feature_name: str, n_bins: int = 40):
-    ref_clean = np.asarray(reference)[~np.isnan(reference)]
-    cur_clean = np.asarray(current)[~np.isnan(current)]
+    ref_clean = _numeric_array(reference)
+    cur_clean = _numeric_array(current)
     if len(ref_clean) == 0 and len(cur_clean) == 0:
         fig = go.Figure()
         fig.add_annotation(text="No data available", showarrow=False)
@@ -252,7 +288,7 @@ def build_null_rate_chart(null_rates: dict[str, float]):
     sorted_items = sorted(null_rates.items(), key=lambda item: item[1], reverse=True)
     features = [item[0] for item in sorted_items[:15]]
     rates = [item[1] for item in sorted_items[:15]]
-    colors = [COLORS["high"] if rate > 5 else COLORS["moderate"] if rate > 1 else COLORS["low"] for rate in rates]
+    colors = [_metric_color(rate, "null_rate") for rate in rates]
 
     fig = go.Figure(
         go.Bar(
@@ -263,8 +299,9 @@ def build_null_rate_chart(null_rates: dict[str, float]):
             hovertemplate="<b>%{y}</b><br>Null Rate: %{x:.2f}%<extra></extra>",
         )
     )
-    if max(rates) >= 3:
-        fig.add_vline(x=5, line_dash="dash", line_color=COLORS["high"])
+    if rates:
+        _, critical = get_thresholds("null_rate")
+        fig.add_vline(x=critical, line_dash="dash", line_color=COLORS["high"])
     return _apply_layout(
         fig,
         title="Null Rates by Feature",
@@ -315,32 +352,35 @@ def build_prediction_quality_timeline(history_df: pd.DataFrame):
         return _apply_layout(fig, title="Prediction Mean Over Time")
 
     frame = history_df.sort_values("period").copy()
-    lower = frame["prediction_mean"] - frame["prediction_std"].fillna(0.0)
-    upper = frame["prediction_mean"] + frame["prediction_std"].fillna(0.0)
+    frame["prediction_mean"] = pd.to_numeric(frame["prediction_mean"], errors="coerce")
+    frame["prediction_std"] = pd.to_numeric(frame["prediction_std"], errors="coerce").fillna(0.0)
+    lower = frame["prediction_mean"] - frame["prediction_std"]
+    upper = frame["prediction_mean"] + frame["prediction_std"]
 
     fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=frame["period"].astype(str),
-            y=upper,
-            mode="lines",
-            line=dict(width=0),
-            showlegend=False,
-            hoverinfo="skip",
+    if len(frame) >= 2:
+        fig.add_trace(
+            go.Scatter(
+                x=frame["period"].astype(str),
+                y=upper,
+                mode="lines",
+                line=dict(width=0),
+                showlegend=False,
+                hoverinfo="skip",
+            )
         )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=frame["period"].astype(str),
-            y=lower,
-            mode="lines",
-            line=dict(width=0),
-            fill="tonexty",
-            fillcolor="rgba(26,188,156,0.12)",
-            name="std band",
-            hoverinfo="skip",
+        fig.add_trace(
+            go.Scatter(
+                x=frame["period"].astype(str),
+                y=lower,
+                mode="lines",
+                line=dict(width=0),
+                fill="tonexty",
+                fillcolor="rgba(26,188,156,0.12)",
+                name="std band",
+                hoverinfo="skip",
+            )
         )
-    )
     fig.add_trace(
         go.Scatter(
             x=frame["period"].astype(str),
@@ -365,7 +405,7 @@ def build_prediction_quality_timeline(history_df: pd.DataFrame):
     return _apply_layout(fig, title="Prediction Mean Over Time", xaxis_title="Window End", yaxis_title="Prediction Mean", height=320)
 
 
-def build_multi_model_summary(model_drift_data: list[dict]):
+def build_multi_model_summary(model_drift_data: list[dict], metric: str = "psi"):
     if not model_drift_data:
         fig = go.Figure()
         fig.add_annotation(text="No multi-model data", showarrow=False)
@@ -374,6 +414,7 @@ def build_multi_model_summary(model_drift_data: list[dict]):
     models = [item["model"] for item in model_drift_data]
     max_psi = [item["max_psi"] for item in model_drift_data]
     drifting_count = [item["drifting_features"] for item in model_drift_data]
+    computing = [bool(item.get("computing")) for item in model_drift_data]
 
     fig = make_subplots(
         rows=1,
@@ -381,8 +422,16 @@ def build_multi_model_summary(model_drift_data: list[dict]):
         subplot_titles=("Max PSI by Model", "Drifting Features Count"),
         horizontal_spacing=0.15,
     )
-    colors = [COLORS["high"] if value > 0.2 else COLORS["moderate"] if value > 0.1 else COLORS["low"] for value in max_psi]
-    fig.add_trace(go.Bar(x=models, y=max_psi, marker_color=colors, name="Max PSI"), row=1, col=1)
+    colors = [COLORS["cyan"] if computing[index] else _metric_color(value, metric) for index, value in enumerate(max_psi)]
+    max_trace = go.Bar(
+        x=models,
+        y=max_psi,
+        marker_color=colors,
+        name="Max PSI",
+        text=["Computing" if is_computing else None for is_computing in computing],
+        textposition="outside",
+    )
+    fig.add_trace(max_trace, row=1, col=1)
     fig.add_trace(go.Bar(x=models, y=drifting_count, marker_color=COLORS["blue"], name="Features > Warning"), row=1, col=2)
     return _apply_layout(fig, title="Multi-Model Drift Overview", showlegend=False, height=350)
 
@@ -432,6 +481,10 @@ def build_performance_timeline(metrics_over_time: list[dict], metric_name: str =
         return _apply_layout(fig, title=f"{metric_name.upper()} Over Time")
 
     frame = pd.DataFrame(metrics_over_time)
+    if metric_name not in frame.columns:
+        fig = go.Figure()
+        fig.add_annotation(text=f"No {metric_name.upper()} values are available yet", showarrow=False)
+        return _apply_layout(fig, title=f"{metric_name.upper()} Over Time")
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(

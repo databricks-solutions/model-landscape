@@ -23,11 +23,11 @@ from pyspark.sql.types import (
 from model_lens.config import settings
 from model_lens.domain.models import MonitorConfig, RefreshResult
 from model_lens.domain.performance_metrics import default_performance_metric_names
-from model_lens.services.incidents import DEFAULT_THRESHOLDS
 from model_lens.services.control_plane import (
     ControlPlaneRepository,
     _resolve_source_labels_join_col,
 )
+from model_lens.services.thresholds import DEFAULT_THRESHOLDS
 from model_lens.services.lakebase import LakebaseReadModel
 from model_lens.services.spark_session import get_spark_session
 from model_lens.services.table_names import TableNames

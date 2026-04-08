@@ -4,8 +4,9 @@ from types import SimpleNamespace
 
 import pandas as pd
 
-from model_lens.backend import DashboardBackend
+from model_lens.backend import DashboardBackend, _null_rate_dict, _safe_json_list
 from model_lens.domain.models import BaselinePolicy, InferenceContract, MonitorConfig
+from model_lens.services.thresholds import get_thresholds
 
 
 class _FakeWarehouse:
@@ -486,6 +487,45 @@ def test_feature_detail_load_uses_bounded_sampled_frame() -> None:
     assert calls[0]["max_total_rows"] > 0
 
 
+def test_feature_detail_returns_empty_when_only_unbounded_load_is_supported() -> None:
+    config = MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.model_lens_demo.inference_logs",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=("amount",),
+            slice_columns=("region",),
+            categorical_columns=("region",),
+        ),
+        baseline=BaselinePolicy(n_days=7),
+        model_id_value="fraud_model_v1",
+    )
+
+    repository = SimpleNamespace(
+        _warehouse=_FakeWarehouse(),
+        table_names=SimpleNamespace(
+            drift_metrics="drift_metrics",
+            quality_metrics="quality_metrics",
+            quality_history="quality_history",
+            performance_metrics="performance_metrics",
+        ),
+        list_monitor_configs=lambda status="active": [config],
+        get_monitor_summary=lambda: pd.DataFrame(),
+        load_monitor_frame=lambda config_arg: pd.DataFrame([{"event_ts": "2026-01-20T00:00:00", "amount": 10.0}]),
+    )
+    backend = DashboardBackend(repository=repository)
+
+    details = backend.get_feature_distribution_details("fraud_model_demo", "amount")
+
+    assert details["baseline"].empty
+    assert details["current"].empty
+    assert details["distribution_source"] == "unavailable"
+
+
 def test_current_window_detail_reads_use_current_window_bounds_only() -> None:
     calls: list[dict[str, object]] = []
     config = MonitorConfig(
@@ -560,7 +600,7 @@ def test_current_window_detail_reads_use_current_window_bounds_only() -> None:
     assert calls[1]["max_total_rows"] > 0
 
 
-def test_current_window_fallback_keeps_rows_later_on_window_end_date() -> None:
+def test_current_window_returns_empty_when_only_unbounded_load_is_supported() -> None:
     config = MonitorConfig(
         model_key="fraud_model_demo",
         display_name="Fraud Model Demo",
@@ -621,7 +661,7 @@ def test_current_window_fallback_keeps_rows_later_on_window_end_date() -> None:
 
     prediction = backend.get_prediction_distribution("fraud_model_demo")
 
-    assert prediction.tolist() == [0.2, 0.8]
+    assert prediction.tolist() == []
 
 
 def test_feature_distribution_daily_profile_query_is_bounded_to_latest_window_dates() -> None:
@@ -856,11 +896,13 @@ def test_get_overview_rows_uses_bulk_historical_snapshot_queries() -> None:
     assert fraud_row["total_features"] == 2
     assert fraud_row["top_drifter"] == "amount"
     assert fraud_row["max_null_rate"] == 1.2
+    assert fraud_row["computing"] is False
 
     chargeback_row = next(row for row in rows if row["model_id"] == "chargeback_model_demo")
     assert chargeback_row["max_psi"] == 4.93
     assert chargeback_row["drifting_features"] == 1
     assert chargeback_row["max_null_rate"] == 0.7
+    assert chargeback_row["computing"] is False
     quality_query = next(sql for sql in queries if "ROW_NUMBER() OVER" in sql and "FROM quality_metrics" in sql)
     normalized_quality_query = " ".join(quality_query.split())
     assert ") latest_quality WHERE row_num = 1" in normalized_quality_query
@@ -873,6 +915,87 @@ def test_get_overview_rows_uses_bulk_historical_snapshot_queries() -> None:
     assert "ROW_NUMBER() OVER" not in normalized_drift_query
 
 
+def test_get_overview_rows_marks_models_without_drift_as_computing() -> None:
+    class OverviewWarehouse:
+        def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
+            if "FROM quality_metrics" in sql:
+                return pd.DataFrame(
+                    [
+                        {
+                            "model_key": "fraud_model_demo",
+                            "total_rows": 840,
+                            "min_date": "2026-01-01",
+                            "max_date": "2026-01-21",
+                            "prediction_mean": 0.44,
+                            "prediction_std": 0.13,
+                            "daily_volume": '{"2026-01-21": 40}',
+                            "null_rates": '{"amount": 0.0}',
+                            "computed_at": "2026-01-21T10:00:00",
+                        }
+                    ]
+                )
+            if "WITH feature_metric_history AS" in sql and "FROM drift_metrics" in sql:
+                return pd.DataFrame(
+                    [
+                        {
+                            "model_key": "fraud_model_demo",
+                            "feature_name": "amount",
+                            "metric_name": "psi",
+                            "metric_value": 0.12,
+                        }
+                    ]
+                )
+            return pd.DataFrame()
+
+    fraud_config = MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.model_lens_demo.inference_logs",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            feature_columns=("amount", "velocity_7d"),
+        ),
+        baseline=BaselinePolicy(n_days=7),
+        model_id_value="fraud_model_v1",
+    )
+    pending_config = MonitorConfig(
+        model_key="spoof_model_demo",
+        display_name="Spoof Model Demo",
+        source_table="main.model_lens_demo.inference_logs",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            feature_columns=("device_score", "ip_risk", "country_score"),
+        ),
+        baseline=BaselinePolicy(n_days=7),
+        model_id_value="spoof_model_v1",
+    )
+
+    repository = SimpleNamespace(
+        _warehouse=OverviewWarehouse(),
+        table_names=SimpleNamespace(
+            quality_metrics="quality_metrics",
+            drift_metrics="drift_metrics",
+        ),
+        list_monitor_configs=lambda status="active": [fraud_config, pending_config],
+        get_monitor_summary=lambda: pd.DataFrame(),
+        list_monitor_runtime_states=lambda keys: {},
+    )
+    backend = DashboardBackend(repository=repository)
+
+    rows = backend.get_overview_rows(metric="psi")
+    rows_by_id = {row["model_id"]: row for row in rows}
+
+    assert rows_by_id["fraud_model_demo"]["computing"] is False
+    assert rows_by_id["fraud_model_demo"]["drifting_features"] == 1
+    assert rows_by_id["spoof_model_demo"]["computing"] is True
+    assert rows_by_id["spoof_model_demo"]["total_features"] == 3
+    assert rows_by_id["spoof_model_demo"]["top_drifter"] == "Computing/Pending"
+
+
 def test_get_overview_rows_returns_empty_without_active_monitors() -> None:
     repository = SimpleNamespace(
         list_monitor_configs=lambda status="active": [],
@@ -882,6 +1005,18 @@ def test_get_overview_rows_returns_empty_without_active_monitors() -> None:
 
     assert backend.list_models() == []
     assert backend.get_overview_rows() == []
+
+
+def test_safe_json_helpers_skip_malformed_numeric_values() -> None:
+    assert _safe_json_list([1, "bad", None, "4.5"]) == [1.0, 4.5]
+    assert _null_rate_dict('{"amount": 1.2, "country": "oops", "velocity_7d": null}') == {"amount": 1.2}
+
+
+def test_shared_thresholds_cover_metric_specific_warning_logic() -> None:
+    warning, critical = get_thresholds("js_divergence")
+
+    assert warning == 0.05
+    assert critical == 0.15
 
 
 def test_get_reference_data_includes_recent_incident_history_when_available() -> None:

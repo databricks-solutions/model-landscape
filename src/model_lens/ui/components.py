@@ -3,6 +3,7 @@ from __future__ import annotations
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
+from model_lens.services.thresholds import drift_severity, get_thresholds
 from model_lens.ui.styles import (
     CARD_STYLE,
     COLORS,
@@ -12,25 +13,11 @@ from model_lens.ui.styles import (
 )
 
 
-DEFAULT_THRESHOLDS = {
-    "psi": {"warning": 0.1, "critical": 0.2},
-    "js_divergence": {"warning": 0.05, "critical": 0.15},
-    "kl_divergence": {"warning": 0.1, "critical": 0.3},
-    "null_rate": {"warning": 1.0, "critical": 5.0},
-}
-
-
-def get_thresholds(metric: str = "psi") -> tuple[float, float]:
-    thresholds = DEFAULT_THRESHOLDS.get(metric, {"warning": 0.1, "critical": 0.2})
-    return thresholds["warning"], thresholds["critical"]
-
-
 def get_drift_status(value: float | int | None, metric: str = "psi") -> tuple[str, str, str]:
-    warning, critical = get_thresholds(metric)
-    numeric = float(value or 0)
-    if numeric > critical:
+    severity = drift_severity(value, metric)
+    if severity == "critical":
         return "Critical", "danger", COLORS["high"]
-    if numeric > warning:
+    if severity == "warning":
         return "Warning", "warning", COLORS["moderate"]
     return "Healthy", "success", COLORS["low"]
 

@@ -20,6 +20,7 @@ def layout():
                                 id="deepdive-feature-select",
                                 placeholder="Choose a feature to investigate...",
                                 className="dash-dropdown",
+                                style=DROPDOWN_STYLE,
                             ),
                         ],
                         md=6,
@@ -31,6 +32,7 @@ def layout():
                                 id="deepdive-dimension-select",
                                 placeholder="Select dimension...",
                                 className="dash-dropdown",
+                                style=DROPDOWN_STYLE,
                             ),
                         ],
                         md=4,
@@ -52,7 +54,8 @@ def layout():
                     [
                         html.H6([html.I(className="fas fa-circle-info me-2"), "Feature Context"], className="text-light mb-2"),
                         html.Div(
-                            "Dimension breakdown uses the latest current window and the selected slice column from the monitor contract.",
+                            id="deepdive-context-container",
+                            children="Dimension breakdown uses the latest current window and the selected slice column from the monitor contract.",
                             className="text-muted",
                             style={"fontSize": "0.85rem"},
                         ),

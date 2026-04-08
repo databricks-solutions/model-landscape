@@ -68,6 +68,7 @@ Responsibilities:
 - show `Refresh Diagnostics` in `Monitor Settings`, interpreting recent `refresh_runs` telemetry into bottleneck categories and trend guidance
 - split `Monitor Settings` into `Contract`, `Settings`, and `Admin` tabs so the contract view, editable cadence/metric controls, and lifecycle/runtime actions are separated without changing the underlying route or data model
 - rank Overview severity and Drift top-feature callouts from historical max drift across persisted comparison windows instead of only the latest window
+- keep Overview cards/counts honest by treating monitors without persisted drift rows as `Computing/Pending` rather than healthy-zero snapshots
 - wrap the heavier analysis panes in loading indicators so page navigation does not look blank while warehouse queries are in flight
 - trigger the initial refresh workflow asynchronously during monitor activation
 - render monitor summaries and incidents from Lakebase when configured
@@ -260,7 +261,8 @@ Current limitation:
 1. In Lakebase mode, the app reads monitor summary and incident inbox data from Lakebase.
 2. In warehouse-only mode, or if Lakebase is unavailable, it reads those views from the warehouse-backed repository.
 3. Overview severity and the Drift top-feature ranking are derived from historical max drift across the stored comparison windows, while `quality_metrics` remains the latest model-wide compatibility row rebuilt from daily quality facts.
-4. The app renders the current state for operators with loading indicators around the slower warehouse-backed panes.
+4. Feature Deep Dive reads persisted daily-feature distributions first and only uses bounded source-window fallbacks; it no longer falls back to an unbounded raw-table scan.
+5. The app renders the current state for operators with loading indicators around the slower warehouse-backed panes.
 
 `incidents` is intentionally the current open-incident projection. Historical openings, escalations, and recoveries are preserved separately in `incident_history`, so a model can have severe historical drift with zero current open incidents if the latest comparison window has recovered.
 

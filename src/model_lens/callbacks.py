@@ -35,9 +35,9 @@ from model_lens.services.refresh_jobs import (
     validate_workspace_readiness,
     workspace_readiness_payload,
 )
+from model_lens.services.thresholds import get_thresholds
 from model_lens.ui import charts
 from model_lens.ui.components import (
-    get_thresholds,
     make_chart_card,
     make_empty_state,
     make_metric_card,
@@ -96,6 +96,22 @@ def _historical_drift_feature_ranking(
         .nlargest(top_n, metric)
         .reset_index(drop=True)
     )
+
+
+def _format_metric_value(value: float | None, *, decimals: int = 4) -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
+    return f"{float(value):.{decimals}f}"
+
+
+def _feature_distribution_source_message(source: str, *, approximate: bool) -> str:
+    if source == "persisted_histogram":
+        return "Distribution source: persisted daily feature profiles (approximate histogram reconstruction)."
+    if source == "persisted_samples":
+        return "Distribution source: persisted daily feature profiles."
+    if source == "bounded_window_read":
+        return "Distribution source: bounded source-window read."
+    return "Distribution source unavailable. Refresh more history or check bounded source-read support."
 
 
 def _configured_run_now_permission_hint(*, workflow_kind: str = "shared") -> str:
@@ -1547,7 +1563,7 @@ def register_callbacks(app) -> None:
                 mlflow_registered_model_name=(mlflow_registered_model_name or "").strip() or None,
             )
         except Exception as error:
-            return no_update, _status_alert(f"Scan failed: {error}", "danger"), html.Div()
+            return None, _status_alert(f"Scan failed: {error}", "danger"), html.Div()
         columns = list(discovery.columns)
         preview = pd.DataFrame(discovery.preview_rows)
         schema = pd.DataFrame(discovery.schema_rows)
@@ -2187,19 +2203,21 @@ def register_callbacks(app) -> None:
             return make_empty_state("No monitors onboarded yet. Go to Onboarding to add your first model.", icon="fas fa-plus-circle")
 
         psi_warning, psi_critical = get_thresholds("psi")
-        healthy = sum(1 for row in overview_data if row["max_psi"] <= psi_warning)
-        warning = sum(1 for row in overview_data if psi_warning < row["max_psi"] <= psi_critical)
-        critical = sum(1 for row in overview_data if row["max_psi"] > psi_critical)
+        computing = sum(1 for row in overview_data if row["computing"])
+        healthy = sum(1 for row in overview_data if not row["computing"] and row["max_psi"] < psi_warning)
+        warning = sum(1 for row in overview_data if not row["computing"] and psi_warning <= row["max_psi"] < psi_critical)
+        critical = sum(1 for row in overview_data if not row["computing"] and row["max_psi"] >= psi_critical)
         summary_row = dbc.Row(
             [
-                dbc.Col(make_metric_card("Models Monitored", str(len(overview_data)), "Active in production"), md=3),
-                dbc.Col(make_metric_card("Healthy", str(healthy), f"PSI < {psi_warning}", "success"), md=3),
-                dbc.Col(make_metric_card("Warning", str(warning), f"{psi_warning} < PSI < {psi_critical}", "warning"), md=3),
-                dbc.Col(make_metric_card("Critical", str(critical), f"PSI > {psi_critical}", "danger"), md=3),
+                dbc.Col(make_metric_card("Models Monitored", str(len(overview_data)), "Active in production"), md=6, lg=4, xl=2),
+                dbc.Col(make_metric_card("Healthy", str(healthy), f"PSI < {psi_warning}", "success"), md=6, lg=4, xl=2),
+                dbc.Col(make_metric_card("Warning", str(warning), f"{psi_warning} ≤ PSI < {psi_critical}", "warning"), md=6, lg=4, xl=2),
+                dbc.Col(make_metric_card("Critical", str(critical), f"PSI ≥ {psi_critical}", "danger"), md=6, lg=4, xl=2),
+                dbc.Col(make_metric_card("Computing/Pending", str(computing), "No drift history yet", "info"), md=6, lg=4, xl=2),
             ],
             className="mb-4 g-3",
         )
-        sorted_data = sorted(overview_data, key=lambda item: item["max_psi"], reverse=True)
+        sorted_data = sorted(overview_data, key=lambda item: (not item["computing"], item["max_psi"]), reverse=True)
         model_cards = [
             dbc.Col(
                 dcc.Link(
@@ -2228,19 +2246,27 @@ def register_callbacks(app) -> None:
         ]
         summary_chart = charts.build_multi_model_summary(
             [
-                {"model": row["model_name"], "max_psi": row["max_psi"], "avg_psi": row["avg_psi"], "drifting_features": row["drifting_features"]}
+                {
+                    "model": row["model_name"],
+                    "max_psi": row["max_psi"],
+                    "avg_psi": row["avg_psi"],
+                    "drifting_features": row["drifting_features"],
+                    "computing": row["computing"],
+                }
                 for row in sorted_data
-            ]
+            ],
+            metric="psi",
         )
         details = pd.DataFrame(
             [
                 {
                     "model": row["model_name"],
                     "versions": ", ".join(row.get("versions", [])),
-                    "max_psi": round(row["max_psi"], 4),
-                    "avg_psi": round(row["avg_psi"], 4),
-                    "avg_js": round(row["avg_js"], 4),
-                    "drifting_features": f"{row['drifting_features']} / {row['total_features']}",
+                    "status": "Computing/Pending" if row["computing"] else ("Critical" if row["max_psi"] >= psi_critical else "Warning" if row["max_psi"] >= psi_warning else "Healthy"),
+                    "max_psi": "—" if row["computing"] else round(row["max_psi"], 4),
+                    "avg_psi": "—" if row["computing"] else round(row["avg_psi"], 4),
+                    "avg_js": "—" if row["computing"] else round(row["avg_js"], 4),
+                    "drifting_features": "Computing/Pending" if row["computing"] else f"{row['drifting_features']} / {row['total_features']}",
                     "top_drifter": row["top_drifter"],
                     "max_null_rate": round(row["max_null_rate"], 2),
                 }
@@ -2348,18 +2374,20 @@ def register_callbacks(app) -> None:
         timeline_features = ranked_features["feature"].tolist() if "feature" in ranked_features.columns else []
         if not timeline_features and "feature" in drift.columns:
             timeline_features = drift["feature"].dropna().astype(str).drop_duplicates().tolist()[:8]
+        filtered_drift = drift[drift["feature"].isin(timeline_features)].copy() if timeline_features else drift
+        heatmap_title = f"{(granularity or 'daily').title()} Feature Drift Heatmap"
         return (
-            make_chart_card(charts.build_drift_heatmap(drift, metric=metric or "psi")),
+            make_chart_card(charts.build_drift_heatmap(filtered_drift, metric=metric or "psi", title=heatmap_title)),
             html.Div(notes) if notes else html.Div(),
             make_chart_card(
                 charts.build_drift_timeline(
-                    drift,
+                    filtered_drift,
                     timeline_features,
                     metric=metric or "psi",
                     thresholds=thresholds,
                 )
             ),
-            make_chart_card(charts.build_top_drifters_bar(drift, metric=metric or "psi", top_n=normalized_top_n)),
+            make_chart_card(charts.build_top_drifters_bar(filtered_drift, metric=metric or "psi", top_n=normalized_top_n)),
         )
 
     @app.callback(
@@ -2377,38 +2405,74 @@ def register_callbacks(app) -> None:
     def populate_feature_deep_dive(pathname, model_id, _, session_data, feature_value, dimension_value):
         if pathname != "/features":
             return no_update, no_update, no_update, no_update
-        backend = _make_backend(session_data)
-        feature_options = _option_list(backend.get_feature_options(model_id or ""))
-        dimension_options = _option_list(backend.get_dimension_options(model_id or ""), include_blank=True)
+        try:
+            backend = _make_backend(session_data)
+            feature_options = _option_list(backend.get_feature_options(model_id or ""))
+            dimension_options = _option_list(backend.get_dimension_options(model_id or ""), include_blank=True)
+        except Exception:
+            return [], None, [], ""
         feature_values = {option["value"] for option in feature_options}
         dimension_values = {option["value"] for option in dimension_options}
-        selected_feature = feature_value if feature_value in feature_values else (feature_options[0]["value"] if feature_options else None)
+        selected_feature = feature_value if feature_value in feature_values else None
+        if selected_feature is None and model_id:
+            try:
+                drift = backend.get_drift_results(model_id)
+                ranked_features = _historical_drift_feature_ranking(drift, metric="psi", top_n=max(len(feature_options), 1))
+                ranked_values = [
+                    str(value)
+                    for value in ranked_features.get("feature", pd.Series(dtype=str)).dropna().tolist()
+                    if str(value) in feature_values
+                ]
+                if ranked_values:
+                    selected_feature = ranked_values[0]
+            except Exception:
+                selected_feature = None
+        if selected_feature is None:
+            selected_feature = feature_options[0]["value"] if feature_options else None
         selected_dimension = dimension_value if dimension_value in dimension_values else ""
         return feature_options, selected_feature, dimension_options, selected_dimension
 
     @app.callback(
         Output("deepdive-distribution-container", "children"),
         Output("deepdive-dimension-container", "children"),
+        Output("deepdive-context-container", "children"),
         Input("url", "pathname"),
         Input("global-model-select", "value"),
         Input("deepdive-feature-select", "value"),
         Input("deepdive-dimension-select", "value"),
+        Input("reload-token", "data"),
         Input("session-config-store", "data"),
     )
-    def render_feature_deep_dive(pathname, model_id, feature, dimension, session_data):
+    def render_feature_deep_dive(pathname, model_id, feature, dimension, _, session_data):
         if pathname != "/features":
-            return no_update, no_update
+            return no_update, no_update, no_update
         if not model_id or not feature:
             empty = make_empty_state("Select a model and feature to inspect.", icon="fas fa-search")
-            return empty, html.Div()
-        backend = _make_backend(session_data)
-        baseline, current = backend.get_feature_distribution(model_id, feature)
-        distribution = make_chart_card(charts.build_feature_distribution(baseline, current, feature))
-        dimension_chart = html.Div()
-        if dimension:
-            breakdown = backend.get_dimension_breakdown(model_id, feature, dimension)
-            dimension_chart = make_chart_card(charts.build_dimension_breakdown(breakdown, feature, dimension))
-        return distribution, dimension_chart
+            return empty, html.Div(), "Select a model and feature to inspect."
+        try:
+            backend = _make_backend(session_data)
+            details = backend.get_feature_distribution_details(model_id, feature)
+            baseline = details["baseline"]
+            current = details["current"]
+            distribution = make_chart_card(charts.build_feature_distribution(baseline, current, feature))
+            dimension_chart = html.Div()
+            if dimension:
+                breakdown = backend.get_dimension_breakdown(model_id, feature, dimension)
+                dimension_chart = make_chart_card(charts.build_dimension_breakdown(breakdown, feature, dimension))
+            context_children = html.Div(
+                [
+                    html.Div(str(details.get("window_label") or "Latest comparison window unavailable."), className="mb-1"),
+                    html.Div(
+                        _feature_distribution_source_message(
+                            str(details.get("distribution_source") or "unavailable"),
+                            approximate=bool(details.get("approximate")),
+                        )
+                    ),
+                ]
+            )
+            return distribution, dimension_chart, context_children
+        except Exception as error:
+            return make_empty_state(f"Could not load feature detail: {error}", icon="fas fa-triangle-exclamation"), html.Div(), "Feature detail is unavailable right now."
 
     @app.callback(
         Output("quality-kpi-cards", "children"),
@@ -2445,20 +2509,22 @@ def register_callbacks(app) -> None:
             ),
             dbc.Col(make_metric_card("From", quality["min_date"] or "—", "Earliest data"), md=3),
             dbc.Col(make_metric_card("To", quality["max_date"] or "—", "Latest data"), md=3),
-            dbc.Col(make_metric_card("Prediction Mean", f"{quality['prediction_mean']:.4f}", "Latest snapshot"), md=3),
+            dbc.Col(make_metric_card("Prediction Mean", _format_metric_value(quality["prediction_mean"]), "Latest snapshot"), md=3),
+            dbc.Col(make_metric_card("Prediction Std", _format_metric_value(quality["prediction_std"]), "Latest snapshot"), md=3),
         ]
-        volume_children = html.Div(
-            [
-                _status_alert(history_note, "info") if history_note else None,
-                dbc.Row(
-                    [
-                        dbc.Col(make_chart_card(charts.build_volume_timeline(quality["daily_volume"])), md=6),
-                        dbc.Col(make_chart_card(charts.build_quality_window_timeline(quality_history)), md=6),
-                    ],
-                    className="g-3",
-                ),
-            ]
+        volume_children_items: list[object] = []
+        if history_note:
+            volume_children_items.append(_status_alert(history_note, "info"))
+        volume_children_items.append(
+            dbc.Row(
+                [
+                    dbc.Col(make_chart_card(charts.build_volume_timeline(quality["daily_volume"])), md=6),
+                    dbc.Col(make_chart_card(charts.build_quality_window_timeline(quality_history)), md=6),
+                ],
+                className="g-3",
+            )
         )
+        volume_children = html.Div(volume_children_items)
         null_children = html.Div(
             [
                 make_chart_card(charts.build_null_rate_chart(quality["null_rates"])),
@@ -2621,12 +2687,16 @@ def register_callbacks(app) -> None:
         note = note_source[[column for column in ("window_start", "window_end") if column in note_source.columns]].drop_duplicates().astype(str)
         note_parts: list[object] = []
         if not note.empty:
-            note_parts.append(
-                html.Small(
-                    f"Latest comparison window: {note.iloc[0]['window_start']} to {note.iloc[0]['window_end']}",
-                    className="text-muted d-block",
-                )
-            )
+            if {"window_start", "window_end"}.issubset(note.columns):
+                note_text = f"Latest comparison window: {note.iloc[0]['window_start']} to {note.iloc[0]['window_end']}"
+            elif "window_end" in note.columns:
+                note_text = f"Latest comparison window end: {note.iloc[0]['window_end']}"
+            elif "window_start" in note.columns:
+                note_text = f"Latest comparison window start: {note.iloc[0]['window_start']}"
+            else:
+                note_text = ""
+            if note_text:
+                note_parts.append(html.Small(note_text, className="text-muted d-block"))
         history_message = _comparison_history_message(len(performance["timeline"]), "daily")
         if history_message:
             note_parts.append(html.Small(history_message, className="text-muted d-block"))

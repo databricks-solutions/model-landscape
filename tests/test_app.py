@@ -128,6 +128,7 @@ def test_app_layout_exposes_slimmed_onboarding_flow() -> None:
         "model-id-value-input",
         "model-version-value-input",
         "labels-order-col-input",
+        "deepdive-context-container",
         "reference-page-status",
         "incidents-page-body",
         "incidents-monitor-filter",
@@ -664,6 +665,58 @@ def test_render_overview_shows_empty_state_when_no_monitors_exist(monkeypatch) -
     assert "No monitors onboarded yet. Go to Onboarding to add your first model." in str(result)
 
 
+def test_render_overview_surfaces_computing_pending_bucket(monkeypatch) -> None:
+    class _FakeBackend:
+        def get_overview_rows(self, metric="psi"):
+            assert metric == "psi"
+            return [
+                {
+                    "model_id": "fraud_model_demo",
+                    "model_name": "Fraud Model Demo",
+                    "description": "main.demo.fraud",
+                    "versions": [],
+                    "max_psi": 0.12,
+                    "avg_psi": 0.09,
+                    "avg_js": 0.03,
+                    "drifting_features": 1,
+                    "total_features": 2,
+                    "top_drifter": "amount",
+                    "max_null_rate": 0.5,
+                    "has_labels": True,
+                    "computing": False,
+                    "freshness_status": "fresh",
+                    "last_run_status": "completed",
+                },
+                {
+                    "model_id": "spoof_model_demo",
+                    "model_name": "Spoof Model Demo",
+                    "description": "main.demo.spoof",
+                    "versions": [],
+                    "max_psi": 0.0,
+                    "avg_psi": 0.0,
+                    "avg_js": 0.0,
+                    "drifting_features": 0,
+                    "total_features": 3,
+                    "top_drifter": "Computing/Pending",
+                    "max_null_rate": 0.0,
+                    "has_labels": False,
+                    "computing": True,
+                    "freshness_status": "pending_bootstrap",
+                    "last_run_status": "",
+                },
+            ]
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_output(app, "overview-page-body")
+
+    result = fn("/", None, {})
+
+    rendered = str(result)
+    assert "Computing/Pending" in rendered
+    assert "No drift history yet" in rendered
+
+
 def test_populate_model_selector_returns_empty_when_no_monitors_exist(monkeypatch) -> None:
     class _FakeBackend:
         def list_models(self):
@@ -760,10 +813,13 @@ def test_render_drift_callback_respects_top_n_selection(monkeypatch) -> None:
     result_top_5 = fn("/drift", "fraud_model_demo", "psi", "daily", 5, 0, {})
     result_top_6 = fn("/drift", "fraud_model_demo", "psi", "daily", 6, 0, {})
 
+    heatmap_5 = result_top_5[0].children.children.figure
     top_5_figure = result_top_5[3].children.children.figure
     top_6_figure = result_top_6[3].children.children.figure
 
     assert "highest historical PSI" in str(result_top_5[1])
+    assert heatmap_5.layout.title.text == "Daily Feature Drift Heatmap"
+    assert len(heatmap_5.data[0].y) == 5
     assert top_5_figure.layout.title.text == "Top 5 Drifting Features (Historical Max)"
     assert len(top_5_figure.data[0].y) == 5
     assert "device_score" in top_5_figure.data[0].y
@@ -813,6 +869,47 @@ def test_render_performance_callback_surfaces_zero_delta_state(monkeypatch) -> N
     assert "no significant degradation" in str(result[0]).lower()
     assert "Latest Bin Metrics" in str(result[3])
     assert "Only one comparison window is available" in str(result[6])
+
+
+def test_render_performance_callback_handles_partial_window_note_and_missing_metric_column(monkeypatch) -> None:
+    latest_bins = pd.DataFrame(
+        [
+            {
+                "feature": "amount",
+                "bin_label": "[0, 100)",
+                "baseline_metric": 0.84,
+                "current_metric": 0.84,
+                "delta": 0.0,
+                "current_volume_pct": 55.0,
+                "degradation_contribution": 0.0,
+                "window_end": "2026-01-21",
+            }
+        ]
+    )
+
+    class _FakeBackend:
+        def get_monitor_config(self, model_id):
+            return SimpleNamespace(contract=SimpleNamespace(label_col="label"))
+
+        def get_performance_summary(self, model_id, metric_name="precision"):
+            return {
+                "timeline": [{"period": "2026-01-21", "f1": 0.84}],
+                "contributors": pd.DataFrame([{"feature": "amount", "weighted_delta": 0.0}]),
+                "latest_bins": latest_bins,
+                "all_bins": latest_bins,
+                "has_significant_degradation": False,
+                "worst_weighted_delta": 0.0,
+            }
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    callback = app.callback_map[RENDER_PERFORMANCE_CALLBACK]["callback"]
+    fn = getattr(callback, "__wrapped__", callback)
+
+    result = fn("/performance", "fraud_model_demo", "precision", 0, {}, None)
+
+    assert "Latest comparison window end: 2026-01-21" in str(result[6])
+    assert "No PRECISION values are available yet" in str(result[2])
 
 
 def test_render_quality_callback_surfaces_history_and_latest_snapshot(monkeypatch) -> None:
@@ -868,6 +965,126 @@ def test_render_quality_callback_surfaces_history_and_latest_snapshot(monkeypatc
     assert "Rows Per Comparison Window" in str(result[1])
     assert "Null Rate Trends" in str(result[2])
     assert "Prediction Mean Over Time" in str(result[3])
+
+
+def test_render_quality_callback_uses_na_for_missing_prediction_mean_and_shows_std(monkeypatch) -> None:
+    class _FakeBackend:
+        def get_quality_stats(self, model_id):
+            return {
+                "total_rows": 840,
+                "min_date": "2026-01-01",
+                "max_date": "2026-01-21",
+                "prediction_mean": None,
+                "prediction_std": 0.13,
+                "daily_volume": {"2026-01-21": 40},
+                "null_rates": {"amount": 0.0, "velocity_7d": 1.2},
+            }
+
+        def get_quality_history(self, model_id):
+            return pd.DataFrame([{"period": "2026-01-21", "row_count": 120, "prediction_mean": None, "prediction_std": 0.13}])
+
+        def get_null_rate_history(self, model_id):
+            return pd.DataFrame()
+
+        def get_prediction_distribution(self, model_id):
+            return pd.Series(dtype=float)
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    callback = app.callback_map[RENDER_QUALITY_CALLBACK]["callback"]
+    fn = getattr(callback, "__wrapped__", callback)
+
+    result = fn("/quality", "fraud_model_demo", 0, {})
+
+    rendered = str(result[0])
+    assert "Prediction Mean" in rendered
+    assert "N/A" in rendered
+    assert "Prediction Std" in rendered
+
+
+def test_scan_source_table_failure_clears_prior_scan_data(monkeypatch) -> None:
+    class _FakeBackend:
+        def discover_monitor(self, **kwargs):
+            raise RuntimeError("warehouse offline")
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_input_and_output(app, "scan-source-btn", "scan-data")
+
+    result = fn(1, "main.demo.inference", "", "", "", {})
+
+    assert result[0] is None
+    assert "Scan failed: warehouse offline" in str(result[1])
+
+
+def test_populate_feature_deep_dive_prefers_most_drifted_feature(monkeypatch) -> None:
+    class _FakeBackend:
+        def get_feature_options(self, model_id):
+            return ["amount", "device_score", "velocity_7d"]
+
+        def get_dimension_options(self, model_id):
+            return ["region"]
+
+        def get_drift_results(self, model_id, granularity="daily"):
+            return pd.DataFrame(
+                [
+                    {"feature": "amount", "period": "2026-01-21", "psi": 0.4},
+                    {"feature": "device_score", "period": "2026-01-21", "psi": 2.1},
+                    {"feature": "velocity_7d", "period": "2026-01-21", "psi": 0.9},
+                ]
+            )
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_output(app, "deepdive-feature-select")
+
+    options, value, dimension_options, selected_dimension = fn("/features", "fraud_model_demo", 0, {}, None, "")
+
+    assert [option["value"] for option in options] == ["amount", "device_score", "velocity_7d"]
+    assert value == "device_score"
+    assert [option["value"] for option in dimension_options] == ["", "region"]
+    assert selected_dimension == ""
+
+
+def test_render_feature_deep_dive_reports_distribution_context(monkeypatch) -> None:
+    class _FakeBackend:
+        def get_feature_distribution_details(self, model_id, feature):
+            return {
+                "baseline": pd.Series([1.0, 2.0], dtype=float),
+                "current": pd.Series([3.0, 4.0], dtype=float),
+                "distribution_source": "persisted_histogram",
+                "approximate": True,
+                "window_label": "Baseline: 2026-01-01 to 2026-01-07 | Current: 2026-01-08 to 2026-01-14",
+            }
+
+        def get_dimension_breakdown(self, model_id, feature, dimension):
+            return pd.DataFrame([{"dimension_value": "(missing)", "feature_mean": 1.5, "feature_std": 0.1, "null_pct": 0.0}])
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_input_and_output(app, "deepdive-feature-select", "deepdive-distribution-container")
+
+    distribution, dimension, context = fn("/features", "fraud_model_demo", "amount", "region", 0, {})
+
+    assert "Distribution: amount" in str(distribution)
+    assert "amount by region" in str(dimension).lower()
+    assert "approximate histogram reconstruction" in str(context)
+    assert "Baseline: 2026-01-01 to 2026-01-07" in str(context)
+
+
+def test_render_feature_deep_dive_handles_backend_errors(monkeypatch) -> None:
+    class _FakeBackend:
+        def get_feature_distribution_details(self, model_id, feature):
+            raise RuntimeError("feature read failed")
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_input_and_output(app, "deepdive-feature-select", "deepdive-distribution-container")
+
+    distribution, dimension, context = fn("/features", "fraud_model_demo", "amount", "", 0, {})
+
+    assert "Could not load feature detail: feature read failed" in str(distribution)
+    assert "Feature detail is unavailable right now." in str(context)
 
 
 def test_analysis_pages_include_loading_wrappers() -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 from dataclasses import dataclass
 
@@ -12,6 +13,7 @@ from model_lens.services.monitor_discovery import MonitorDiscoveryService
 from model_lens.services.onboarding import baseline_label
 from model_lens.services.refresh_diagnostics import build_refresh_diagnostics
 from model_lens.services.refresh_engine import split_baseline_current
+from model_lens.services.thresholds import get_thresholds
 
 
 def _safe_json_dict(value: object) -> dict:
@@ -30,7 +32,12 @@ def _safe_json_list(value: object) -> list[float]:
     if value in (None, ""):
         return []
     if isinstance(value, list):
-        return [float(item) for item in value]
+        numeric: list[float] = []
+        for item in value:
+            series = pd.to_numeric(pd.Series([item]), errors="coerce").dropna()
+            if not series.empty:
+                numeric.append(float(series.iloc[0]))
+        return numeric
     try:
         parsed = json.loads(str(value))
     except (TypeError, json.JSONDecodeError):
@@ -88,6 +95,13 @@ def _safe_float(value: object) -> float:
     return float(numeric)
 
 
+def _safe_optional_float(value: object) -> float | None:
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        return None
+    return float(numeric)
+
+
 def _safe_int(value: object) -> int:
     numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
     if pd.isna(numeric):
@@ -103,7 +117,14 @@ def _safe_series_min(series: pd.Series) -> float:
 
 
 def _null_rate_dict(value: object) -> dict[str, float]:
-    return {key: float(parsed) for key, parsed in _safe_json_dict(value).items()}
+    parsed = _safe_json_dict(value)
+    rates: dict[str, float] = {}
+    for key, raw_value in parsed.items():
+        numeric = pd.to_numeric(pd.Series([raw_value]), errors="coerce").iloc[0]
+        if pd.isna(numeric):
+            continue
+        rates[str(key)] = float(numeric)
+    return rates
 
 
 def _inclusive_end_bound(value: str) -> pd.Timestamp:
@@ -127,12 +148,14 @@ def _quality_history_from_daily_profiles(frame: pd.DataFrame) -> pd.DataFrame:
     working["baseline_end"] = ""
     working["window_id"] = working["period"].apply(lambda value: f"daily_profile|{value}")
     working["row_count"] = pd.to_numeric(working["row_count"], errors="coerce").fillna(0).astype(int)
-    working["prediction_mean"] = pd.to_numeric(working["prediction_mean"], errors="coerce").fillna(0.0)
-    working["prediction_std"] = pd.to_numeric(working["prediction_std"], errors="coerce").fillna(0.0)
+    working["prediction_mean"] = pd.to_numeric(working["prediction_mean"], errors="coerce")
+    working["prediction_std"] = pd.to_numeric(working["prediction_std"], errors="coerce")
     working["null_rates_dict"] = working["null_rates"].apply(_null_rate_dict)
     working["max_null_rate"] = working["null_rates_dict"].apply(
         lambda values: max(values.values()) if values else 0.0
     )
+    working["computed_at_ts"] = pd.to_datetime(working.get("computed_at"), errors="coerce")
+    working = working.sort_values(["period", "computed_at_ts", "profile_date_ts"]).drop_duplicates("period", keep="last")
     return working.sort_values("profile_date_ts").reset_index(drop=True)
 
 
@@ -379,8 +402,8 @@ class DashboardBackend:
             "total_rows": _safe_int(row.get("total_rows")),
             "min_date": str(row.get("min_date") or ""),
             "max_date": str(row.get("max_date") or ""),
-            "prediction_mean": _safe_float(row.get("prediction_mean")),
-            "prediction_std": _safe_float(row.get("prediction_std")),
+            "prediction_mean": _safe_optional_float(row.get("prediction_mean")),
+            "prediction_std": _safe_optional_float(row.get("prediction_std")),
             "daily_volume": _safe_json_dict(row.get("daily_volume")),
             "null_rates": _null_rate_dict(row.get("null_rates")),
             "computed_at": str(row.get("computed_at") or ""),
@@ -412,14 +435,16 @@ class DashboardBackend:
             return _quality_history_from_daily_profiles(daily_frame)
         working = frame.copy()
         working["window_end_ts"] = pd.to_datetime(working["window_end"], errors="coerce")
+        working["computed_at_ts"] = pd.to_datetime(working["computed_at"], errors="coerce")
         working["period"] = working["window_end_ts"].dt.date.astype(str)
         working["row_count"] = pd.to_numeric(working["row_count"], errors="coerce").fillna(0).astype(int)
-        working["prediction_mean"] = pd.to_numeric(working["prediction_mean"], errors="coerce").fillna(0.0)
-        working["prediction_std"] = pd.to_numeric(working["prediction_std"], errors="coerce").fillna(0.0)
+        working["prediction_mean"] = pd.to_numeric(working["prediction_mean"], errors="coerce")
+        working["prediction_std"] = pd.to_numeric(working["prediction_std"], errors="coerce")
         working["null_rates_dict"] = working["null_rates"].apply(_null_rate_dict)
         working["max_null_rate"] = working["null_rates_dict"].apply(
             lambda values: max(values.values()) if values else 0.0
         )
+        working = working.sort_values(["period", "computed_at_ts", "window_end_ts"]).drop_duplicates("period", keep="last")
         return working.sort_values("window_end_ts").reset_index(drop=True)
 
     def get_null_rate_history(self, model_id: str, top_n: int = 5) -> pd.DataFrame:
@@ -512,6 +537,7 @@ class DashboardBackend:
         if frame.empty:
             return {}
         working = frame.copy()
+        warning_threshold, _ = get_thresholds(metric)
         pivoted = (
             working.pivot_table(
                 index=["model_key", "feature_name"],
@@ -541,7 +567,7 @@ class DashboardBackend:
                 "max_metric": _safe_float(metric_series.max()) if not metric_series.empty else 0.0,
                 "avg_metric": _safe_float(metric_series.mean()) if not metric_series.empty else 0.0,
                 "avg_js": _safe_float(js_series.mean()) if not js_series.empty else 0.0,
-                "drifting_features": int((metric_series > 0.1).sum()) if not metric_series.empty else 0,
+                "drifting_features": int((metric_series >= warning_threshold).sum()) if not metric_series.empty else 0,
                 "total_features": int(len(group.index)),
                 "top_drifter": top_drifter,
             }
@@ -556,6 +582,7 @@ class DashboardBackend:
         for model in models:
             drift = drift_map.get(model["id"], {})
             quality = quality_map.get(model["id"], {})
+            computing = not bool(drift)
             rows.append(
                 {
                     "model_id": model["id"],
@@ -566,11 +593,11 @@ class DashboardBackend:
                     "avg_psi": _safe_float(drift.get("avg_metric")),
                     "avg_js": _safe_float(drift.get("avg_js")),
                     "drifting_features": int(drift.get("drifting_features") or 0),
-                    "total_features": int(drift.get("total_features") or 0),
-                    "top_drifter": str(drift.get("top_drifter") or "N/A"),
+                    "total_features": int(model.get("feature_count") or 0),
+                    "top_drifter": str(drift.get("top_drifter") or ("Computing/Pending" if computing else "N/A")),
                     "max_null_rate": _safe_float(quality.get("max_null_rate")),
                     "has_labels": model["has_labels"],
-                    "computing": not bool(drift),
+                    "computing": computing,
                     "freshness_status": model["freshness_status"],
                     "last_run_status": model["last_run_status"],
                 }
@@ -604,26 +631,14 @@ class DashboardBackend:
         latest = drift.sort_values("window_end").iloc[-1]
         start_date = str(latest.get("baseline_start") or "")
         end_date = str(latest.get("window_end") or "")
-        try:
-            frame = self.repository.load_monitor_frame(
-                config,
-                start_date=start_date or None,
-                end_date=end_date or None,
-                feature_columns=feature_columns or config.contract.feature_columns,
-                sample_rows_per_day=settings.feature_detail_sample_rows_per_day,
-                max_total_rows=settings.feature_detail_max_rows,
-            )
-        except TypeError:
-            try:
-                frame = self.repository.load_monitor_frame(
-                    config,
-                    start_date=start_date or None,
-                    end_date=end_date or None,
-                    feature_columns=feature_columns or config.contract.feature_columns,
-                    max_total_rows=settings.feature_detail_max_rows,
-                )
-            except TypeError:
-                frame = self.repository.load_monitor_frame(config)
+        frame = self._load_monitor_frame_bounded(
+            config,
+            start_date=start_date or None,
+            end_date=end_date or None,
+            feature_columns=feature_columns or config.contract.feature_columns,
+        )
+        if frame.empty or config.contract.timestamp_col not in frame.columns:
+            return config, pd.DataFrame(), pd.DataFrame()
         baseline, current = split_baseline_current(frame, config.contract.timestamp_col, config.baseline)
         return config, baseline, current
 
@@ -642,33 +657,48 @@ class DashboardBackend:
             return fallback_config, current
         start_date = bounds["window_start"] or None
         end_date = bounds["window_end"] or None
-        try:
-            frame = self.repository.load_monitor_frame(
-                config,
-                start_date=start_date,
-                end_date=end_date,
-                feature_columns=feature_columns or config.contract.feature_columns,
-                sample_rows_per_day=settings.feature_detail_sample_rows_per_day,
-                max_total_rows=settings.feature_detail_max_rows,
-            )
-        except TypeError:
-            try:
-                frame = self.repository.load_monitor_frame(
-                    config,
-                    start_date=start_date,
-                    end_date=end_date,
-                    feature_columns=feature_columns or config.contract.feature_columns,
-                    max_total_rows=settings.feature_detail_max_rows,
-                )
-            except TypeError:
-                frame = self.repository.load_monitor_frame(config)
-                if config.contract.timestamp_col in frame.columns:
-                    timestamps = pd.to_datetime(frame[config.contract.timestamp_col], errors="coerce")
-                    if start_date:
-                        frame = frame.loc[timestamps >= pd.Timestamp(start_date)]
-                    if end_date:
-                        frame = frame.loc[timestamps < _inclusive_end_bound(end_date)]
+        frame = self._load_monitor_frame_bounded(
+            config,
+            start_date=start_date,
+            end_date=end_date,
+            feature_columns=feature_columns or config.contract.feature_columns,
+        )
         return config, frame
+
+    def _load_monitor_frame_bounded(
+        self,
+        config: MonitorConfig,
+        *,
+        start_date: str | None,
+        end_date: str | None,
+        feature_columns: tuple[str, ...] | None,
+    ) -> pd.DataFrame:
+        loader = getattr(self.repository, "load_monitor_frame", None)
+        if loader is None:
+            return pd.DataFrame()
+        signature = inspect.signature(loader)
+        parameter_names = set(signature.parameters)
+        accepts_var_kwargs = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in signature.parameters.values()
+        )
+
+        def _supported(name: str) -> bool:
+            return accepts_var_kwargs or name in parameter_names
+
+        kwargs = {
+            "start_date": start_date,
+            "end_date": end_date,
+            "feature_columns": feature_columns,
+        }
+        if _supported("sample_rows_per_day"):
+            kwargs["sample_rows_per_day"] = settings.feature_detail_sample_rows_per_day
+        if _supported("max_total_rows"):
+            kwargs["max_total_rows"] = settings.feature_detail_max_rows
+        accepted_kwargs = {key: value for key, value in kwargs.items() if _supported(key)}
+        if not accepted_kwargs:
+            return pd.DataFrame()
+        return loader(config, **accepted_kwargs)
 
     def _latest_window_bounds(self, model_id: str) -> dict[str, str] | None:
         comparison_windows = getattr(self.repository.table_names, "comparison_windows", "")
@@ -694,13 +724,13 @@ class DashboardBackend:
             "window_end": str(row.get("window_end") or ""),
         }
 
-    def _feature_samples_from_daily_profiles(self, model_id: str, feature: str) -> tuple[pd.Series, pd.Series]:
+    def _feature_samples_from_daily_profiles(self, model_id: str, feature: str) -> tuple[pd.Series, pd.Series, bool]:
         daily_feature_profiles = getattr(self.repository.table_names, "daily_feature_profiles", "")
         if not daily_feature_profiles:
-            return pd.Series(dtype=float), pd.Series(dtype=float)
+            return pd.Series(dtype=float), pd.Series(dtype=float), False
         bounds = self._latest_window_bounds(model_id)
         if not bounds:
-            return pd.Series(dtype=float), pd.Series(dtype=float)
+            return pd.Series(dtype=float), pd.Series(dtype=float), False
         min_profile_date = min(
             value
             for value in (
@@ -733,10 +763,11 @@ class DashboardBackend:
             (model_id, feature, min_profile_date, max_profile_date),
         )
         if frame.empty:
-            return pd.Series(dtype=float), pd.Series(dtype=float)
+            return pd.Series(dtype=float), pd.Series(dtype=float), False
 
         baseline_values: list[float] = []
         current_values: list[float] = []
+        used_histogram_approximation = False
         baseline_start = bounds["baseline_start"]
         baseline_end = bounds["baseline_end"]
         window_start = bounds["window_start"]
@@ -750,25 +781,52 @@ class DashboardBackend:
                     _safe_json_list(payload.get("edges")),
                     _safe_json_list(payload.get("counts")),
                 )
+                used_histogram_approximation = used_histogram_approximation or bool(sample_values)
             if not sample_values:
                 continue
             if baseline_start <= profile_date <= baseline_end:
                 baseline_values.extend(sample_values)
             elif window_start <= profile_date <= window_end:
                 current_values.extend(sample_values)
-        return pd.Series(baseline_values, dtype=float), pd.Series(current_values, dtype=float)
+        return pd.Series(baseline_values, dtype=float), pd.Series(current_values, dtype=float), used_histogram_approximation
 
     def get_feature_distribution(self, model_id: str, feature: str) -> tuple[pd.Series, pd.Series]:
-        baseline_samples, current_samples = self._feature_samples_from_daily_profiles(model_id, feature)
+        details = self.get_feature_distribution_details(model_id, feature)
+        return details["baseline"], details["current"]
+
+    def get_feature_distribution_details(self, model_id: str, feature: str) -> dict[str, object]:
+        baseline_samples, current_samples, used_histogram_approximation = self._feature_samples_from_daily_profiles(model_id, feature)
+        bounds = self._latest_window_bounds(model_id)
+        window_label = "Latest comparison window unavailable."
+        if bounds:
+            window_label = (
+                f"Baseline: {bounds['baseline_start'] or '—'} to {bounds['baseline_end'] or '—'} | "
+                f"Current: {bounds['window_start'] or '—'} to {bounds['window_end'] or '—'}"
+            )
         if not baseline_samples.empty and not current_samples.empty:
-            return baseline_samples, current_samples
+            return {
+                "baseline": baseline_samples,
+                "current": current_samples,
+                "distribution_source": "persisted_histogram" if used_histogram_approximation else "persisted_samples",
+                "approximate": bool(used_histogram_approximation),
+                "window_label": window_label,
+            }
         config, baseline, current = self._load_baseline_current(model_id, feature_columns=(feature,))
         if not config or feature not in baseline.columns or feature not in current.columns:
-            return pd.Series(dtype=float), pd.Series(dtype=float)
-        return (
-            pd.to_numeric(baseline[feature], errors="coerce").dropna(),
-            pd.to_numeric(current[feature], errors="coerce").dropna(),
-        )
+            return {
+                "baseline": pd.Series(dtype=float),
+                "current": pd.Series(dtype=float),
+                "distribution_source": "unavailable",
+                "approximate": False,
+                "window_label": window_label,
+            }
+        return {
+            "baseline": pd.to_numeric(baseline[feature], errors="coerce").dropna(),
+            "current": pd.to_numeric(current[feature], errors="coerce").dropna(),
+            "distribution_source": "bounded_window_read",
+            "approximate": False,
+            "window_label": window_label,
+        }
 
     def get_dimension_breakdown(self, model_id: str, feature: str, dimension: str) -> pd.DataFrame:
         config, current = self._load_current_window_frame(model_id, feature_columns=(feature, dimension))
@@ -790,6 +848,9 @@ class DashboardBackend:
             .head(20)
         )
         breakdown["feature_std"] = breakdown["feature_std"].fillna(0.0)
+        breakdown["dimension_value"] = breakdown["dimension_value"].apply(
+            lambda value: "(missing)" if pd.isna(value) or not str(value).strip() else str(value)
+        )
         return breakdown
 
     def get_prediction_distribution(self, model_id: str) -> pd.Series:
