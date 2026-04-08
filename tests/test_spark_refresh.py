@@ -646,6 +646,71 @@ def test_spark_refresh_repository_replace_all_refresh_results_uses_spark_table_w
     assert repository.replaced_bin_specs == [("payments_risk_v1", {"amount": (0.0, 10.0, 20.0)})]
 
 
+def test_spark_refresh_repository_append_refresh_result_persists_window_id_for_drift_and_performance_metrics() -> None:
+    spark = _spark()
+    table_names = TableNames(catalog="main", schema="default")
+    repository = RecordingSparkAppendRepository(spark=spark, table_names=table_names)
+
+    repository.append_refresh_result(
+        "payments_risk_v1",
+        RefreshResult(
+            drift_rows=[
+                {
+                    "model_key": "payments_risk_v1",
+                    "window_id": "window-1",
+                    "feature_name": "amount",
+                    "metric_name": "psi",
+                    "metric_value": 0.12,
+                    "window_start": "2026-01-20",
+                    "window_end": "2026-01-20",
+                    "baseline_start": "2026-01-13",
+                    "baseline_end": "2026-01-19",
+                    "ref_mean": 10.0,
+                    "cur_mean": 11.0,
+                    "ref_std": 1.0,
+                    "cur_std": 1.1,
+                    "ref_null_pct": 0.0,
+                    "cur_null_pct": 0.0,
+                    "ref_count": 100,
+                    "cur_count": 100,
+                    "computed_at": "2026-01-20T00:00:00+00:00",
+                }
+            ],
+            quality_rows=[],
+            performance_rows=[
+                {
+                    "model_key": "payments_risk_v1",
+                    "window_id": "window-1",
+                    "feature_name": "amount",
+                    "bin_label": "[0, 100)",
+                    "baseline_metric": 0.7,
+                    "current_metric": 0.8,
+                    "delta": 0.1,
+                    "volume_pct": 60.0,
+                    "contribution": 0.06,
+                    "metric_name": "f1",
+                    "window_start": "2026-01-20",
+                    "window_end": "2026-01-20",
+                    "computed_at": "2026-01-20T00:00:00+00:00",
+                }
+            ],
+            incident_rows=[],
+            incident_history_rows=[],
+            daily_quality_profile_rows=[],
+            daily_feature_profile_rows=[],
+            daily_performance_profile_rows=[],
+            performance_bin_specs={"amount": (0.0, 1.0, 2.0)},
+        ),
+        source_run_id="run-3",
+    )
+
+    drift_rows = next(rows for table_name, rows in repository.appended if table_name == table_names.drift_metrics)
+    performance_rows = next(rows for table_name, rows in repository.appended if table_name == table_names.performance_metrics)
+
+    assert drift_rows[0]["window_id"] == "window-1"
+    assert performance_rows[0]["window_id"] == "window-1"
+
+
 def test_spark_refresh_repository_append_refresh_result_clears_recovered_incidents() -> None:
     spark = _spark()
     table_names = TableNames(catalog="main", schema="default")

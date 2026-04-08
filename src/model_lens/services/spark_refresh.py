@@ -114,6 +114,7 @@ QUALITY_METRIC_SCHEMA = StructType([
 
 DRIFT_METRIC_SCHEMA = StructType([
     StructField("model_key", StringType(), False),
+    StructField("window_id", StringType(), False),
     StructField("feature_name", StringType(), False),
     StructField("metric_name", StringType(), False),
     StructField("metric_value", DoubleType(), False),
@@ -171,6 +172,7 @@ DAILY_FEATURE_WRITE_SCHEMA = StructType([
 
 PERFORMANCE_METRIC_SCHEMA = StructType([
     StructField("model_key", StringType(), False),
+    StructField("window_id", StringType(), False),
     StructField("feature_name", StringType(), False),
     StructField("bin_label", StringType(), False),
     StructField("baseline_metric", DoubleType(), False),
