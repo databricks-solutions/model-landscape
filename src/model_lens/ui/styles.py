@@ -117,6 +117,13 @@ INDEX_STRING = """<!DOCTYPE html>
         transform: translateY(-1px);
     }
     .model-lens-sidebar-footer { margin-top: 12px; }
+    .model-lens-sidebar-description {
+        overflow-wrap: anywhere;
+        word-break: break-word;
+        white-space: normal;
+        max-width: 100%;
+        line-height: 1.35;
+    }
     .model-lens-content {
         margin-left: 300px;
         padding: 20px;

@@ -72,6 +72,14 @@ def _status_alert(message: str, color: str = "info") -> dbc.Alert:
     return dbc.Alert(message, color=color, className="py-2 mb-3")
 
 
+def _normalize_top_n(value: object, *, default: int = 10, minimum: int = 1, maximum: int = 50) -> int:
+    try:
+        numeric = int(value or default)
+    except (TypeError, ValueError):
+        numeric = default
+    return max(minimum, min(maximum, numeric))
+
+
 def _configured_run_now_permission_hint(*, workflow_kind: str = "shared") -> str:
     configured_job_id = ""
     if workflow_kind == "bootstrap":
@@ -1457,7 +1465,11 @@ def register_callbacks(app) -> None:
         )
         status = html.Div(
             [
-                html.Small(model["description"], className="text-muted d-block"),
+                html.Small(
+                    model["description"],
+                    title=model["description"],
+                    className="text-muted d-block model-lens-sidebar-description",
+                ),
                 html.Small(
                     f"Features: {model['feature_count']} | Baseline: {model['baseline_label']}",
                     className="text-muted d-block",
@@ -2277,7 +2289,8 @@ def register_callbacks(app) -> None:
         if drift.empty:
             empty = make_empty_state("No drift history available yet. Run a refresh to populate this page.", icon="fas fa-wave-square")
             return empty, html.Div(), html.Div(), html.Div()
-        latest = drift[drift["period"] == drift["period"].max()].nlargest(int(top_n or 10), metric or "psi")
+        normalized_top_n = _normalize_top_n(top_n, default=10, minimum=5, maximum=50)
+        latest = drift[drift["period"] == drift["period"].max()].nlargest(normalized_top_n, metric or "psi")
         thresholds = dict(zip(("warning", "critical"), get_thresholds(metric or "psi")))
         notes: list[object] = []
         period_count = int(drift["period"].nunique()) if "period" in drift.columns else 0
@@ -2305,7 +2318,7 @@ def register_callbacks(app) -> None:
                     thresholds=thresholds,
                 )
             ),
-            make_chart_card(charts.build_top_drifters_bar(drift, metric=metric or "psi", top_n=int(top_n or 10))),
+            make_chart_card(charts.build_top_drifters_bar(drift, metric=metric or "psi", top_n=normalized_top_n)),
         )
 
     @app.callback(
@@ -3234,7 +3247,9 @@ def register_callbacks(app) -> None:
         State("session-config-store", "data"),
         prevent_initial_call=True,
     )
-    def restore_reference_monitor(_, global_model_id, reference_model_id, session_data):
+    def restore_reference_monitor(restore_clicks, global_model_id, reference_model_id, session_data):
+        if not restore_clicks or ctx.triggered_id != "reference-restore-monitor-btn":
+            return no_update, no_update
         model_id = _resolve_reference_model_id(global_model_id, reference_model_id)
         if not model_id:
             return _status_alert("Select a monitor before restoring it.", "warning"), no_update

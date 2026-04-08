@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from types import SimpleNamespace
 
 import pandas as pd
+from dash import no_update
 from dash.development.base_component import Component
 
 from model_lens import app as app_module
@@ -727,6 +728,47 @@ def test_render_drift_callback_reports_when_only_one_window_exists(monkeypatch) 
     assert "Categorical features are stored" in str(result[1])
 
 
+def test_render_drift_callback_respects_top_n_selection(monkeypatch) -> None:
+    class _FakeBackend:
+        def get_monitor_config(self, model_id):
+            return SimpleNamespace(contract=SimpleNamespace(categorical_columns=()))
+
+        def get_drift_results(self, model_id, granularity="daily"):
+            assert granularity == "daily"
+            return pd.DataFrame(
+                [
+                    {"feature": "amount", "period": "2026-01-20", "psi": 0.06, "js_divergence": 0.03, "kl_divergence": 0.02},
+                    {"feature": "velocity_7d", "period": "2026-01-20", "psi": 0.04, "js_divergence": 0.02, "kl_divergence": 0.01},
+                    {"feature": "device_score", "period": "2026-01-20", "psi": 0.02, "js_divergence": 0.01, "kl_divergence": 0.01},
+                    {"feature": "ip_risk", "period": "2026-01-20", "psi": 0.03, "js_divergence": 0.02, "kl_divergence": 0.01},
+                    {"feature": "txn_count", "period": "2026-01-20", "psi": 0.01, "js_divergence": 0.01, "kl_divergence": 0.01},
+                    {"feature": "geo_score", "period": "2026-01-20", "psi": 0.05, "js_divergence": 0.02, "kl_divergence": 0.02},
+                    {"feature": "amount", "period": "2026-01-21", "psi": 0.18, "js_divergence": 0.09, "kl_divergence": 0.08},
+                    {"feature": "velocity_7d", "period": "2026-01-21", "psi": 0.11, "js_divergence": 0.06, "kl_divergence": 0.05},
+                    {"feature": "device_score", "period": "2026-01-21", "psi": 0.05, "js_divergence": 0.03, "kl_divergence": 0.02},
+                    {"feature": "ip_risk", "period": "2026-01-21", "psi": 0.14, "js_divergence": 0.07, "kl_divergence": 0.06},
+                    {"feature": "txn_count", "period": "2026-01-21", "psi": 0.09, "js_divergence": 0.05, "kl_divergence": 0.04},
+                    {"feature": "geo_score", "period": "2026-01-21", "psi": 0.07, "js_divergence": 0.04, "kl_divergence": 0.03},
+                ]
+            )
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    callback = app.callback_map[RENDER_DRIFT_CALLBACK]["callback"]
+    fn = getattr(callback, "__wrapped__", callback)
+
+    result_top_5 = fn("/drift", "fraud_model_demo", "psi", "daily", 5, 0, {})
+    result_top_6 = fn("/drift", "fraud_model_demo", "psi", "daily", 6, 0, {})
+
+    top_5_figure = result_top_5[3].children.children.figure
+    top_6_figure = result_top_6[3].children.children.figure
+
+    assert top_5_figure.layout.title.text == "Top 5 Drifting Features (Latest Period)"
+    assert len(top_5_figure.data[0].y) == 5
+    assert top_6_figure.layout.title.text == "Top 6 Drifting Features (Latest Period)"
+    assert len(top_6_figure.data[0].y) == 6
+
+
 def test_render_performance_callback_surfaces_zero_delta_state(monkeypatch) -> None:
     latest_bins = pd.DataFrame(
         [
@@ -1201,6 +1243,61 @@ def test_archive_reference_monitor_callback_archives_selected_monitor(monkeypatc
     assert result[1]
 
 
+def test_restore_reference_monitor_callback_ignores_non_click_invocations(monkeypatch) -> None:
+    repository = SimpleNamespace(restored=[])
+
+    def restore_monitor(model_id):
+        repository.restored.append(model_id)
+
+    repository.restore_monitor = restore_monitor
+
+    class _FakeBackend:
+        def __init__(self):
+            self.repository = repository
+
+        def get_monitor_config(self, model_id):
+            assert model_id == "fraud_model_demo"
+            return SimpleNamespace(display_name="Fraud Model Demo", model_key="fraud_model_demo")
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    monkeypatch.setattr(callbacks_module, "ctx", SimpleNamespace(triggered_id="reference-restore-monitor-btn"))
+    app = create_app()
+    fn = _find_callback_by_input_and_output(app, "reference-restore-monitor-btn", "reference-page-status")
+
+    result = fn(None, "fraud_model_demo", None, {})
+
+    assert repository.restored == []
+    assert result == (no_update, no_update)
+
+
+def test_restore_reference_monitor_callback_restores_selected_monitor(monkeypatch) -> None:
+    repository = SimpleNamespace(restored=[])
+
+    def restore_monitor(model_id):
+        repository.restored.append(model_id)
+
+    repository.restore_monitor = restore_monitor
+
+    class _FakeBackend:
+        def __init__(self):
+            self.repository = repository
+
+        def get_monitor_config(self, model_id):
+            assert model_id == "fraud_model_demo"
+            return SimpleNamespace(display_name="Fraud Model Demo", model_key="fraud_model_demo")
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    monkeypatch.setattr(callbacks_module, "ctx", SimpleNamespace(triggered_id="reference-restore-monitor-btn"))
+    app = create_app()
+    fn = _find_callback_by_input_and_output(app, "reference-restore-monitor-btn", "reference-page-status")
+
+    result = fn(1, "fraud_model_demo", None, {})
+
+    assert repository.restored == ["fraud_model_demo"]
+    assert "Restored Fraud Model Demo" in str(result[0])
+    assert result[1]
+
+
 def test_delete_reference_monitor_callback_deletes_selected_monitor(monkeypatch) -> None:
     repository = SimpleNamespace(archived=[], deleted=[])
 
@@ -1229,3 +1326,29 @@ def test_delete_reference_monitor_callback_deletes_selected_monitor(monkeypatch)
     assert repository.deleted == ["fraud_model_demo"]
     assert "Deleted Fraud Model Demo" in str(result[0])
     assert result[1]
+
+
+def test_sidebar_status_wraps_long_monitor_description(monkeypatch) -> None:
+    description = "cjc_aws_workspace_catalog.model_lens_demo.inference_logs | model_id=fraud_model_v1"
+
+    class _FakeBackend:
+        def get_model_map(self):
+            return {
+                "fraud_model_v1": {
+                    "description": description,
+                    "open_incident_count": 0,
+                    "feature_count": 12,
+                    "baseline_label": "Rolling 7 days",
+                    "total_rows": 840,
+                }
+            }
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_input_and_output(app, "global-model-select", "sidebar-status")
+
+    status, _, _ = fn("fraud_model_v1", None, {})
+
+    description_component = status.children[0]
+    assert "model-lens-sidebar-description" in description_component.className
+    assert description_component.title == description
