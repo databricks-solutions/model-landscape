@@ -355,6 +355,7 @@ def test_spark_refresh_repository_derives_window_rows_from_spark_daily_profiles(
     assert numeric_metrics
     assert all(math.isfinite(float(metric)) for metric in numeric_metrics)
     assert result.performance_rows
+    assert all(row["window_id"] for row in result.performance_rows)
 
 
 def test_spark_refresh_repository_qualifies_model_key_when_joining_quality_profiles_to_window_metadata() -> None:

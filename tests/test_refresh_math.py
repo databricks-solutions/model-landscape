@@ -413,4 +413,5 @@ def test_daily_profiles_can_derive_window_history_without_raw_window_reloads() -
     assert len({row["window_end"] for row in result.drift_rows}) == 8
     assert any(row["feature_name"] == "segment" and row["metric_name"] == "psi" for row in result.drift_rows)
     assert {row["metric_name"] for row in result.performance_rows} == {"f1", "precision", "recall"}
+    assert all(row["window_id"] for row in result.performance_rows)
     assert all(row["window_id"] for row in result.incident_history_rows)

@@ -303,6 +303,27 @@ def _normalize_rows_with_model_key(
     return normalized_rows
 
 
+def _normalize_rows_with_required_string_field(
+    rows: list[dict[str, Any]],
+    *,
+    field_name: str,
+    row_kind: str,
+) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    normalized_rows: list[dict[str, Any]] = []
+    for index, row in enumerate(rows):
+        payload = dict(row)
+        current_value = str(payload.get(field_name) or "").strip() or None
+        if current_value is None:
+            raise ValueError(
+                f"{row_kind} row at index {index} is missing {field_name}"
+            )
+        payload[field_name] = current_value
+        normalized_rows.append(payload)
+    return normalized_rows
+
+
 class SparkRefreshRepository(ControlPlaneRepository):
     def __init__(
         self,
@@ -359,6 +380,13 @@ class SparkRefreshRepository(ControlPlaneRepository):
             normalized_rows = _normalize_rows_with_model_key(
                 normalized_rows,
                 default_model_key=default_model_key,
+                row_kind=row_kind,
+            )
+        requires_window_id = any(field.name == "window_id" and not field.nullable for field in schema.fields)
+        if requires_window_id:
+            normalized_rows = _normalize_rows_with_required_string_field(
+                normalized_rows,
+                field_name="window_id",
                 row_kind=row_kind,
             )
         frame = self._spark.createDataFrame(normalized_rows, schema=schema)
@@ -1780,6 +1808,7 @@ class SparkRefreshRepository(ControlPlaneRepository):
         for row in _iter_local_rows(joined):
             rows.append({
                 "model_key": config.model_key,
+                "window_id": str(row["window_id"]),
                 "feature_name": str(row["feature_name"]),
                 "bin_label": str(row["bin_label"]),
                 "baseline_metric": round(float(row["baseline_metric"]), 4),

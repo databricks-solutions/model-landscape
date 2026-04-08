@@ -297,6 +297,7 @@ def _build_performance_rows(
 ) -> list[dict[str, Any]]:
     return [{
         "model_key": config.model_key,
+        "window_id": metadata["window_id"],
         "feature_name": row["feature_name"],
         "bin_label": row["bin_label"],
         "baseline_metric": float(row["baseline_metric"]),
@@ -810,6 +811,7 @@ def _derive_performance_rows(
             volume_pct = round(float(current_row_count / total_current_rows * 100), 2)
             rows.append({
                 "model_key": config.model_key,
+                "window_id": metadata["window_id"],
                 "feature_name": key[0],
                 "bin_label": key[1],
                 "baseline_metric": round(float(baseline_metric), 4),
