@@ -289,12 +289,14 @@ databricks workspace delete /Workspace/Users/<your-email>/.bundle/model-lens --r
 If you already have a Databricks App and want to keep its existing app compute and app service principal, use the dedicated manual walkthrough:
 
 - [Manual Setup With An Existing Databricks App](/Users/volo.vragov/Desktop/work/model-lens/docs/MANUAL_EXISTING_APP_SETUP.md)
+- [Constrained Workspace Runbook](/Users/volo.vragov/Desktop/work/model-lens/docs/CONSTRAINED_WORKSPACE_RUNBOOK.md)
 
 Important:
 
 - if the app already exists, do not run a plain `databricks bundle deploy` against that same `app_name` unless the bundle app resource has first been bound to the existing app
 - otherwise the deploy will try to create a second app and fail with an "App already exists" error
 - if the operator cannot manage the app's SQL warehouse resource, do not keep retrying the bundle path; use the generated manual existing-app source path instead
+- if the customer workspace already has a shared refresh job, prefer resetting that job to the generated `refresh-job.json` contract and wiring the app by `REFRESH_JOB_ID` rather than relying on loose name lookup
 
 ## Quick Deploy
 
@@ -312,6 +314,7 @@ If you are reusing an existing Databricks App instead of letting the bundle crea
 - the bind-first bundle path when the operator can manage app resources
 - the no-app-resource path that uses [prepare_existing_app_source.py](/Users/volo.vragov/Desktop/work/model-lens/scripts/prepare_existing_app_source.py) to generate a deployable source tree with a literal `SQL_WAREHOUSE_ID`
 - a detailed refresh-job creation sequence, including `jobs create`, `jobs reset`, `jobs run-now`, and how to switch the app from name-based lookup to `REFRESH_JOB_ID`
+- the constrained-workspace runbook for the common "existing app + existing warehouse + existing shared refresh job" customer setup
 
 The quick deploy below is for bundle-managed app creation only.
 

@@ -184,6 +184,7 @@ Expected result:
 - the same app identity has `CAN MANAGE RUN` on the refresh workflow
 
 If you are reusing an existing app and cannot manage its SQL warehouse app resource, do not use this smoke-test deploy path. Use the generated manual existing-app path in [Manual Setup With An Existing Databricks App](/Users/volo.vragov/Desktop/work/model-lens/docs/MANUAL_EXISTING_APP_SETUP.md) instead.
+If the customer workspace must also reuse an existing shared refresh job and an existing approved SQL warehouse, use [Constrained Workspace Runbook](/Users/volo.vragov/Desktop/work/model-lens/docs/CONSTRAINED_WORKSPACE_RUNBOOK.md) as the primary test path instead of this bundle-created-app path.
 
 ## Step 4: Open The App
 

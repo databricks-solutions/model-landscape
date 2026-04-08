@@ -36,6 +36,10 @@ Use this walkthrough if all of the following are true:
 
 If you want Databricks to create a new app for Model Lens automatically, use [Deploy To A Workspace](/Users/volo.vragov/Desktop/work/model-lens/docs/DEPLOY_TO_WORKSPACE.md) instead.
 
+If your customer workspace already has an app, an approved SQL warehouse, and either an existing shared refresh job or a platform team that can reset one for you, use the concise runbook first:
+
+- [Constrained Workspace Runbook](/Users/volo.vragov/Desktop/work/model-lens/docs/CONSTRAINED_WORKSPACE_RUNBOOK.md)
+
 ## The Two Existing-App Tracks
 
 There are two distinct existing-app paths.
@@ -78,6 +82,13 @@ That script is:
 - [prepare_existing_app_source.py](/Users/volo.vragov/Desktop/work/model-lens/scripts/prepare_existing_app_source.py)
 
 Track B is the recommended path when the app already exists and the operator cannot manage app resources.
+
+Track B is also the recommended path for the common customer-constrained setup where:
+
+- the existing app must keep its current service principal
+- the existing SQL warehouse is already approved
+- the shared refresh job already exists, or the platform team wants to reuse the same job ID by resetting it to the current Model Lens contract
+- direct `Run now` may or may not be allowed
 
 Important:
 
@@ -250,6 +261,7 @@ Those optional values only affect direct bootstrap/backfill triggers. The defaul
 
 The generated shared job payload now declares job-level parameters and pushes them into the wheel task's named arguments. The app triggers `jobs/run-now` with `job_parameters`, which is the override path Databricks currently honors for targeted bootstrap runs.
 The generated Spark job cluster also defaults to `data_security_mode=USER_ISOLATION` so the workflow can access Unity Catalog tables. If your workspace policy requires it, change the generated payload to `SINGLE_USER` before `jobs create` or `jobs reset`.
+The generated `refresh-job.json` still needs one workspace-specific cluster value before you create or reset the job: set `job_clusters[0].new_cluster.node_type_id` to an approved workspace node type, or preserve the existing job's approved node type when you mirror the payload in the UI.
 
 If the app will monitor very large tables, set these environment variables in the generated `app.yaml` and shared refresh job before deploy:
 
@@ -330,6 +342,20 @@ databricks jobs list
 
 Find `<existing-app-name>-refresh` and copy its numeric `job_id`.
 
+If the workspace already has a shared refresh job and you want to keep that exact job ID, do not create a second workflow. Inspect the existing job first, compare it to the generated `refresh-job.json`, and use `jobs reset` if it is not already aligned.
+
+The reusable job should match all of the following:
+
+- one Python wheel task
+- package name `model_lens`
+- entry point `model-lens-refresh`
+- task key `refresh_control_plane`
+- job parameters for `warehouse_id`, `control_plane_catalog`, `control_plane_schema`, `scope`, and `model_key`
+- `scope` defaulting to `scheduler`
+- a UC-capable Spark access mode: `USER_ISOLATION` or `SINGLE_USER`
+- the workspace wheel path under the generated source tree
+- an active hourly schedule if you plan to rely on `scheduler_only`
+
 #### Detailed Track B Refresh-Job Creation Walkthrough
 
 If you want the exact sequence instead of the short form above, use this checklist.
@@ -351,6 +377,7 @@ Verify all of the following in that JSON:
 - `"name"` is `<existing-app-name>-refresh`
 - `"package_name"` is `model_lens`
 - `"entry_point"` is `model-lens-refresh`
+- `"job_clusters"[0]."new_cluster"."node_type_id"` has been filled in with an approved workspace node type before create/reset
 - `"--warehouse-id"` points at the correct SQL warehouse
 - `"--catalog"` points at the correct control-plane catalog
 - `"--schema"` points at the correct control-plane schema
@@ -494,6 +521,7 @@ If you prefer creating the job in the Databricks UI instead of `jobs create --js
    - `scope`, `scheduler`
 6. Attach the task to one shared Spark job cluster:
    - choose the Spark runtime version that matches the bundle default or your workspace standard
+   - set a UC-capable access mode: `USER_ISOLATION` by default, or `SINGLE_USER` if your workspace policy requires it
    - set a workspace-approved node type
    - start with `2` workers unless your platform team requires a different baseline
 7. Add task libraries:
@@ -587,7 +615,6 @@ Get the app identity from:
 Then grant the existing app service principal all of the following:
 
 - `CAN USE` on the SQL warehouse
-- `CAN MANAGE RUN` on the refresh workflow
 - source data:
   - `USE CATALOG`
   - `USE SCHEMA`
@@ -606,7 +633,8 @@ If Setup should create missing objects from the UI, also grant:
 
 Important:
 
-- `CAN MANAGE RUN` is required because onboarding triggers the initial refresh asynchronously
+- `CAN MANAGE RUN` on the refresh workflow is required only if you want immediate bootstrap from the app UI
+- if `CAN MANAGE RUN` is intentionally unavailable, `scheduler_only` remains a supported operating mode as long as the shared job already exists, is scheduled, and the app is wired to it
 - if the generated `app.yaml` sets `REFRESH_JOB_ID`, grant `CAN_MANAGE_RUN` on that exact job ID; the Setup readiness card now points to that concrete grant when immediate bootstrap is unavailable
 - if the generated `app.yaml` also sets `BOOTSTRAP_REFRESH_JOB_ID`, grant `CAN_MANAGE_RUN` on that second job only if you expect direct `Run First Refresh` acceleration through the optional bootstrap lane
 - the app identity triggers the job
@@ -742,14 +770,14 @@ If you want the shortest robust path for the exact constrained-user case:
    - `--output-dir`
    - `--workspace-source-path`
 4. upload that directory with `databricks workspace import-dir`
-5. create the refresh job from `refresh-job.json`
+5. create the refresh job from `refresh-job.json`, or reset the existing shared refresh job to that payload if the workspace must keep the same job ID
 6. rerun the helper with `--refresh-job-id <job-id>` and re-import the directory
 7. deploy the app from that workspace path with `databricks apps deploy`
 8. grant the existing app service principal:
    - `CAN USE` on the warehouse
-   - `CAN MANAGE RUN` on the job
    - source-data `SELECT`
    - control-plane `SELECT` and `MODIFY`
+   - `CAN MANAGE RUN` on the job only if you want immediate UI-triggered bootstrap; otherwise leave the workspace in supported `scheduler_only` mode
 9. grant the refresh job identity the actual data/control-plane privileges
 
 That keeps the existing app identity, avoids app-resource management entirely, and still gives you the current non-blocking Model Lens onboarding flow.
