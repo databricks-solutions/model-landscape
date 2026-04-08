@@ -16,10 +16,14 @@ It is built for teams that want an in-house alternative to external observabilit
 - show recent incident lifecycle events in `Monitor Settings` so operators can inspect openings, escalations, and recoveries without leaving the current monitor context
 - show an `Incidents` page with cross-monitor open incidents and recent lifecycle history, so operators can answer “what is broken right now?” without filtering one monitor at a time
 - show `Refresh Diagnostics` in `Monitor Settings`, translating recent `refresh_runs` stage telemetry into bottleneck labels, trend hints, and sizing guidance during scale validation
+- keep `Monitor Settings` aligned with the sidebar-selected monitor by default, clear old action banners when the selected monitor/page changes, and show only the lifecycle actions that apply to the current monitor state
+- organize `Monitor Settings` into `Contract`, `Settings`, and `Admin` tabs so read-only contract details, editable cadence/metric settings, and lifecycle/runtime actions are easier to navigate during demos and operator reviews
 - backfill drift, quality, and performance window history on the first refresh so timelines are populated immediately
 - keep giant inference tables off the app memory hot path by using Spark-backed exact source reads for refresh computation and only bounded pandas reads for small UI drilldowns
-- read Overview in bulk for large tenants by querying the latest drift and quality snapshots across all active monitors with explicit latest-row windowing instead of replaying full per-monitor history queries on page load
+- read Overview in bulk for large tenants by querying historical max drift summaries plus the latest quality snapshot across all active monitors instead of replaying full per-monitor history queries on page load
 - keep those bulk Overview reads Databricks-SQL-safe by explicitly aliasing derived tables instead of relying on permissive parser behavior
+- rank Overview severity and Drift top-feature views from the highest historical drift seen across persisted comparison windows, so a recovered latest window does not hide major earlier drift events
+- show loading states on the heavy analysis pages while warehouse-backed queries are still running
 - persist durable monitoring state in Unity Catalog Delta tables
 - persist one `refresh_runs` audit row per attempted monitor execution, including skipped and failed runs
 - reconcile stale `running` refresh rows automatically after a timeout so one killed worker does not wedge a monitor forever
@@ -97,6 +101,7 @@ Current engine behavior:
 - the review step now stores per-monitor cadence presets plus per-monitor performance metrics, and the Monitor Settings page can edit those settings later without creating new Databricks jobs
 - classification monitors now track `f1`, `precision`, and `recall` by default, with optional `accuracy`; regression monitors track `rmse` and `mae` by default
 - the Performance page still lets the viewer switch metrics, but the dropdown is now constrained to the metric set configured for that monitor
+- the rendered Performance view now also echoes the selected metric explicitly so screenshots and demos always show which score is being plotted
 - categorical features no longer stop at contract storage only; categorical drift now emits PSI / JS / KL rows alongside numeric drift
 - performance repair now uses canonical persisted bin specs per `model_key + feature_name`, so daily performance profiles remain comparable across bootstrap and later incremental runs
 - onboarding supports two baseline policies:
@@ -243,6 +248,8 @@ Current control-plane tables:
 - `refresh_runs`
 - `comparison_windows`
 - `monitor_runtime_state`
+
+`incidents` is the current open-incident projection. Historical openings, escalations, downgrades, and recoveries live in `incident_history`, so a monitor can show severe historical drift even when the latest window has already recovered and no open incidents remain.
 
 Before handing this to a customer, also make sure the Databricks App service principal can:
 

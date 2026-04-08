@@ -4,7 +4,7 @@ from collections.abc import Iterator
 from types import SimpleNamespace
 
 import pandas as pd
-from dash import no_update
+from dash import dcc, no_update
 from dash.development.base_component import Component
 
 from model_lens import app as app_module
@@ -18,7 +18,7 @@ from model_lens.app import (
     create_app,
 )
 from model_lens.callbacks import _format_runtime_setting_value, _ready_for_session, _setup_retry_message
-from model_lens.pages import reference
+from model_lens.pages import data_quality, drift_analysis, feature_deep_dive, incidents, overview, performance, reference
 
 
 RENDER_WIZARD_CALLBACK = (
@@ -737,18 +737,18 @@ def test_render_drift_callback_respects_top_n_selection(monkeypatch) -> None:
             assert granularity == "daily"
             return pd.DataFrame(
                 [
-                    {"feature": "amount", "period": "2026-01-20", "psi": 0.06, "js_divergence": 0.03, "kl_divergence": 0.02},
-                    {"feature": "velocity_7d", "period": "2026-01-20", "psi": 0.04, "js_divergence": 0.02, "kl_divergence": 0.01},
-                    {"feature": "device_score", "period": "2026-01-20", "psi": 0.02, "js_divergence": 0.01, "kl_divergence": 0.01},
-                    {"feature": "ip_risk", "period": "2026-01-20", "psi": 0.03, "js_divergence": 0.02, "kl_divergence": 0.01},
-                    {"feature": "txn_count", "period": "2026-01-20", "psi": 0.01, "js_divergence": 0.01, "kl_divergence": 0.01},
-                    {"feature": "geo_score", "period": "2026-01-20", "psi": 0.05, "js_divergence": 0.02, "kl_divergence": 0.02},
-                    {"feature": "amount", "period": "2026-01-21", "psi": 0.18, "js_divergence": 0.09, "kl_divergence": 0.08},
-                    {"feature": "velocity_7d", "period": "2026-01-21", "psi": 0.11, "js_divergence": 0.06, "kl_divergence": 0.05},
-                    {"feature": "device_score", "period": "2026-01-21", "psi": 0.05, "js_divergence": 0.03, "kl_divergence": 0.02},
-                    {"feature": "ip_risk", "period": "2026-01-21", "psi": 0.14, "js_divergence": 0.07, "kl_divergence": 0.06},
-                    {"feature": "txn_count", "period": "2026-01-21", "psi": 0.09, "js_divergence": 0.05, "kl_divergence": 0.04},
-                    {"feature": "geo_score", "period": "2026-01-21", "psi": 0.07, "js_divergence": 0.04, "kl_divergence": 0.03},
+                    {"feature": "amount", "period": "2026-01-20", "psi": 10.97, "js_divergence": 0.61, "kl_divergence": 0.52},
+                    {"feature": "velocity_7d", "period": "2026-01-20", "psi": 4.20, "js_divergence": 0.34, "kl_divergence": 0.28},
+                    {"feature": "device_score", "period": "2026-01-20", "psi": 3.10, "js_divergence": 0.26, "kl_divergence": 0.22},
+                    {"feature": "ip_risk", "period": "2026-01-20", "psi": 2.60, "js_divergence": 0.22, "kl_divergence": 0.19},
+                    {"feature": "txn_count", "period": "2026-01-20", "psi": 1.70, "js_divergence": 0.15, "kl_divergence": 0.13},
+                    {"feature": "geo_score", "period": "2026-01-20", "psi": 1.30, "js_divergence": 0.12, "kl_divergence": 0.1},
+                    {"feature": "amount", "period": "2026-01-21", "psi": 0.02, "js_divergence": 0.01, "kl_divergence": 0.01},
+                    {"feature": "velocity_7d", "period": "2026-01-21", "psi": 0.01, "js_divergence": 0.01, "kl_divergence": 0.01},
+                    {"feature": "device_score", "period": "2026-01-21", "psi": 0.01, "js_divergence": 0.01, "kl_divergence": 0.01},
+                    {"feature": "ip_risk", "period": "2026-01-21", "psi": 0.01, "js_divergence": 0.01, "kl_divergence": 0.01},
+                    {"feature": "txn_count", "period": "2026-01-21", "psi": 0.0, "js_divergence": 0.0, "kl_divergence": 0.0},
+                    {"feature": "geo_score", "period": "2026-01-21", "psi": 0.0, "js_divergence": 0.0, "kl_divergence": 0.0},
                 ]
             )
 
@@ -763,9 +763,11 @@ def test_render_drift_callback_respects_top_n_selection(monkeypatch) -> None:
     top_5_figure = result_top_5[3].children.children.figure
     top_6_figure = result_top_6[3].children.children.figure
 
-    assert top_5_figure.layout.title.text == "Top 5 Drifting Features (Latest Period)"
+    assert "highest historical PSI" in str(result_top_5[1])
+    assert top_5_figure.layout.title.text == "Top 5 Drifting Features (Historical Max)"
     assert len(top_5_figure.data[0].y) == 5
-    assert top_6_figure.layout.title.text == "Top 6 Drifting Features (Latest Period)"
+    assert "device_score" in top_5_figure.data[0].y
+    assert top_6_figure.layout.title.text == "Top 6 Drifting Features (Historical Max)"
     assert len(top_6_figure.data[0].y) == 6
 
 
@@ -807,6 +809,7 @@ def test_render_performance_callback_surfaces_zero_delta_state(monkeypatch) -> N
 
     result = fn("/performance", "fraud_model_demo", "f1", 0, {}, None)
 
+    assert "Viewing metric: F1 Score" in str(result[0])
     assert "no significant degradation" in str(result[0]).lower()
     assert "Latest Bin Metrics" in str(result[3])
     assert "Only one comparison window is available" in str(result[6])
@@ -861,9 +864,24 @@ def test_render_quality_callback_surfaces_history_and_latest_snapshot(monkeypatc
 
     result = fn("/quality", "fraud_model_demo", 0, {})
 
+    assert "Monitoring Rows" in str(result[0])
     assert "Rows Per Comparison Window" in str(result[1])
     assert "Null Rate Trends" in str(result[2])
     assert "Prediction Mean Over Time" in str(result[3])
+
+
+def test_analysis_pages_include_loading_wrappers() -> None:
+    pages = [
+        overview.layout(),
+        drift_analysis.layout(),
+        performance.layout(),
+        data_quality.layout(),
+        feature_deep_dive.layout(),
+        reference.layout(),
+        incidents.layout(),
+    ]
+
+    assert all(any(isinstance(component, dcc.Loading) for component in _walk(page)) for page in pages)
 
 
 def test_labels_discovery_surfaces_zero_match_warning() -> None:
@@ -942,9 +960,72 @@ def test_render_reference_callback_shows_archive_and_delete_actions(monkeypatch)
 
     result = fn("/reference", "fraud_model_demo", None, 0, {})
 
+    assert "Contract" in str(result)
+    assert "Settings" in str(result)
+    assert "Admin" in str(result)
     assert "Archive Monitor" in str(result)
+    assert "Restore Monitor" not in str(result)
     assert "Delete Monitor And History" in str(result)
     assert "Monitor Lifecycle" in str(result)
+
+
+def test_render_reference_callback_shows_restore_for_archived_monitor(monkeypatch) -> None:
+    config = SimpleNamespace(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.demo.inference",
+        contract=SimpleNamespace(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            model_version_col=None,
+            label_col="label",
+            entity_id_col="entity_id",
+            feature_columns=("amount",),
+            categorical_columns=("segment",),
+            slice_columns=("segment",),
+        ),
+        model_id_value="fraud_model_v1",
+        model_version_value=None,
+        labels_table=None,
+        labels_join_col=None,
+        labels_order_col=None,
+        mlflow=SimpleNamespace(
+            experiment_name=None,
+            experiment_id=None,
+            run_id=None,
+            registered_model_name=None,
+            model_version=None,
+        ),
+        baseline=SimpleNamespace(kind="rolling", n_days=7, baseline_start=None, baseline_end=None),
+        problem_type="classification",
+        drift_cadence_preset="6h",
+        performance_cadence_preset="daily_7d_repair",
+        schedule_enabled=False,
+        status="inactive",
+    )
+
+    class _FakeBackend:
+        def get_reference_data(self, model_id):
+            assert model_id == "fraud_model_demo"
+            return {
+                "config": config,
+                "summary": {},
+                "runtime_state": {},
+                "recent_runs": [],
+                "recent_incident_history": [],
+                "settings": {"refresh_job_id": "", "refresh_job_name": "model-lens-refresh"},
+            }
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_output(app, "reference-page-body")
+
+    result = fn("/reference", "fraud_model_demo", None, 0, {})
+
+    assert "Restore Monitor" in str(result)
+    assert "Archive Monitor" not in str(result)
+    assert "Delete Monitor And History" in str(result)
 
 
 def test_render_reference_callback_shows_refresh_diagnostics(monkeypatch) -> None:
@@ -1211,6 +1292,34 @@ def test_reference_bootstrap_retry_callback_triggers_shared_job(monkeypatch) -> 
 
     assert "Triggered the initial refresh for Fraud Model Demo" in str(result[0])
     assert result[1]
+
+
+def test_reference_model_selector_prefers_sidebar_selection_over_stale_page_value(monkeypatch) -> None:
+    class _FakeBackend:
+        def list_reference_models(self, status="active"):
+            assert status == "active"
+            return [
+                {"id": "fraud_model_demo", "name": "Fraud Model Demo", "status": "active"},
+                {"id": "spoof_model_demo", "name": "Spoof Detection Ios V1", "status": "active"},
+            ]
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_output(app, "reference-monitor-select")
+
+    options, value = fn("/reference", "active", "spoof_model_demo", 0, {}, "fraud_model_demo")
+
+    assert len(options) == 2
+    assert value == "spoof_model_demo"
+
+
+def test_clear_reference_status_on_reference_navigation_and_selection_change() -> None:
+    app = create_app()
+    fn = _find_callback_by_input_and_output(app, "reference-monitor-status-filter", "reference-page-status")
+
+    result = fn("/reference", "fraud_model_demo", "fraud_model_demo", "active")
+
+    assert getattr(result, "children", None) is None
 
 
 def test_archive_reference_monitor_callback_archives_selected_monitor(monkeypatch) -> None:

@@ -38,8 +38,15 @@ def layout():
                 ],
                 className="mb-4",
             ),
-            html.Div(id="deepdive-distribution-container", className="mb-3"),
-            html.Div(id="deepdive-dimension-container", className="mb-3"),
+            dcc.Loading(
+                type="default",
+                children=html.Div(
+                    [
+                        html.Div(id="deepdive-distribution-container", className="mb-3"),
+                        html.Div(id="deepdive-dimension-container", className="mb-3"),
+                    ]
+                ),
+            ),
             dbc.Card(
                 dbc.CardBody(
                     [
@@ -55,4 +62,3 @@ def layout():
             ),
         ]
     )
-

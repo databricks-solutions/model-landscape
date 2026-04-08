@@ -66,6 +66,9 @@ Responsibilities:
 - show recent incident lifecycle rows in `Monitor Settings` from persisted `incident_history`, so warehouse history is visible in-app even without a dedicated incident-timeline page
 - show a dedicated `Incidents` page that reads cross-monitor open incidents from `incidents` and recent lifecycle rows from `incident_history`
 - show `Refresh Diagnostics` in `Monitor Settings`, interpreting recent `refresh_runs` telemetry into bottleneck categories and trend guidance
+- split `Monitor Settings` into `Contract`, `Settings`, and `Admin` tabs so the contract view, editable cadence/metric controls, and lifecycle/runtime actions are separated without changing the underlying route or data model
+- rank Overview severity and Drift top-feature callouts from historical max drift across persisted comparison windows instead of only the latest window
+- wrap the heavier analysis panes in loading indicators so page navigation does not look blank while warehouse queries are in flight
 - trigger the initial refresh workflow asynchronously during monitor activation
 - render monitor summaries and incidents from Lakebase when configured
 - recommend the Lakebase-enabled target when running warehouse-only in a workspace that appears to have Lakebase available
@@ -256,7 +259,10 @@ Current limitation:
 
 1. In Lakebase mode, the app reads monitor summary and incident inbox data from Lakebase.
 2. In warehouse-only mode, or if Lakebase is unavailable, it reads those views from the warehouse-backed repository.
-3. The app renders the current state for operators.
+3. Overview severity and the Drift top-feature ranking are derived from historical max drift across the stored comparison windows, while `quality_metrics` remains the latest model-wide compatibility row rebuilt from daily quality facts.
+4. The app renders the current state for operators with loading indicators around the slower warehouse-backed panes.
+
+`incidents` is intentionally the current open-incident projection. Historical openings, escalations, and recoveries are preserved separately in `incident_history`, so a model can have severe historical drift with zero current open incidents if the latest comparison window has recovered.
 
 ## Why The System Of Record Stays In Unity Catalog
 

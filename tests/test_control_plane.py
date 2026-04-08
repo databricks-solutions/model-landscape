@@ -173,17 +173,7 @@ class FakeWarehouse:
             ])
         if "ROUND(AVG(CASE WHEN s.`amount` IS NULL" in sql:
             return pd.DataFrame([{"amount": 1.25, "segment": 0.0}])
-        if "COUNT(DISTINCT" in sql:
-            return pd.DataFrame([{"distinct_model_ids": self.distinct_model_ids}])
-        if "duplicate_key_count" in sql:
-            return pd.DataFrame([{"duplicate_key_count": self.duplicate_label_keys}])
-        if "matched_rows" in sql and "unmatched_rows" in sql:
-            return pd.DataFrame([{"inference_rows": 10, "matched_rows": 7, "unmatched_rows": 3}])
-        if "AS label_value" in sql:
-            return pd.DataFrame([{"label_value": "0"}, {"label_value": "1"}])
-        if "AS sampled_value" in sql:
-            return pd.DataFrame([{"sampled_value": "m1"}])
-        if "WITH latest_window AS" in sql:
+        if "WITH historical_drift AS" in sql:
             return pd.DataFrame([{
                 "model_key": self.monitor_row["model_key"],
                 "display_name": self.monitor_row["display_name"],
@@ -195,6 +185,16 @@ class FakeWarehouse:
                 "last_refresh_at": "2026-01-20T12:00:00+00:00",
                 "open_incident_count": 1,
             }])
+        if "COUNT(DISTINCT" in sql:
+            return pd.DataFrame([{"distinct_model_ids": self.distinct_model_ids}])
+        if "duplicate_key_count" in sql:
+            return pd.DataFrame([{"duplicate_key_count": self.duplicate_label_keys}])
+        if "matched_rows" in sql and "unmatched_rows" in sql:
+            return pd.DataFrame([{"inference_rows": 10, "matched_rows": 7, "unmatched_rows": 3}])
+        if "AS label_value" in sql:
+            return pd.DataFrame([{"label_value": "0"}, {"label_value": "1"}])
+        if "AS sampled_value" in sql:
+            return pd.DataFrame([{"sampled_value": "m1"}])
         if "FROM model_observability.control_plane.incidents" in sql and "WHERE status = 'open'" in sql:
             return pd.DataFrame([{
                 "model_key": self.monitor_row["model_key"],

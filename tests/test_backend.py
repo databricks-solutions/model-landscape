@@ -697,7 +697,7 @@ def test_feature_distribution_daily_profile_query_is_bounded_to_latest_window_da
     assert profile_params == ("fraud_model_demo", "amount", "2026-01-07", "2026-01-21")
 
 
-def test_get_overview_rows_uses_bulk_latest_snapshot_queries() -> None:
+def test_get_overview_rows_uses_bulk_historical_snapshot_queries() -> None:
     queries: list[str] = []
 
     class OverviewWarehouse:
@@ -730,56 +730,44 @@ def test_get_overview_rows_uses_bulk_latest_snapshot_queries() -> None:
                         },
                     ]
                 )
-            if "WITH ranked_drift AS" in sql and "FROM drift_metrics" in sql:
+            if "WITH feature_metric_history AS" in sql and "FROM drift_metrics" in sql:
                 return pd.DataFrame(
                     [
                         {
                             "model_key": "fraud_model_demo",
                             "feature_name": "amount",
                             "metric_name": "psi",
-                            "metric_value": 0.21,
-                            "window_end": "2026-01-21",
-                            "computed_at": "2026-01-21T10:00:00",
+                            "metric_value": 10.97,
                         },
                         {
                             "model_key": "fraud_model_demo",
                             "feature_name": "amount",
                             "metric_name": "js_divergence",
-                            "metric_value": 0.11,
-                            "window_end": "2026-01-21",
-                            "computed_at": "2026-01-21T10:00:00",
+                            "metric_value": 0.61,
                         },
                         {
                             "model_key": "fraud_model_demo",
                             "feature_name": "velocity_7d",
                             "metric_name": "psi",
                             "metric_value": 0.05,
-                            "window_end": "2026-01-21",
-                            "computed_at": "2026-01-21T10:00:00",
                         },
                         {
                             "model_key": "fraud_model_demo",
                             "feature_name": "velocity_7d",
                             "metric_name": "js_divergence",
                             "metric_value": 0.03,
-                            "window_end": "2026-01-21",
-                            "computed_at": "2026-01-21T10:00:00",
                         },
                         {
                             "model_key": "chargeback_model_demo",
                             "feature_name": "amount",
                             "metric_name": "psi",
-                            "metric_value": 0.08,
-                            "window_end": "2026-01-21",
-                            "computed_at": "2026-01-21T10:00:00",
+                            "metric_value": 4.93,
                         },
                         {
                             "model_key": "chargeback_model_demo",
                             "feature_name": "amount",
                             "metric_name": "js_divergence",
-                            "metric_value": 0.04,
-                            "window_end": "2026-01-21",
-                            "computed_at": "2026-01-21T10:00:00",
+                            "metric_value": 0.42,
                         },
                     ]
                 )
@@ -861,28 +849,28 @@ def test_get_overview_rows_uses_bulk_latest_snapshot_queries() -> None:
 
     assert len(rows) == 2
     fraud_row = next(row for row in rows if row["model_id"] == "fraud_model_demo")
-    assert fraud_row["max_psi"] == 0.21
-    assert fraud_row["avg_psi"] == 0.13
-    assert fraud_row["avg_js"] == 0.07
+    assert fraud_row["max_psi"] == 10.97
+    assert round(fraud_row["avg_psi"], 2) == 5.51
+    assert fraud_row["avg_js"] == 0.32
     assert fraud_row["drifting_features"] == 1
     assert fraud_row["total_features"] == 2
     assert fraud_row["top_drifter"] == "amount"
     assert fraud_row["max_null_rate"] == 1.2
 
     chargeback_row = next(row for row in rows if row["model_id"] == "chargeback_model_demo")
-    assert chargeback_row["max_psi"] == 0.08
-    assert chargeback_row["drifting_features"] == 0
+    assert chargeback_row["max_psi"] == 4.93
+    assert chargeback_row["drifting_features"] == 1
     assert chargeback_row["max_null_rate"] == 0.7
     quality_query = next(sql for sql in queries if "ROW_NUMBER() OVER" in sql and "FROM quality_metrics" in sql)
     normalized_quality_query = " ".join(quality_query.split())
     assert ") latest_quality WHERE row_num = 1" in normalized_quality_query
-    drift_query = next(sql for sql in queries if "WITH ranked_drift AS" in sql and "FROM drift_metrics" in sql)
+    drift_query = next(sql for sql in queries if "WITH feature_metric_history AS" in sql and "FROM drift_metrics" in sql)
     normalized_drift_query = " ".join(drift_query.split())
-    assert "ROW_NUMBER() OVER ( PARTITION BY model_key, feature_name, metric_name ORDER BY window_end DESC, computed_at DESC ) AS row_num" in normalized_drift_query
-    assert "FROM ranked_drift WHERE row_num = 1" in normalized_drift_query
+    assert "MAX(metric_value) AS metric_value" in normalized_drift_query
+    assert "GROUP BY model_key, feature_name, metric_name" in normalized_drift_query
+    assert "FROM feature_metric_history" in normalized_drift_query
     assert not any("ORDER BY window_end, feature_name, metric_name" in sql for sql in queries)
-    assert "MAX(window_end)" not in normalized_drift_query
-    assert not any("ORDER BY computed_at DESC" in sql and "LIMIT 1" in sql for sql in queries)
+    assert "ROW_NUMBER() OVER" not in normalized_drift_query
 
 
 def test_get_overview_rows_returns_empty_without_active_monitors() -> None:

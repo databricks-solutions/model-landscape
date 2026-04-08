@@ -2039,8 +2039,12 @@ class ControlPlaneRepository:
     def _get_monitor_summary_from_warehouse(self) -> pd.DataFrame:
         return self._warehouse.query(
             f"""
-            WITH latest_window AS (
-                SELECT model_key, MAX(window_end) AS latest_window_end
+            WITH historical_drift AS (
+                SELECT
+                    model_key,
+                    COALESCE(MAX(CASE WHEN metric_name = 'psi' THEN metric_value END), 0) AS max_psi,
+                    COUNT(DISTINCT CASE WHEN metric_name = 'psi' THEN feature_name END) AS feature_count,
+                    MAX(window_end) AS latest_window_end
                 FROM {self._table_names.drift_metrics}
                 GROUP BY model_key
             ),
@@ -2064,30 +2068,21 @@ class ControlPlaneRepository:
             SELECT
                 c.model_key,
                 c.display_name,
-                COALESCE(MAX(CASE WHEN d.metric_name = 'psi' THEN d.metric_value END), 0) AS max_psi,
-                COALESCE(SUM(CASE WHEN d.metric_name = 'psi' THEN 1 ELSE 0 END), 0) AS feature_count,
-                MAX(d.window_end) AS latest_window_end,
+                COALESCE(d.max_psi, 0) AS max_psi,
+                COALESCE(d.feature_count, 0) AS feature_count,
+                d.latest_window_end,
                 q.total_rows,
                 q.max_date AS latest_data_date,
                 q.computed_at AS last_refresh_at,
                 COALESCE(i.open_incident_count, 0) AS open_incident_count
             FROM {self._table_names.monitor_configs} c
-            LEFT JOIN latest_window lw ON c.model_key = lw.model_key
-            LEFT JOIN {self._table_names.drift_metrics} d
+            LEFT JOIN historical_drift d
                 ON c.model_key = d.model_key
-               AND d.window_end = lw.latest_window_end
             LEFT JOIN latest_quality q
                 ON c.model_key = q.model_key
             LEFT JOIN open_incidents i
                 ON c.model_key = i.model_key
             WHERE c.status = 'active'
-            GROUP BY
-                c.model_key,
-                c.display_name,
-                q.total_rows,
-                q.max_date,
-                q.computed_at,
-                i.open_incident_count
             ORDER BY max_psi DESC, c.display_name
             """
         )

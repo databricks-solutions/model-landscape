@@ -487,30 +487,24 @@ class DashboardBackend:
             }
         return quality_map
 
-    def _latest_drift_snapshot_map(self, model_ids: list[str], metric: str) -> dict[str, dict[str, object]]:
+    def _historical_drift_summary_map(self, model_ids: list[str], metric: str) -> dict[str, dict[str, object]]:
         if not model_ids:
             return {}
         placeholders = _sql_placeholders(len(model_ids))
         frame = self._warehouse.query_params(
             f"""
-            WITH ranked_drift AS (
+            WITH feature_metric_history AS (
                 SELECT
                     model_key,
                     feature_name,
                     metric_name,
-                    metric_value,
-                    window_end,
-                    computed_at,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY model_key, feature_name, metric_name
-                        ORDER BY window_end DESC, computed_at DESC
-                    ) AS row_num
+                    MAX(metric_value) AS metric_value
                 FROM {self.repository.table_names.drift_metrics}
                 WHERE model_key IN ({placeholders})
+                GROUP BY model_key, feature_name, metric_name
             )
-            SELECT model_key, feature_name, metric_name, metric_value, window_end, computed_at
-            FROM ranked_drift
-            WHERE row_num = 1
+            SELECT model_key, feature_name, metric_name, metric_value
+            FROM feature_metric_history
             ORDER BY model_key, feature_name, metric_name
             """,
             tuple(model_ids),
@@ -557,7 +551,7 @@ class DashboardBackend:
         models = self.list_models()
         model_ids = [str(model["id"]) for model in models if str(model.get("id") or "").strip()]
         quality_map = self._latest_quality_map(model_ids)
-        drift_map = self._latest_drift_snapshot_map(model_ids, metric)
+        drift_map = self._historical_drift_summary_map(model_ids, metric)
         rows: list[dict] = []
         for model in models:
             drift = drift_map.get(model["id"], {})

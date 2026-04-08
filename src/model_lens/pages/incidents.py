@@ -65,6 +65,6 @@ def layout():
                 ],
                 className="g-3 mb-4",
             ),
-            html.Div(id="incidents-page-body"),
+            dcc.Loading(type="default", children=html.Div(id="incidents-page-body")),
         ]
     )

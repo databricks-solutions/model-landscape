@@ -355,10 +355,11 @@ Expected result:
 - the monitor appears on the overview page
 - the new `Incidents` page loads without errors, even before any incidents exist
 - the `Monitor Settings` page shows the saved cadence, runtime state, and recent refresh-run history for the selected monitor
+- `Monitor Settings` is now split into `Contract`, `Settings`, and `Admin` tabs; contract/summary data should be in `Contract`, cadence/diagnostics in `Settings`, and lifecycle/runtime wiring in `Admin`
 - the `Refresh Diagnostics` section in `Monitor Settings` classifies recent runs as `Source Scan Bound`, `Daily Profiles Bound`, `Derivation Bound`, `Persistence Bound`, or `Mixed` once enough successful timed runs exist
 - the `Refresh Diagnostics` recommendations match the recorded timings rather than a generic fixed banner
 - the `Monitor Settings` page also shows recent incident lifecycle rows for that monitor when drift/performance incidents have been opened, escalated, or recovered
-- the `Monitor Settings` page also shows an `Active` / `Archived` / `All` filter plus `Archive Monitor`, `Restore Monitor`, and `Delete Monitor And History` controls; archive should hide the monitor from the active app list while keeping history, restore should bring it back without rebuilding the monitor, and delete should fully remove it after reload
+- the `Monitor Settings` page also shows an `Active` / `Archived` / `All` filter plus lifecycle controls; by default it follows the sidebar-selected monitor, old success banners clear when you switch monitors or revisit the page, active monitors show `Archive Monitor`, archived monitors show `Restore Monitor`, and `Delete Monitor And History` remains available in both states
 - once incidents exist, the `Incidents` page shows cross-monitor open incidents and recent lifecycle rows, and its monitor/severity/status/metric filters all work without reloading the app
 - after the workflow finishes, Drift and Performance should already show historical windows rather than a single snapshot
 - after the workflow finishes, Data Quality should show window-history charts instead of only the latest summary row
@@ -692,7 +693,9 @@ Run these three checks before broader customer rollout:
 Expected:
 
 - both monitor cards render
-- the page loads successfully using the bulk latest-quality/latest-drift read path in a real Databricks workspace
+- the page loads successfully using the bulk latest-quality plus historical-drift-summary read path in a real Databricks workspace
+- if one monitor had severe drift earlier but the newest window recovered, Overview still ranks that monitor by the historical max PSI instead of showing it as fully healthy
+- the page shows a loading spinner instead of blank content while the warehouse read is running
 
 ### Severe numeric drift
 
@@ -704,6 +707,7 @@ Expected:
 
 - PSI / JS / KL stay finite
 - the page shows a real severe-drift signal instead of blank output or warning-driven gaps
+- the Top N feature ranking reflects the highest historical drift across the stored windows, not only the newest window
 
 ### Same-day current-window detail
 

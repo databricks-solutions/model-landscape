@@ -14,7 +14,7 @@ PRIMARY_NAV_ITEMS = [
     {"label": "Feature Deep Dive", "icon": "fas fa-search", "href": "/features"},
     {"label": "Performance", "icon": "fas fa-tachometer-alt", "href": "/performance"},
     {"label": "Data Quality", "icon": "fas fa-database", "href": "/quality"},
-    {"label": "Reference", "icon": "fas fa-book", "href": "/reference"},
+    {"label": "Monitor Settings", "icon": "fas fa-book", "href": "/reference"},
 ]
 
 

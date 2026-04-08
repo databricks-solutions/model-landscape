@@ -80,6 +80,24 @@ def _normalize_top_n(value: object, *, default: int = 10, minimum: int = 1, maxi
     return max(minimum, min(maximum, numeric))
 
 
+def _historical_drift_feature_ranking(
+    drift: pd.DataFrame,
+    *,
+    metric: str,
+    top_n: int,
+) -> pd.DataFrame:
+    if drift.empty or "feature" not in drift.columns or metric not in drift.columns:
+        return pd.DataFrame(columns=["feature", metric])
+    working = drift[["feature", metric]].copy()
+    working[metric] = pd.to_numeric(working[metric], errors="coerce").fillna(0.0)
+    return (
+        working.groupby("feature", as_index=False)[metric]
+        .max()
+        .nlargest(top_n, metric)
+        .reset_index(drop=True)
+    )
+
+
 def _configured_run_now_permission_hint(*, workflow_kind: str = "shared") -> str:
     configured_job_id = ""
     if workflow_kind == "bootstrap":
@@ -1417,12 +1435,12 @@ def register_callbacks(app) -> None:
         Output("reference-monitor-select", "value"),
         Input("url", "pathname"),
         Input("reference-monitor-status-filter", "value"),
+        Input("global-model-select", "value"),
         Input("reload-token", "data"),
         Input("session-config-store", "data"),
-        State("global-model-select", "value"),
         State("reference-monitor-select", "value"),
     )
-    def populate_reference_model_selector(pathname, status_filter, _, session_data, global_model_id, current_value):
+    def populate_reference_model_selector(pathname, status_filter, global_model_id, _, session_data, current_value):
         if pathname != "/reference":
             return no_update, no_update
         backend = _make_backend(session_data)
@@ -1437,11 +1455,24 @@ def register_callbacks(app) -> None:
         if not options:
             return [], None
         values = {option["value"] for option in options}
-        if current_value in values:
-            return options, current_value
         if global_model_id in values:
             return options, global_model_id
+        if current_value in values:
+            return options, current_value
         return options, options[0]["value"]
+
+    @app.callback(
+        Output("reference-page-status", "children", allow_duplicate=True),
+        Input("url", "pathname"),
+        Input("global-model-select", "value"),
+        Input("reference-monitor-select", "value"),
+        Input("reference-monitor-status-filter", "value"),
+        prevent_initial_call=True,
+    )
+    def clear_reference_status(pathname, *_):
+        if pathname != "/reference":
+            return no_update
+        return html.Div()
 
     @app.callback(
         Output("sidebar-status", "children"),
@@ -1474,7 +1505,7 @@ def register_callbacks(app) -> None:
                     f"Features: {model['feature_count']} | Baseline: {model['baseline_label']}",
                     className="text-muted d-block",
                 ),
-                html.Small(f"Rows observed: {model['total_rows']}", className="text-muted d-block"),
+                html.Small(f"Monitoring rows: {model['total_rows']}", className="text-muted d-block"),
             ]
         )
         return status, badge, _deployment_mode_prompt(session_data)
@@ -2290,13 +2321,23 @@ def register_callbacks(app) -> None:
             empty = make_empty_state("No drift history available yet. Run a refresh to populate this page.", icon="fas fa-wave-square")
             return empty, html.Div(), html.Div(), html.Div()
         normalized_top_n = _normalize_top_n(top_n, default=10, minimum=5, maximum=50)
-        latest = drift[drift["period"] == drift["period"].max()].nlargest(normalized_top_n, metric or "psi")
+        ranked_features = _historical_drift_feature_ranking(
+            drift,
+            metric=metric or "psi",
+            top_n=normalized_top_n,
+        )
         thresholds = dict(zip(("warning", "critical"), get_thresholds(metric or "psi")))
         notes: list[object] = []
         period_count = int(drift["period"].nunique()) if "period" in drift.columns else 0
         history_message = _comparison_history_message(period_count, granularity or "daily")
         if history_message:
             notes.append(_status_alert(history_message, "info"))
+        notes.append(
+            _status_alert(
+                f"Top features are ranked by the highest historical {(metric or 'psi').upper()} across comparison windows.",
+                "secondary",
+            )
+        )
         if config and config.contract.categorical_columns:
             notes.append(
                 _status_alert(
@@ -2304,7 +2345,7 @@ def register_callbacks(app) -> None:
                     "secondary",
                 )
             )
-        timeline_features = latest["feature"].tolist() if "feature" in latest.columns else []
+        timeline_features = ranked_features["feature"].tolist() if "feature" in ranked_features.columns else []
         if not timeline_features and "feature" in drift.columns:
             timeline_features = drift["feature"].dropna().astype(str).drop_duplicates().tolist()[:8]
         return (
@@ -2394,7 +2435,14 @@ def register_callbacks(app) -> None:
         null_rate_history = backend.get_null_rate_history(model_id)
         history_note = _comparison_history_message(len(quality_history), "daily")
         kpis = [
-            dbc.Col(make_metric_card("Rows", f"{quality['total_rows']:,}", "Observed rows"), md=3),
+            dbc.Col(
+                make_metric_card(
+                    "Monitoring Rows",
+                    f"{quality['total_rows']:,}",
+                    "Rows covered by persisted monitoring history",
+                ),
+                md=3,
+            ),
             dbc.Col(make_metric_card("From", quality["min_date"] or "—", "Earliest data"), md=3),
             dbc.Col(make_metric_card("To", quality["max_date"] or "—", "Latest data"), md=3),
             dbc.Col(make_metric_card("Prediction Mean", f"{quality['prediction_mean']:.4f}", "Latest snapshot"), md=3),
@@ -2518,12 +2566,20 @@ def register_callbacks(app) -> None:
         feature_values = {option["value"] for option in feature_options}
         selected_feature = current_feature if current_feature in feature_values else (feature_options[0]["value"] if feature_options else None)
         degradation_detected = bool(performance.get("has_significant_degradation"))
-        alert = html.Div()
-        if not degradation_detected:
-            alert = _status_alert(
-                "Performance metrics are populated, but no significant degradation is detected in the latest window.",
-                "info",
+        alert_children: list[object] = [
+            html.Small(
+                f"Viewing metric: {performance_metric_label(resolved_metric)}",
+                className="text-muted d-block mb-2",
             )
+        ]
+        if not degradation_detected:
+            alert_children.append(
+                _status_alert(
+                    "Performance metrics are populated, but no significant degradation is detected in the latest window.",
+                    "info",
+                )
+            )
+        alert = html.Div(alert_children)
         latest_bin_table = pd.DataFrame()
         if not feature_frame.empty:
             latest_bin_table = feature_frame[
@@ -2619,15 +2675,7 @@ def register_callbacks(app) -> None:
         Input("reload-token", "data"),
         Input("session-config-store", "data"),
     )
-    def render_reference(pathname, global_model_id, *args):
-        if len(args) == 3:
-            reference_model_id, _, session_data = args
-        elif len(args) == 2:
-            reference_model_id = None
-            _, session_data = args
-        else:
-            reference_model_id = None
-            session_data = None
+    def render_reference(pathname, global_model_id, reference_model_id, _, session_data):
         if pathname != "/reference":
             return no_update
         backend = _make_backend(session_data)
@@ -2792,6 +2840,70 @@ def register_callbacks(app) -> None:
         else:
             refresh_job_wiring_text += " Bootstrap and backfill triggers use the shared refresh workflow by default."
         show_bootstrap_retry = config_status == "active" and str(runtime_state.get("bootstrap_status") or "pending") != "completed"
+        lifecycle_buttons: list[dbc.Col] = []
+        if config_status == "active":
+            lifecycle_buttons.append(
+                dbc.Col(
+                    dbc.Button(
+                        "Archive Monitor",
+                        id="reference-archive-monitor-btn",
+                        color="warning",
+                        outline=True,
+                        className="w-100",
+                    ),
+                    md=4,
+                )
+            )
+        if config_status == "inactive":
+            lifecycle_buttons.append(
+                dbc.Col(
+                    dbc.Button(
+                        "Restore Monitor",
+                        id="reference-restore-monitor-btn",
+                        color="success",
+                        outline=True,
+                        className="w-100",
+                    ),
+                    md=4,
+                )
+            )
+        lifecycle_buttons.append(
+            dbc.Col(
+                dbc.Button(
+                    "Delete Monitor And History",
+                    id="reference-delete-monitor-btn",
+                    color="danger",
+                    outline=True,
+                    className="w-100",
+                ),
+                md=4,
+            )
+        )
+        archive_modal = (
+            dbc.Modal(
+                [
+                    dbc.ModalHeader(dbc.ModalTitle("Archive Monitor")),
+                    dbc.ModalBody(
+                        [
+                            html.P(
+                                f"Archive {config.display_name} ({config.model_key})? Scheduled refreshes will stop, but stored history will be kept.",
+                                className="mb-0",
+                            )
+                        ]
+                    ),
+                    dbc.ModalFooter(
+                        [
+                            dbc.Button("Cancel", id="reference-archive-cancel-btn", color="secondary", outline=True),
+                            dbc.Button("Archive", id="reference-archive-confirm-btn", color="warning"),
+                        ]
+                    ),
+                ],
+                id="reference-archive-modal",
+                is_open=False,
+            )
+            if config_status == "active"
+            else None
+        )
         schedule_card = dbc.Card(
             dbc.CardBody(
                 [
@@ -2911,63 +3023,10 @@ def register_callbacks(app) -> None:
                         className="text-muted mb-3",
                     ),
                     dbc.Row(
-                        [
-                            dbc.Col(
-                                dbc.Button(
-                                    "Archive Monitor",
-                                    id="reference-archive-monitor-btn",
-                                    color="warning",
-                                    outline=True,
-                                    className="w-100",
-                                    disabled=config_status != "active",
-                                ),
-                                md=4,
-                            ),
-                            dbc.Col(
-                                dbc.Button(
-                                    "Restore Monitor",
-                                    id="reference-restore-monitor-btn",
-                                    color="success",
-                                    outline=True,
-                                    className="w-100",
-                                    disabled=config_status != "inactive",
-                                ),
-                                md=4,
-                            ),
-                            dbc.Col(
-                                dbc.Button(
-                                    "Delete Monitor And History",
-                                    id="reference-delete-monitor-btn",
-                                    color="danger",
-                                    outline=True,
-                                    className="w-100",
-                                ),
-                                md=4,
-                            ),
-                        ],
+                        lifecycle_buttons,
                         className="g-3",
                     ),
-                    dbc.Modal(
-                        [
-                            dbc.ModalHeader(dbc.ModalTitle("Archive Monitor")),
-                            dbc.ModalBody(
-                                [
-                                    html.P(
-                                        f"Archive {config.display_name} ({config.model_key})? Scheduled refreshes will stop, but stored history will be kept.",
-                                        className="mb-0",
-                                    )
-                                ]
-                            ),
-                            dbc.ModalFooter(
-                                [
-                                    dbc.Button("Cancel", id="reference-archive-cancel-btn", color="secondary", outline=True),
-                                    dbc.Button("Archive", id="reference-archive-confirm-btn", color="warning"),
-                                ]
-                            ),
-                        ],
-                        id="reference-archive-modal",
-                        is_open=False,
-                    ),
+                    archive_modal,
                     dbc.Modal(
                         [
                             dbc.ModalHeader(dbc.ModalTitle("Delete Monitor And History")),
@@ -2998,20 +3057,26 @@ def register_callbacks(app) -> None:
             ),
             className="mb-4",
         )
-        return html.Div(
+        contract_tab = html.Div(
             [
                 html.P(
-                    f"Showing contract and latest summary for the currently selected monitor: {config.display_name} ({config.model_key}, {config_status}). Runtime settings are global to the app.",
+                    "Read-only contract details and the latest persisted summary for the selected monitor.",
                     className="text-muted mb-3",
                 ),
-                schedule_card,
-                lifecycle_card,
                 html.H6("Monitor Contract", className="text-light mb-2"),
                 _render_frame(contract_frame, "No contract data."),
                 html.Hr(),
                 html.H6("Latest Summary", className="text-light mb-2"),
                 _render_frame(summary_frame, "No summary data."),
-                html.Hr(),
+            ]
+        )
+        settings_tab = html.Div(
+            [
+                html.P(
+                    "Update cadence and metrics here, then review runtime state and recent refresh performance.",
+                    className="text-muted mb-3",
+                ),
+                schedule_card,
                 html.H6("Runtime State", className="text-light mb-2"),
                 _render_frame(runtime_frame, "No runtime state yet."),
                 html.Hr(),
@@ -3020,7 +3085,15 @@ def register_callbacks(app) -> None:
                 html.Hr(),
                 html.H6("Recent Refresh Runs", className="text-light mb-2"),
                 _render_frame(recent_runs_frame, "No refresh runs recorded yet."),
-                html.Hr(),
+            ]
+        )
+        admin_tab = html.Div(
+            [
+                html.P(
+                    "Use this tab for lifecycle actions, refresh retries, and workspace wiring details.",
+                    className="text-muted mb-3",
+                ),
+                lifecycle_card,
                 html.H6("Recent Incident History", className="text-light mb-2"),
                 _render_frame(recent_incident_history_frame, "No incident history recorded yet."),
                 html.Hr(),
@@ -3030,6 +3103,24 @@ def register_callbacks(app) -> None:
                     className="text-muted mb-2",
                 ),
                 _render_frame(settings_frame, "No runtime settings."),
+            ]
+        )
+        return html.Div(
+            [
+                html.P(
+                    f"Selected monitor: {config.display_name} ({config.model_key}, {config_status}). Use the tabs below to move between contract details, editable settings, and admin actions.",
+                    className="text-muted mb-3",
+                ),
+                dbc.Tabs(
+                    [
+                        dbc.Tab(contract_tab, label="Contract", tab_id="reference-contract-tab"),
+                        dbc.Tab(settings_tab, label="Settings", tab_id="reference-settings-tab"),
+                        dbc.Tab(admin_tab, label="Admin", tab_id="reference-admin-tab"),
+                    ],
+                    id="reference-sections-tabs",
+                    active_tab="reference-contract-tab",
+                    className="mb-3",
+                ),
             ]
         )
 

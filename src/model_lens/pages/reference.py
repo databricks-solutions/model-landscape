@@ -7,16 +7,16 @@ from dash import dcc, html
 def layout():
     return html.Div(
         [
-            html.H4("Reference", className="text-light mb-1"),
+            html.H4("Monitor Settings", className="text-light mb-1"),
             html.P(
-                "Current monitor contract and latest summary for the selected model, plus global runtime settings.",
+                "Review the selected model contract, update monitoring settings, and manage lifecycle actions.",
                 className="text-muted",
             ),
             dbc.Row(
                 [
                     dbc.Col(
                         [
-                            dbc.Label("Reference Filter"),
+                            dbc.Label("Status"),
                             dbc.Select(
                                 id="reference-monitor-status-filter",
                                 options=[
@@ -31,7 +31,7 @@ def layout():
                     ),
                     dbc.Col(
                         [
-                            dbc.Label("Reference Monitor"),
+                            dbc.Label("Monitor"),
                             dcc.Dropdown(id="reference-monitor-select", placeholder="Select monitor..."),
                         ],
                         md=9,
@@ -40,6 +40,6 @@ def layout():
                 className="g-3 mb-3",
             ),
             html.Div(id="reference-page-status", className="mb-3"),
-            html.Div(id="reference-page-body"),
+            dcc.Loading(type="default", children=html.Div(id="reference-page-body")),
         ]
     )

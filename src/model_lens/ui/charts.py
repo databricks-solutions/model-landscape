@@ -131,7 +131,13 @@ def build_top_drifters_bar(df: pd.DataFrame, metric: str = "psi", top_n: int = 1
         fig.add_annotation(text="No drift data available", showarrow=False)
         return _apply_layout(fig, title="Top Drifting Features")
 
-    latest = df[df["period"] == df["period"].max()].nlargest(top_n, metric)
+    working = df[["feature", metric]].copy()
+    working[metric] = pd.to_numeric(working[metric], errors="coerce").fillna(0.0)
+    latest = (
+        working.groupby("feature", as_index=False)[metric]
+        .max()
+        .nlargest(top_n, metric)
+    )
     colors = [
         COLORS["high"] if value > 0.2 else COLORS["moderate"] if value > 0.1 else COLORS["low"]
         for value in latest[metric]
@@ -147,7 +153,7 @@ def build_top_drifters_bar(df: pd.DataFrame, metric: str = "psi", top_n: int = 1
     )
     return _apply_layout(
         fig,
-        title=f"Top {top_n} Drifting Features (Latest Period)",
+        title=f"Top {top_n} Drifting Features (Historical Max)",
         xaxis_title=metric.upper(),
         yaxis=dict(autorange="reversed", gridcolor=COLORS["grid"]),
         height=max(300, top_n * 35 + 80),

@@ -63,13 +63,20 @@ def layout():
                 ],
                 className="mb-4",
             ),
-            html.Div(id="drift-heatmap-container", className="mb-3"),
-            html.Div(id="drift-categorical-note", className="mb-3"),
-            dbc.Row(
-                [
-                    dbc.Col(html.Div(id="drift-timeline-container"), md=7),
-                    dbc.Col(html.Div(id="drift-top-drifters-container"), md=5),
-                ]
+            dcc.Loading(
+                type="default",
+                children=html.Div(
+                    [
+                        html.Div(id="drift-heatmap-container", className="mb-3"),
+                        html.Div(id="drift-categorical-note", className="mb-3"),
+                        dbc.Row(
+                            [
+                                dbc.Col(html.Div(id="drift-timeline-container"), md=7),
+                                dbc.Col(html.Div(id="drift-top-drifters-container"), md=5),
+                            ]
+                        ),
+                    ]
+                ),
             ),
         ]
     )
