@@ -1,4 +1,4 @@
-from model_lens.services.contracts import build_contract
+from model_lens.services.inference_contracts import build_inference_contract as build_contract
 
 
 def test_build_contract_preserves_full_feature_list() -> None:

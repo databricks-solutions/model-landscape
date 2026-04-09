@@ -16,12 +16,14 @@ from model_lens.analytics.drift import (
 )
 from model_lens.analytics.performance import (
     compute_bin_edges,
+    compute_daily_classification_metrics,
     compute_classification_metrics,
     compute_regression_metrics,
     rank_degradation_contributors,
 )
 from model_lens.domain.models import BaselinePolicy, MonitorConfig, RefreshResult
 from model_lens.domain.performance_metrics import default_performance_metric_names
+from model_lens.services.class_filters import supports_binary_class_filters
 from model_lens.services.incidents import build_incident_history, build_incidents
 
 
@@ -736,6 +738,18 @@ def _aggregate_performance_metric_rows(rows: list[dict[str, Any]]) -> dict[tuple
     return totals
 
 
+def _class_mask(day_frame: pd.DataFrame, class_basis: str, class_value: str, prediction_col: str, label_col: str) -> pd.Series:
+    if class_basis == "predicted":
+        predictions = pd.to_numeric(day_frame[prediction_col], errors="coerce")
+        if class_value == "positive":
+            return predictions >= 0.5
+        return predictions < 0.5
+    labels = pd.to_numeric(day_frame[label_col], errors="coerce")
+    if class_value == "positive":
+        return labels == 1
+    return labels == 0
+
+
 def build_performance_bin_specs(
     *,
     config: MonitorConfig,
@@ -856,6 +870,43 @@ def build_daily_quality_profile_rows(
     return rows
 
 
+def build_daily_class_quality_profile_rows(
+    *,
+    config: MonitorConfig,
+    inference_df: pd.DataFrame,
+    computed_at: str,
+) -> list[dict[str, Any]]:
+    if not supports_binary_class_filters(config) or not config.contract.label_col:
+        return []
+    rows: list[dict[str, Any]] = []
+    label_col = config.contract.label_col
+    prediction_col = config.contract.prediction_col
+    for profile_date, day_frame in _daily_profile_groups(inference_df, config.contract.timestamp_col):
+        for class_basis in ("actual", "predicted"):
+            for class_value in ("positive", "negative"):
+                mask = _class_mask(day_frame, class_basis, class_value, prediction_col, label_col)
+                filtered = day_frame[mask.fillna(False)]
+                if filtered.empty:
+                    continue
+                rows.append({
+                    "model_key": config.model_key,
+                    "profile_date": profile_date,
+                    "class_basis": class_basis,
+                    "class_value": class_value,
+                    "row_count": int(len(filtered)),
+                    "prediction_mean": _safe_float(pd.to_numeric(filtered[prediction_col], errors="coerce").mean()),
+                    "prediction_std": _safe_float(pd.to_numeric(filtered[prediction_col], errors="coerce").std()),
+                    "null_rates": json.dumps({
+                        feature: round(float(filtered[feature].isna().mean() * 100), 2)
+                        for feature in config.contract.feature_columns
+                        if feature in filtered.columns
+                    }),
+                    "label_row_count": int(filtered[label_col].notna().sum()),
+                    "computed_at": computed_at,
+                })
+    return rows
+
+
 def build_daily_feature_profile_rows(
     *,
     config: MonitorConfig,
@@ -904,6 +955,102 @@ def build_daily_feature_profile_rows(
                 "distribution_json": _serialize_numeric_distribution(numeric),
                 "computed_at": computed_at,
             })
+    return rows
+
+
+def build_daily_class_feature_profile_rows(
+    *,
+    config: MonitorConfig,
+    inference_df: pd.DataFrame,
+    computed_at: str,
+) -> list[dict[str, Any]]:
+    if not supports_binary_class_filters(config) or not config.contract.label_col:
+        return []
+    rows: list[dict[str, Any]] = []
+    categorical_set = set(config.contract.categorical_columns)
+    label_col = config.contract.label_col
+    prediction_col = config.contract.prediction_col
+    for profile_date, day_frame in _daily_profile_groups(inference_df, config.contract.timestamp_col):
+        for class_basis in ("actual", "predicted"):
+            for class_value in ("positive", "negative"):
+                mask = _class_mask(day_frame, class_basis, class_value, prediction_col, label_col)
+                filtered = day_frame[mask.fillna(False)]
+                if filtered.empty:
+                    continue
+                for feature in config.contract.feature_columns:
+                    if feature not in filtered.columns:
+                        continue
+                    series = filtered[feature]
+                    row_count = int(len(series))
+                    feature_kind = "categorical" if feature in categorical_set else "numeric"
+                    if feature_kind == "categorical":
+                        rows.append({
+                            "model_key": config.model_key,
+                            "profile_date": profile_date,
+                            "class_basis": class_basis,
+                            "class_value": class_value,
+                            "feature_name": feature,
+                            "feature_kind": feature_kind,
+                            "row_count": row_count,
+                            "non_null_count": int(series.notna().sum()),
+                            "null_pct": round(float(series.isna().mean() * 100), 2) if row_count else 0.0,
+                            "mean": None,
+                            "std": None,
+                            "min_value": None,
+                            "max_value": None,
+                            "distribution_json": _serialize_categorical_distribution(series),
+                            "computed_at": computed_at,
+                        })
+                        continue
+                    numeric = pd.to_numeric(series, errors="coerce")
+                    rows.append({
+                        "model_key": config.model_key,
+                        "profile_date": profile_date,
+                        "class_basis": class_basis,
+                        "class_value": class_value,
+                        "feature_name": feature,
+                        "feature_kind": feature_kind,
+                        "row_count": row_count,
+                        "non_null_count": int(numeric.notna().sum()),
+                        "null_pct": round(float(numeric.isna().mean() * 100), 2) if row_count else 0.0,
+                        "mean": _safe_float(numeric.mean()),
+                        "std": _safe_float(numeric.std()),
+                        "min_value": _safe_float(numeric.min()),
+                        "max_value": _safe_float(numeric.max()),
+                        "distribution_json": _serialize_numeric_distribution(numeric),
+                        "computed_at": computed_at,
+                    })
+    return rows
+
+
+def build_daily_label_metric_rows(
+    *,
+    config: MonitorConfig,
+    inference_df: pd.DataFrame,
+    computed_at: str,
+) -> list[dict[str, Any]]:
+    if not supports_binary_class_filters(config) or not config.contract.label_col:
+        return []
+    rows: list[dict[str, Any]] = []
+    for profile_date, day_frame in _daily_profile_groups(inference_df, config.contract.timestamp_col):
+        metrics = compute_daily_classification_metrics(day_frame, config.contract.prediction_col, config.contract.label_col)
+        rows.append({
+            "model_key": config.model_key,
+            "profile_date": profile_date,
+            "actual_positive_count": int(metrics["actual_positive_count"] or 0),
+            "actual_negative_count": int(metrics["actual_negative_count"] or 0),
+            "predicted_positive_count": int(metrics["predicted_positive_count"] or 0),
+            "predicted_negative_count": int(metrics["predicted_negative_count"] or 0),
+            "tp": int(metrics["tp"] or 0),
+            "fp": int(metrics["fp"] or 0),
+            "fn": int(metrics["fn"] or 0),
+            "tn": int(metrics["tn"] or 0),
+            "precision": metrics["precision"],
+            "recall": metrics["recall"],
+            "f1": metrics["f1"],
+            "accuracy": metrics["accuracy"],
+            "computed_at": computed_at,
+        })
     return rows
 
 
@@ -1125,6 +1272,9 @@ def derive_refresh_result_from_daily_profiles(
     daily_quality_profile_rows: list[dict[str, Any]],
     daily_feature_profile_rows: list[dict[str, Any]],
     daily_performance_profile_rows: list[dict[str, Any]],
+    daily_class_quality_profile_rows: list[dict[str, Any]] | None = None,
+    daily_class_feature_profile_rows: list[dict[str, Any]] | None = None,
+    daily_label_metric_rows: list[dict[str, Any]] | None = None,
     computed_at: str,
     prior_open_incidents: dict[tuple[str, str, str], dict[str, Any]] | None = None,
     include_drift_quality: bool = True,
@@ -1182,6 +1332,9 @@ def derive_refresh_result_from_daily_profiles(
         incident_history_rows=incident_history_rows,
         quality_history_rows=quality_history_rows,
         window_rows=window_rows,
+        daily_class_quality_profile_rows=list(daily_class_quality_profile_rows or []),
+        daily_class_feature_profile_rows=list(daily_class_feature_profile_rows or []),
+        daily_label_metric_rows=list(daily_label_metric_rows or []),
     )
 
 
@@ -1269,39 +1422,4 @@ def refresh_monitor_window_frames(
         incident_history_rows=[],
         quality_history_rows=quality_history_rows,
         window_rows=window_rows,
-    )
-
-
-def refresh_monitor_window(
-    config: MonitorConfig,
-    inference_df: pd.DataFrame,
-    metadata: dict[str, str],
-    *,
-    include_drift_quality: bool = True,
-    include_performance: bool = True,
-) -> RefreshResult:
-    ordered = prepare_window_frame(inference_df, config.contract.timestamp_col)
-    if ordered.empty:
-        return RefreshResult(
-            drift_rows=[],
-            quality_rows=[],
-            performance_rows=[],
-            incident_rows=[],
-            incident_history_rows=[],
-            quality_history_rows=[],
-            window_rows=[],
-        )
-
-    baseline_df, current_df = slice_window_pair(
-        ordered,
-        timestamp_col=config.contract.timestamp_col,
-        metadata=metadata,
-    )
-    return refresh_monitor_window_frames(
-        config,
-        baseline_df,
-        current_df,
-        metadata,
-        include_drift_quality=include_drift_quality,
-        include_performance=include_performance,
     )

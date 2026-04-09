@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from types import SimpleNamespace
 from uuid import uuid4
 
 from model_lens.config import settings
@@ -616,7 +615,3 @@ def _workspace_client():
     from databricks.sdk import WorkspaceClient
 
     return WorkspaceClient()
-
-
-def make_fake_run_response(run_id: int | None) -> SimpleNamespace:
-    return SimpleNamespace(response=SimpleNamespace(run_id=run_id))

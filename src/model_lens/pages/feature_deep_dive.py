@@ -40,6 +40,73 @@ def layout():
                 ],
                 className="mb-4",
             ),
+            dbc.Row(
+                [
+                    dbc.Col(
+                        [
+                            dbc.Label("Binning Mode", className="text-muted"),
+                            dbc.Select(
+                                id="deepdive-binning-mode-select",
+                                options=[
+                                    {"label": "Auto", "value": "auto"},
+                                    {"label": "Fixed Bin Count", "value": "fixed"},
+                                    {"label": "Custom Edges", "value": "custom"},
+                                ],
+                                value="auto",
+                                style=DROPDOWN_STYLE,
+                            ),
+                        ],
+                        md=3,
+                    ),
+                    dbc.Col(
+                        [
+                            dbc.Label("Bin Count", className="text-muted"),
+                            dbc.Input(id="deepdive-bin-count-input", type="number", min=2, max=200, step=1, value=40),
+                        ],
+                        md=2,
+                    ),
+                    dbc.Col(
+                        [
+                            dbc.Label("Custom Bin Edges", className="text-muted"),
+                            dbc.Input(
+                                id="deepdive-custom-edges-input",
+                                type="text",
+                                placeholder="e.g. 0, 10, 20, 50",
+                            ),
+                        ],
+                        md=4,
+                    ),
+                    dbc.Col(
+                        [
+                            dbc.Label("Outlier Trim", className="text-muted"),
+                            dbc.Select(
+                                id="deepdive-trim-toggle",
+                                options=[
+                                    {"label": "Off", "value": "off"},
+                                    {"label": "On", "value": "on"},
+                                ],
+                                value="off",
+                                style=DROPDOWN_STYLE,
+                            ),
+                        ],
+                        md=3,
+                    ),
+                ],
+                className="mb-3",
+            ),
+            dbc.Row(
+                [
+                    dbc.Col(
+                        [
+                            dbc.Label("Trim Percentile P", className="text-muted"),
+                            dbc.Input(id="deepdive-trim-percentile-input", type="number", min=0, max=49, step=0.5, value=1.0),
+                            html.Small("Applies percentile clipping at P / 100-P when trim is on.", className="text-muted"),
+                        ],
+                        md=3,
+                    ),
+                ],
+                className="mb-4",
+            ),
             dcc.Loading(
                 type="default",
                 children=html.Div(

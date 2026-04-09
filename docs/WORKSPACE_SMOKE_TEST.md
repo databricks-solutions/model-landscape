@@ -364,6 +364,13 @@ Expected result:
 - once incidents exist, the `Incidents` page shows cross-monitor open incidents and recent lifecycle rows, and its monitor/severity/status/metric filters all work without reloading the app
 - after the workflow finishes, Drift and Performance should already show historical windows rather than a single snapshot
 - after the workflow finishes, Data Quality should show window-history charts instead of only the latest summary row
+- Drift should expose `Start Date`, `End Date`, `Class Basis`, and `Class Value` controls; for binary classification monitors, selecting a class filter after at least one new refresh should change the heatmap/top-feature set without rescanning the raw source table
+- Data Quality should expose the same date-range and binary-class controls; after at least one new refresh, class-filtered quality history should render instead of silently falling back to the unfiltered monitor-wide history
+- if you apply a class filter before the workspace has run a refresh on the new build, the page should explain that filtered history is unavailable until the next refresh populates the class-aware daily facts
+- Drift chart titles should include the active granularity and any active filters, and very small drift values should switch to scientific notation instead of collapsing into unreadable `0.0000` labels
+- Performance should now plot raw daily metrics from persisted `daily_label_metrics`; if a day has undefined `precision`, `recall`, or `f1`, the timeline should show a gap rather than a forced zero
+- Feature Deep Dive should now show `Binning Mode`, optional custom edges, and percentile clipping controls; when custom edges or clipping require exact samples, the page should either use a bounded raw-window read or explain that exact-sample detail is unavailable
+- Data Quality's lower-right chart should now be `Latest Window Class Mix` for binary classification monitors instead of the old prediction-distribution chart
 - with the scratch dataset and `Baseline Days = 7`, you should have 8 daily comparison windows immediately
 - for very large real-world tables, the first run should use one exact bounded Spark source-range load per monitor scope, persist daily facts and affected derived windows through Spark/Delta writes, and reserve the configured sampling caps for UI/detail fallbacks rather than core refresh correctness
 - for multi-monitor tenants, the shared job should still avoid two scopes for the same model in one scheduler pass; the Spark refresh repository now defaults to serial monitor execution inside the driver unless you deliberately override the worker cap for that workspace

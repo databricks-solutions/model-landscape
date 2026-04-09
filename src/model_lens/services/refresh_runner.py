@@ -11,6 +11,9 @@ from model_lens.config import settings
 from model_lens.domain.models import MonitorConfig, MonitorRuntimeState, RefreshResult
 from model_lens.services.control_plane import ControlPlaneRepository
 from model_lens.services.refresh_engine import (
+    build_daily_class_feature_profile_rows,
+    build_daily_class_quality_profile_rows,
+    build_daily_label_metric_rows,
     build_daily_feature_profile_rows,
     build_daily_performance_profile_rows,
     build_daily_quality_profile_rows,
@@ -103,18 +106,6 @@ def _frame_date_range(frame: pd.DataFrame, timestamp_col: str) -> tuple[str | No
     if timestamps.empty:
         return None, None
     return str(timestamps.min().date()), str(timestamps.max().date())
-
-
-def _window_keys(pairs: list[tuple[object, object, dict[str, str]]]) -> set[tuple[str, str, str, str]]:
-    return {
-        (
-            metadata["baseline_start"],
-            metadata["baseline_end"],
-            metadata["window_start"],
-            metadata["window_end"],
-        )
-        for _, _, metadata in pairs
-    }
 
 
 def _drift_cadence_delta(preset: str) -> timedelta | None:
@@ -812,7 +803,14 @@ def _build_range_daily_profiles(
     include_drift_quality: bool,
     include_performance: bool,
     existing_bin_specs: dict[str, tuple[float, ...]] | None = None,
-) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]], dict[str, tuple[float, ...]]]:
+) -> tuple[
+    list[dict[str, object]],
+    list[dict[str, object]],
+    list[dict[str, object]],
+    list[dict[str, object]],
+    list[dict[str, object]],
+    dict[str, tuple[float, ...]],
+]:
     if hasattr(repository, "build_daily_profiles"):
         spark_profiles = repository.build_daily_profiles(
             config,
@@ -826,8 +824,11 @@ def _build_range_daily_profiles(
         if isinstance(spark_profiles, SparkDailyProfiles):
             return (
                 list(spark_profiles.daily_quality_profile_rows),
+                list(spark_profiles.daily_class_quality_profile_rows),
                 list(spark_profiles.daily_feature_profile_rows),
+                list(spark_profiles.daily_class_feature_profile_rows),
                 list(spark_profiles.daily_performance_profile_rows),
+                list(spark_profiles.daily_label_metric_rows),
                 dict(spark_profiles.performance_bin_specs),
             )
     range_frame = _load_window_frame(
@@ -841,8 +842,18 @@ def _build_range_daily_profiles(
         if include_drift_quality
         else []
     )
+    daily_class_quality_profile_rows = (
+        build_daily_class_quality_profile_rows(config=config, inference_df=range_frame, computed_at=computed_at)
+        if include_drift_quality
+        else []
+    )
     daily_feature_profile_rows = (
         build_daily_feature_profile_rows(config=config, inference_df=range_frame, computed_at=computed_at)
+        if include_drift_quality
+        else []
+    )
+    daily_class_feature_profile_rows = (
+        build_daily_class_feature_profile_rows(config=config, inference_df=range_frame, computed_at=computed_at)
         if include_drift_quality
         else []
     )
@@ -865,10 +876,18 @@ def _build_range_daily_profiles(
         if include_performance
         else []
     )
+    daily_label_metric_rows = (
+        build_daily_label_metric_rows(config=config, inference_df=range_frame, computed_at=computed_at)
+        if include_performance
+        else []
+    )
     return (
         daily_quality_profile_rows,
+        daily_class_quality_profile_rows,
         daily_feature_profile_rows,
+        daily_class_feature_profile_rows,
         daily_performance_profile_rows,
+        daily_label_metric_rows,
         performance_bin_specs,
     )
 
@@ -1057,8 +1076,11 @@ def _execute_target(
         )
         (
             daily_quality_profile_rows,
+            daily_class_quality_profile_rows,
             daily_feature_profile_rows,
+            daily_class_feature_profile_rows,
             daily_performance_profile_rows,
+            daily_label_metric_rows,
             performance_bin_specs,
         ) = _build_range_daily_profiles(
             repository,
@@ -1083,8 +1105,11 @@ def _execute_target(
                 config=config,
                 metadata_list=metadata_list,
                 current_daily_quality_profile_rows=daily_quality_profile_rows,
+                current_daily_class_quality_profile_rows=daily_class_quality_profile_rows,
                 current_daily_feature_profile_rows=daily_feature_profile_rows,
+                current_daily_class_feature_profile_rows=daily_class_feature_profile_rows,
                 current_daily_performance_profile_rows=daily_performance_profile_rows,
+                current_daily_label_metric_rows=daily_label_metric_rows,
                 derivation_start=derivation_start,
                 derivation_end=derivation_end,
                 computed_at=computed_at_text,
@@ -1124,6 +1149,9 @@ def _execute_target(
                 daily_quality_profile_rows=merged_daily_quality_rows,
                 daily_feature_profile_rows=merged_daily_feature_rows,
                 daily_performance_profile_rows=merged_daily_performance_rows,
+                daily_class_quality_profile_rows=daily_class_quality_profile_rows,
+                daily_class_feature_profile_rows=daily_class_feature_profile_rows,
+                daily_label_metric_rows=daily_label_metric_rows,
                 computed_at=computed_at_text,
                 prior_open_incidents=repository.get_current_incident_state(config.model_key),
                 include_drift_quality=include_drift_quality,

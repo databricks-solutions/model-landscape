@@ -3,6 +3,10 @@ from types import SimpleNamespace
 from model_lens.services import refresh_jobs
 
 
+def _fake_run_response(run_id: int | None) -> SimpleNamespace:
+    return SimpleNamespace(response=SimpleNamespace(run_id=run_id))
+
+
 def test_build_refresh_job_named_params_uses_namespace_and_model_key(monkeypatch) -> None:
     monkeypatch.setattr(
         refresh_jobs,
@@ -84,7 +88,7 @@ def test_trigger_refresh_job_uses_configured_job_id(monkeypatch) -> None:
 
         def run_now(self, **kwargs):
             self.run_call = kwargs
-            return refresh_jobs.make_fake_run_response(999)
+            return _fake_run_response(999)
 
     fake_jobs = FakeJobs()
     fake_workspace = SimpleNamespace(jobs=fake_jobs)
@@ -129,7 +133,7 @@ def test_trigger_refresh_job_uses_separate_bootstrap_job_when_configured(monkeyp
 
         def run_now(self, **kwargs):
             self.run_call = kwargs
-            return refresh_jobs.make_fake_run_response(222)
+            return _fake_run_response(222)
 
     fake_jobs = FakeJobs()
     fake_workspace = SimpleNamespace(jobs=fake_jobs)
@@ -175,7 +179,7 @@ def test_trigger_refresh_job_falls_back_to_named_lookup(monkeypatch) -> None:
 
         def run_now(self, **kwargs):
             self.run_call = kwargs
-            return refresh_jobs.make_fake_run_response(111)
+            return _fake_run_response(111)
 
     fake_jobs = FakeJobs()
     fake_workspace = SimpleNamespace(jobs=fake_jobs)
@@ -223,7 +227,7 @@ def test_trigger_refresh_job_resolves_dab_prefixed_name_by_suffix(monkeypatch) -
 
         def run_now(self, **kwargs):
             self.run_call = kwargs
-            return refresh_jobs.make_fake_run_response(333)
+            return _fake_run_response(333)
 
     fake_jobs = FakeJobs()
     fake_workspace = SimpleNamespace(jobs=fake_jobs)
@@ -277,7 +281,7 @@ def test_trigger_refresh_job_falls_back_to_substring_match(monkeypatch) -> None:
 
         def run_now(self, **kwargs):
             self.run_call = kwargs
-            return refresh_jobs.make_fake_run_response(444)
+            return _fake_run_response(444)
 
     fake_jobs = FakeJobs()
     fake_workspace = SimpleNamespace(jobs=fake_jobs)

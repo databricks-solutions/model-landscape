@@ -168,10 +168,45 @@ def ddl(table_names: TableNames) -> dict[str, str]:
                 source_run_id STRING
             ) USING DELTA
         """.strip(),
+        "daily_class_quality_profiles": f"""
+            CREATE TABLE IF NOT EXISTS {table_names.daily_class_quality_profiles} (
+                model_key STRING,
+                profile_date DATE,
+                class_basis STRING,
+                class_value STRING,
+                row_count BIGINT,
+                prediction_mean DOUBLE,
+                prediction_std DOUBLE,
+                null_rates STRING,
+                label_row_count BIGINT,
+                computed_at TIMESTAMP,
+                source_run_id STRING
+            ) USING DELTA
+        """.strip(),
         "daily_feature_profiles": f"""
             CREATE TABLE IF NOT EXISTS {table_names.daily_feature_profiles} (
                 model_key STRING,
                 profile_date DATE,
+                feature_name STRING,
+                feature_kind STRING,
+                row_count BIGINT,
+                non_null_count BIGINT,
+                null_pct DOUBLE,
+                mean DOUBLE,
+                std DOUBLE,
+                min_value DOUBLE,
+                max_value DOUBLE,
+                distribution_json STRING,
+                computed_at TIMESTAMP,
+                source_run_id STRING
+            ) USING DELTA
+        """.strip(),
+        "daily_class_feature_profiles": f"""
+            CREATE TABLE IF NOT EXISTS {table_names.daily_class_feature_profiles} (
+                model_key STRING,
+                profile_date DATE,
+                class_basis STRING,
+                class_value STRING,
                 feature_name STRING,
                 feature_kind STRING,
                 row_count BIGINT,
@@ -213,6 +248,26 @@ def ddl(table_names: TableNames) -> dict[str, str]:
                 metric_value DOUBLE,
                 row_count BIGINT,
                 volume_pct DOUBLE,
+                computed_at TIMESTAMP,
+                source_run_id STRING
+            ) USING DELTA
+        """.strip(),
+        "daily_label_metrics": f"""
+            CREATE TABLE IF NOT EXISTS {table_names.daily_label_metrics} (
+                model_key STRING,
+                profile_date DATE,
+                actual_positive_count BIGINT,
+                actual_negative_count BIGINT,
+                predicted_positive_count BIGINT,
+                predicted_negative_count BIGINT,
+                tp BIGINT,
+                fp BIGINT,
+                fn BIGINT,
+                tn BIGINT,
+                precision DOUBLE,
+                recall DOUBLE,
+                f1 DOUBLE,
+                accuracy DOUBLE,
                 computed_at TIMESTAMP,
                 source_run_id STRING
             ) USING DELTA

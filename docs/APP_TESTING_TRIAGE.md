@@ -12,6 +12,15 @@ This file records the implementation status of the highest-confidence items from
 - `#28`, `#29`: Performance page now degrades cleanly when the selected metric column is absent and no longer crashes when only partial window metadata is available.
 - `#73`: onboarding scan failure now clears stale `scan-data` state instead of leaving old discovery values on screen.
 
+## Fixed In The Client-Feedback Follow-Up
+
+- Drift now supports inclusive date-range filters and binary-class filters backed by persisted class-aware daily facts, so filtered views do not depend on raw-table rescans.
+- Data Quality now supports the same date-range and binary-class filters, returns an explicit unavailable state before the next refresh populates those class-aware daily facts, and replaces the old prediction-distribution tile with `Latest Window Class Mix`.
+- Drift visuals now rank from one historical-max feature subset across heatmap/timeline/top-drifter views, remove misleading warning/critical guide lines, and automatically switch to scientific notation for very small values.
+- Feature Deep Dive now exposes binning controls and percentile clipping, keeps `Average` as the user-facing label, removes the old `Null %` dimension overlay, and only uses bounded exact-sample reads when the requested controls require them.
+- Performance timelines now prefer raw persisted `daily_label_metrics`, so undefined daily precision / recall / F1 render as gaps instead of looking like smoothed window aggregates.
+- Monitor Settings now explains that the shared refresh workflow checks due monitors hourly by default, while recent `refresh_runs` duration and scanned-row telemetry are the practical proxy for compute footprint.
+
 ## Already Fixed Or Stale
 
 - `#31`: `perf-model-banner` is already wired.
@@ -26,3 +35,4 @@ This file records the implementation status of the highest-confidence items from
 ## Deferred
 
 - Lower-value polish and broader UX items from the original report remain deferred for later passes, especially the visual/wording-only items and larger IA follow-ups that do not affect correctness or safety.
+- Broader class/date slicing beyond binary classification, custom cost estimation, and any larger IA redesign beyond the current page/control changes remain deferred for later passes.

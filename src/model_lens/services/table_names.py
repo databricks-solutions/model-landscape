@@ -33,12 +33,24 @@ class TableNames:
         return f"{self.namespace}.daily_quality_profiles"
 
     @property
+    def daily_class_quality_profiles(self) -> str:
+        return f"{self.namespace}.daily_class_quality_profiles"
+
+    @property
     def daily_feature_profiles(self) -> str:
         return f"{self.namespace}.daily_feature_profiles"
 
     @property
+    def daily_class_feature_profiles(self) -> str:
+        return f"{self.namespace}.daily_class_feature_profiles"
+
+    @property
     def daily_performance_profiles(self) -> str:
         return f"{self.namespace}.daily_performance_profiles"
+
+    @property
+    def daily_label_metrics(self) -> str:
+        return f"{self.namespace}.daily_label_metrics"
 
     @property
     def performance_bin_specs(self) -> str:

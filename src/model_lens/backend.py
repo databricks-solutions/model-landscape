@@ -3,16 +3,18 @@ from __future__ import annotations
 import inspect
 import json
 from dataclasses import dataclass
+from datetime import timezone
 
 import pandas as pd
 
 from model_lens.config import settings
 from model_lens.domain.models import MonitorConfig, MonitorDiscoveryResult, MonitorRuntimeState
+from model_lens.services.class_filters import normalize_class_filter, supports_binary_class_filters
 from model_lens.services.control_plane import ControlPlaneRepository, build_repository
 from model_lens.services.monitor_discovery import MonitorDiscoveryService
 from model_lens.services.onboarding import baseline_label
 from model_lens.services.refresh_diagnostics import build_refresh_diagnostics
-from model_lens.services.refresh_engine import split_baseline_current
+from model_lens.services.refresh_engine import derive_refresh_result_from_daily_profiles, split_baseline_current
 from model_lens.services.thresholds import get_thresholds
 
 
@@ -127,15 +129,6 @@ def _null_rate_dict(value: object) -> dict[str, float]:
     return rates
 
 
-def _inclusive_end_bound(value: str) -> pd.Timestamp:
-    bound = pd.Timestamp(value)
-    if pd.isna(bound):
-        return bound
-    if bound == bound.normalize():
-        return bound + pd.Timedelta(days=1)
-    return bound
-
-
 def _quality_history_from_daily_profiles(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return pd.DataFrame()
@@ -157,6 +150,67 @@ def _quality_history_from_daily_profiles(frame: pd.DataFrame) -> pd.DataFrame:
     working["computed_at_ts"] = pd.to_datetime(working.get("computed_at"), errors="coerce")
     working = working.sort_values(["period", "computed_at_ts", "profile_date_ts"]).drop_duplicates("period", keep="last")
     return working.sort_values("profile_date_ts").reset_index(drop=True)
+
+
+def _quality_summary_from_daily_profiles(model_key: str, rows: list[dict[str, object]]) -> dict[str, object]:
+    if not rows:
+        return {}
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return {}
+    frame["profile_date_ts"] = pd.to_datetime(frame["profile_date"], errors="coerce")
+    frame = frame[frame["profile_date_ts"].notna()].copy()
+    if frame.empty:
+        return {}
+    frame["row_count"] = pd.to_numeric(frame["row_count"], errors="coerce").fillna(0).astype(int)
+    total_rows = int(frame["row_count"].sum())
+    if total_rows <= 0:
+        return {}
+    frame["prediction_mean"] = pd.to_numeric(frame["prediction_mean"], errors="coerce")
+    frame["prediction_std"] = pd.to_numeric(frame["prediction_std"], errors="coerce")
+    weighted_prediction_sum = (
+        frame["row_count"] * frame["prediction_mean"].fillna(0.0)
+    ).sum()
+    prediction_mean = (weighted_prediction_sum / total_rows) if total_rows else None
+    variance_terms = (
+        frame.apply(
+            lambda row: (
+                ((max(int(row["row_count"]) - 1, 0)) * float(row["prediction_std"] or 0.0) ** 2)
+                + (int(row["row_count"]) * float(row["prediction_mean"] or 0.0) ** 2)
+            )
+            if pd.notna(row["prediction_mean"])
+            else 0.0,
+            axis=1,
+        ).sum()
+    )
+    variance_numerator = max(float(variance_terms) - (total_rows * float(prediction_mean or 0.0) ** 2), 0.0)
+    prediction_std = (variance_numerator / (total_rows - 1)) ** 0.5 if total_rows > 1 else None
+    daily_volume = {
+        str(row["profile_date_ts"].date()): int(row["row_count"])
+        for _, row in frame.sort_values("profile_date_ts").iterrows()
+    }
+    null_totals: dict[str, float] = {}
+    for _, row in frame.iterrows():
+        row_count = int(row["row_count"])
+        if row_count <= 0:
+            continue
+        for feature_name, null_pct in _null_rate_dict(row.get("null_rates")).items():
+            null_totals[feature_name] = null_totals.get(feature_name, 0.0) + (float(null_pct) * row_count)
+    null_rates = {
+        feature_name: round(weighted_total / total_rows, 2)
+        for feature_name, weighted_total in sorted(null_totals.items())
+    }
+    return {
+        "model_key": model_key,
+        "total_rows": total_rows,
+        "min_date": str(frame["profile_date_ts"].min().date()),
+        "max_date": str(frame["profile_date_ts"].max().date()),
+        "prediction_mean": float(prediction_mean) if prediction_mean is not None else None,
+        "prediction_std": float(prediction_std) if prediction_std is not None else None,
+        "daily_volume": daily_volume,
+        "null_rates": null_rates,
+        "computed_at": "",
+    }
 
 
 def _coerce_timestamp(value: object) -> pd.Timestamp | None:
@@ -197,6 +251,71 @@ def _period_label(series: pd.Series, granularity: str) -> pd.Series:
 
 def _sql_placeholders(count: int) -> str:
     return ", ".join(["%s"] * max(count, 1))
+
+
+def _drift_results_from_frame(frame: pd.DataFrame, granularity: str = "daily") -> pd.DataFrame:
+    if frame.empty:
+        return pd.DataFrame()
+    working = frame.copy()
+    working["window_end_ts"] = pd.to_datetime(working["window_end"], errors="coerce")
+    working["computed_at_ts"] = pd.to_datetime(working["computed_at"], errors="coerce")
+    working["period"] = _period_label(working["window_end"], granularity)
+    metrics = (
+        working.pivot_table(
+            index=["feature_name", "period"],
+            columns="metric_name",
+            values="metric_value",
+            aggfunc="max",
+        )
+        .reset_index()
+    )
+    window_level = working.drop_duplicates(
+        subset=[
+            "feature_name",
+            "period",
+            "baseline_start",
+            "baseline_end",
+            "window_start",
+            "window_end",
+        ]
+    )
+    latest_static = (
+        window_level.sort_values(["feature_name", "period", "window_end_ts", "computed_at_ts"])
+        .drop_duplicates(subset=["feature_name", "period"], keep="last")
+        [
+            [
+                "feature_name",
+                "period",
+                "window_start",
+                "window_end",
+                "baseline_start",
+                "baseline_end",
+                "ref_mean",
+                "cur_mean",
+                "ref_std",
+                "cur_std",
+                "ref_null_pct",
+                "cur_null_pct",
+                "computed_at",
+            ]
+        ]
+    )
+    aggregated_counts = (
+        window_level.groupby(["feature_name", "period"], as_index=False)
+        .agg(
+            ref_count=("ref_count", "sum"),
+            cur_count=("cur_count", "sum"),
+        )
+    )
+    result = latest_static.merge(aggregated_counts, on=["feature_name", "period"], how="left").merge(
+        metrics,
+        on=["feature_name", "period"],
+        how="left",
+    ).rename(columns={"feature_name": "feature"})
+    for metric in ("psi", "js_divergence", "kl_divergence"):
+        if metric not in result.columns:
+            result[metric] = 0.0
+    return result.sort_values(["period", "feature"]).reset_index(drop=True)
 
 
 @dataclass
@@ -290,7 +409,101 @@ class DashboardBackend:
             baseline_days=baseline_days,
         )
 
-    def get_drift_results(self, model_id: str, granularity: str = "daily") -> pd.DataFrame:
+    def _get_window_metadata(
+        self,
+        model_id: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict[str, str]]:
+        comparison_windows = getattr(self.repository.table_names, "comparison_windows", "")
+        if not comparison_windows:
+            return []
+        filters = ["model_key = %s"]
+        params: list[object] = [model_id]
+        if start_date:
+            filters.append("window_end >= CAST(%s AS DATE)")
+            params.append(start_date)
+        if end_date:
+            filters.append("window_end <= CAST(%s AS DATE)")
+            params.append(end_date)
+        frame = self._warehouse.query_params(
+            f"""
+            SELECT window_id, model_key, window_grain, window_start, window_end, baseline_start, baseline_end, baseline_kind
+            FROM {comparison_windows}
+            WHERE {' AND '.join(filters)}
+            ORDER BY window_end, window_start
+            """,
+            tuple(params),
+        )
+        if frame.empty:
+            return []
+        return [
+            {
+                "window_id": str(row.get("window_id") or ""),
+                "model_key": str(row.get("model_key") or model_id),
+                "window_grain": str(row.get("window_grain") or "day"),
+                "window_start": str(row.get("window_start") or ""),
+                "window_end": str(row.get("window_end") or ""),
+                "baseline_start": str(row.get("baseline_start") or ""),
+                "baseline_end": str(row.get("baseline_end") or ""),
+                "baseline_kind": str(row.get("baseline_kind") or "rolling"),
+            }
+            for _, row in frame.iterrows()
+        ]
+
+    def get_drift_results(
+        self,
+        model_id: str,
+        granularity: str = "daily",
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        class_basis: str | None = None,
+        class_value: str | None = None,
+    ) -> pd.DataFrame:
+        normalized_class_basis, normalized_class_value, class_filter_active = normalize_class_filter(class_basis, class_value)
+        config = self.get_monitor_config(model_id)
+        if class_filter_active:
+            if not supports_binary_class_filters(config):
+                return pd.DataFrame()
+            metadata_list = self._get_window_metadata(model_id, start_date=start_date, end_date=end_date)
+            if not metadata_list:
+                return pd.DataFrame()
+            load_start = min(str(metadata["baseline_start"]) for metadata in metadata_list if str(metadata["baseline_start"]).strip())
+            load_end = max(str(metadata["window_end"]) for metadata in metadata_list if str(metadata["window_end"]).strip())
+            class_feature_rows = (
+                self.repository.get_daily_class_feature_profile_rows(
+                    model_id,
+                    start_date=load_start,
+                    end_date=load_end,
+                    class_basis=normalized_class_basis,
+                    class_value=normalized_class_value,
+                )
+                if hasattr(self.repository, "get_daily_class_feature_profile_rows")
+                else []
+            )
+            if not class_feature_rows:
+                return pd.DataFrame()
+            derived = derive_refresh_result_from_daily_profiles(
+                config=config,
+                metadata_list=metadata_list,
+                daily_quality_profile_rows=[],
+                daily_feature_profile_rows=class_feature_rows,
+                daily_performance_profile_rows=[],
+                computed_at=pd.Timestamp.now(tz=timezone.utc).isoformat(),
+                include_drift_quality=True,
+                include_performance=False,
+            )
+            return _drift_results_from_frame(pd.DataFrame(derived.drift_rows), granularity=granularity)
+        filters = ["model_key = %s"]
+        params: list[object] = [model_id]
+        if start_date:
+            filters.append("window_end >= CAST(%s AS DATE)")
+            params.append(start_date)
+        if end_date:
+            filters.append("window_end <= CAST(%s AS DATE)")
+            params.append(end_date)
         frame = self._warehouse.query_params(
             f"""
             SELECT
@@ -311,71 +524,12 @@ class DashboardBackend:
                 cur_count,
                 computed_at
             FROM {self.repository.table_names.drift_metrics}
-            WHERE model_key = %s
+            WHERE {' AND '.join(filters)}
             ORDER BY window_end, feature_name, metric_name
             """,
-            (model_id,),
+            tuple(params),
         )
-        if frame.empty:
-            return pd.DataFrame()
-
-        working = frame.copy()
-        working["window_end_ts"] = pd.to_datetime(working["window_end"], errors="coerce")
-        working["computed_at_ts"] = pd.to_datetime(working["computed_at"], errors="coerce")
-        working["period"] = _period_label(working["window_end"], granularity)
-        metrics = (
-            working.pivot_table(
-                index=["feature_name", "period"],
-                columns="metric_name",
-                values="metric_value",
-                aggfunc="max",
-            )
-            .reset_index()
-        )
-        window_level = working.drop_duplicates(
-            subset=[
-                "feature_name",
-                "period",
-                "baseline_start",
-                "baseline_end",
-                "window_start",
-                "window_end",
-            ]
-        )
-        latest_static = (
-            window_level.sort_values(["feature_name", "period", "window_end_ts", "computed_at_ts"])
-            .drop_duplicates(subset=["feature_name", "period"], keep="last")
-            [
-                [
-                    "feature_name",
-                    "period",
-                    "window_start",
-                    "window_end",
-                    "baseline_start",
-                    "baseline_end",
-                    "ref_mean",
-                    "cur_mean",
-                    "ref_std",
-                    "cur_std",
-                    "ref_null_pct",
-                    "cur_null_pct",
-                    "computed_at",
-                ]
-            ]
-        )
-        aggregated_counts = (
-            window_level.groupby(["feature_name", "period"], as_index=False)
-            .agg(
-                ref_count=("ref_count", "sum"),
-                cur_count=("cur_count", "sum"),
-            )
-        )
-        static = latest_static.merge(aggregated_counts, on=["feature_name", "period"], how="left")
-        result = static.merge(metrics, on=["feature_name", "period"], how="left").rename(columns={"feature_name": "feature"})
-        for metric in ("psi", "js_divergence", "kl_divergence"):
-            if metric not in result.columns:
-                result[metric] = 0.0
-        return result.sort_values(["period", "feature"]).reset_index(drop=True)
+        return _drift_results_from_frame(frame, granularity=granularity)
 
     def get_latest_drift(self, model_id: str, metric: str = "psi", top_n: int = 10) -> pd.DataFrame:
         drift = self.get_drift_results(model_id)
@@ -384,7 +538,59 @@ class DashboardBackend:
         latest_period = drift["period"].max()
         return drift[drift["period"] == latest_period].nlargest(top_n, metric).reset_index(drop=True)
 
-    def get_quality_stats(self, model_id: str) -> dict:
+    def _daily_quality_rows(
+        self,
+        model_id: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        class_basis: str | None = None,
+        class_value: str | None = None,
+    ) -> list[dict[str, object]]:
+        normalized_class_basis, normalized_class_value, class_filter_active = normalize_class_filter(class_basis, class_value)
+        if class_filter_active:
+            return (
+                self.repository.get_daily_class_quality_profile_rows(
+                    model_id,
+                    start_date=start_date,
+                    end_date=end_date,
+                    class_basis=normalized_class_basis,
+                    class_value=normalized_class_value,
+                )
+                if hasattr(self.repository, "get_daily_class_quality_profile_rows")
+                else []
+            )
+        return (
+            self.repository.get_daily_quality_profile_rows(
+                model_id,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            if hasattr(self.repository, "get_daily_quality_profile_rows")
+            else []
+        )
+
+    def get_quality_stats(
+        self,
+        model_id: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        class_basis: str | None = None,
+        class_value: str | None = None,
+    ) -> dict:
+        _, _, class_filter_active = normalize_class_filter(class_basis, class_value)
+        if start_date or end_date or class_filter_active:
+            return _quality_summary_from_daily_profiles(
+                model_id,
+                self._daily_quality_rows(
+                    model_id,
+                    start_date=start_date,
+                    end_date=end_date,
+                    class_basis=class_basis,
+                    class_value=class_value,
+                ),
+            )
         frame = self._warehouse.query_params(
             f"""
             SELECT *
@@ -409,7 +615,28 @@ class DashboardBackend:
             "computed_at": str(row.get("computed_at") or ""),
         }
 
-    def get_quality_history(self, model_id: str) -> pd.DataFrame:
+    def get_quality_history(
+        self,
+        model_id: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        class_basis: str | None = None,
+        class_value: str | None = None,
+    ) -> pd.DataFrame:
+        _, _, class_filter_active = normalize_class_filter(class_basis, class_value)
+        if start_date or end_date or class_filter_active:
+            return _quality_history_from_daily_profiles(
+                pd.DataFrame(
+                    self._daily_quality_rows(
+                        model_id,
+                        start_date=start_date,
+                        end_date=end_date,
+                        class_basis=class_basis,
+                        class_value=class_value,
+                    )
+                )
+            )
         frame = self._warehouse.query_params(
             f"""
             SELECT *
@@ -447,8 +674,23 @@ class DashboardBackend:
         working = working.sort_values(["period", "computed_at_ts", "window_end_ts"]).drop_duplicates("period", keep="last")
         return working.sort_values("window_end_ts").reset_index(drop=True)
 
-    def get_null_rate_history(self, model_id: str, top_n: int = 5) -> pd.DataFrame:
-        history = self.get_quality_history(model_id)
+    def get_null_rate_history(
+        self,
+        model_id: str,
+        top_n: int = 5,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        class_basis: str | None = None,
+        class_value: str | None = None,
+    ) -> pd.DataFrame:
+        history = self.get_quality_history(
+            model_id,
+            start_date=start_date,
+            end_date=end_date,
+            class_basis=class_basis,
+            class_value=class_value,
+        )
         if history.empty:
             return pd.DataFrame()
         exploded_rows: list[dict] = []
@@ -794,7 +1036,13 @@ class DashboardBackend:
         details = self.get_feature_distribution_details(model_id, feature)
         return details["baseline"], details["current"]
 
-    def get_feature_distribution_details(self, model_id: str, feature: str) -> dict[str, object]:
+    def get_feature_distribution_details(
+        self,
+        model_id: str,
+        feature: str,
+        *,
+        require_exact_samples: bool = False,
+    ) -> dict[str, object]:
         baseline_samples, current_samples, used_histogram_approximation = self._feature_samples_from_daily_profiles(model_id, feature)
         bounds = self._latest_window_bounds(model_id)
         window_label = "Latest comparison window unavailable."
@@ -803,7 +1051,7 @@ class DashboardBackend:
                 f"Baseline: {bounds['baseline_start'] or '—'} to {bounds['baseline_end'] or '—'} | "
                 f"Current: {bounds['window_start'] or '—'} to {bounds['window_end'] or '—'}"
             )
-        if not baseline_samples.empty and not current_samples.empty:
+        if not baseline_samples.empty and not current_samples.empty and not (require_exact_samples and used_histogram_approximation):
             return {
                 "baseline": baseline_samples,
                 "current": current_samples,
@@ -816,7 +1064,7 @@ class DashboardBackend:
             return {
                 "baseline": pd.Series(dtype=float),
                 "current": pd.Series(dtype=float),
-                "distribution_source": "unavailable",
+                "distribution_source": "unavailable_requested_raw" if require_exact_samples else "unavailable",
                 "approximate": False,
                 "window_label": window_label,
             }
@@ -837,9 +1085,10 @@ class DashboardBackend:
         breakdown = (
             working.groupby(dimension, dropna=False)
             .agg(
-                feature_mean=(feature, "mean"),
-                feature_std=(feature, "std"),
-                null_pct=(feature, lambda values: float(values.isna().mean() * 100)),
+                feature_average=(feature, "mean"),
+                feature_p25=(feature, lambda values: float(values.quantile(0.25)) if values.notna().any() else float("nan")),
+                feature_p50=(feature, lambda values: float(values.quantile(0.50)) if values.notna().any() else float("nan")),
+                feature_p75=(feature, lambda values: float(values.quantile(0.75)) if values.notna().any() else float("nan")),
                 row_count=(feature, "size"),
             )
             .reset_index()
@@ -847,7 +1096,6 @@ class DashboardBackend:
             .sort_values("row_count", ascending=False)
             .head(20)
         )
-        breakdown["feature_std"] = breakdown["feature_std"].fillna(0.0)
         breakdown["dimension_value"] = breakdown["dimension_value"].apply(
             lambda value: "(missing)" if pd.isna(value) or not str(value).strip() else str(value)
         )
@@ -858,6 +1106,59 @@ class DashboardBackend:
         if not config or config.contract.prediction_col not in current.columns:
             return pd.Series(dtype=float)
         return pd.to_numeric(current[config.contract.prediction_col], errors="coerce").dropna()
+
+    def get_daily_label_metrics(
+        self,
+        model_id: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> pd.DataFrame:
+        if not hasattr(self.repository, "get_daily_label_metric_rows"):
+            return pd.DataFrame()
+        frame = pd.DataFrame(
+            self.repository.get_daily_label_metric_rows(
+                model_id,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        )
+        if frame.empty:
+            return frame
+        frame["profile_date_ts"] = pd.to_datetime(frame["profile_date"], errors="coerce")
+        for column in (
+            "actual_positive_count",
+            "actual_negative_count",
+            "predicted_positive_count",
+            "predicted_negative_count",
+            "tp",
+            "fp",
+            "fn",
+            "tn",
+            "precision",
+            "recall",
+            "f1",
+            "accuracy",
+        ):
+            if column in frame.columns:
+                frame[column] = pd.to_numeric(frame[column], errors="coerce")
+        return frame.sort_values("profile_date_ts").reset_index(drop=True)
+
+    def get_latest_class_mix(self, model_id: str) -> dict[str, int]:
+        bounds = self._latest_window_bounds(model_id)
+        frame = self.get_daily_label_metrics(
+            model_id,
+            start_date=(bounds or {}).get("window_start") or None,
+            end_date=(bounds or {}).get("window_end") or None,
+        )
+        if frame.empty:
+            return {}
+        return {
+            "Actual Positive": int(frame.get("actual_positive_count", pd.Series(dtype=float)).fillna(0).sum()),
+            "Actual Negative": int(frame.get("actual_negative_count", pd.Series(dtype=float)).fillna(0).sum()),
+            "Predicted Positive": int(frame.get("predicted_positive_count", pd.Series(dtype=float)).fillna(0).sum()),
+            "Predicted Negative": int(frame.get("predicted_negative_count", pd.Series(dtype=float)).fillna(0).sum()),
+        }
 
     def get_performance_rows(self, model_id: str, metric_name: str = "f1") -> pd.DataFrame:
         frame = self._warehouse.query_params(
@@ -896,20 +1197,31 @@ class DashboardBackend:
         frame = frame.copy()
         frame["window_end"] = pd.to_datetime(frame["window_end"], errors="coerce")
         dated = frame[frame["window_end"].notna()].copy()
-        timeline = (
-            [
+        label_metrics = self.get_daily_label_metrics(model_id)
+        if not label_metrics.empty and metric_name in label_metrics.columns:
+            timeline = [
                 {
-                    "period": str(window_end.date()),
-                    metric_name: float(
-                        (group["current_metric"] * group["current_volume_pct"]).sum()
-                        / max(group["current_volume_pct"].sum(), 1)
-                    ),
+                    "period": str(row["profile_date_ts"].date()),
+                    metric_name: _safe_optional_float(row.get(metric_name)),
                 }
-                for window_end, group in dated.groupby("window_end", sort=True)
+                for _, row in label_metrics.iterrows()
+                if pd.notna(row.get("profile_date_ts"))
             ]
-            if not dated.empty
-            else []
-        )
+        else:
+            timeline = (
+                [
+                    {
+                        "period": str(window_end.date()),
+                        metric_name: float(
+                            (group["current_metric"] * group["current_volume_pct"]).sum()
+                            / max(group["current_volume_pct"].sum(), 1)
+                        ),
+                    }
+                    for window_end, group in dated.groupby("window_end", sort=True)
+                ]
+                if not dated.empty
+                else []
+            )
         latest_bins = dated.copy() if dated.empty else dated[dated["window_end"] == dated["window_end"].max()].copy()
         contributors = (
             latest_bins.groupby("feature", as_index=False)

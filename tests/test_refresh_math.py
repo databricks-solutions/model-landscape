@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 
 from model_lens.domain.models import MonitorConfig
-from model_lens.services.contracts import build_contract
+from model_lens.services.inference_contracts import build_inference_contract as build_contract
 from model_lens.services.onboarding import build_default_baseline, build_fixed_baseline
 from model_lens.services.refresh_engine import (
     build_daily_feature_profile_rows,

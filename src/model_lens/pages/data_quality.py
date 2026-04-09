@@ -3,12 +3,63 @@ from __future__ import annotations
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
+from model_lens.ui.styles import DROPDOWN_STYLE
+
 
 def layout():
     return html.Div(
         [
             html.H4("Data Quality", className="text-light mb-1"),
             html.Div(id="quality-model-banner", className="mb-3"),
+            dbc.Row(
+                [
+                    dbc.Col(
+                        [
+                            dbc.Label("Date Range", className="text-muted"),
+                            dcc.DatePickerRange(
+                                id="quality-date-range",
+                                display_format="YYYY-MM-DD",
+                                minimum_nights=0,
+                                className="w-100",
+                            ),
+                        ],
+                        md=4,
+                    ),
+                    dbc.Col(
+                        [
+                            dbc.Label("Class Basis", className="text-muted"),
+                            dbc.Select(
+                                id="quality-class-basis-select",
+                                options=[
+                                    {"label": "All Rows", "value": "all"},
+                                    {"label": "Actual Label", "value": "actual"},
+                                    {"label": "Predicted Label", "value": "predicted"},
+                                ],
+                                value="all",
+                                style=DROPDOWN_STYLE,
+                            ),
+                        ],
+                        md=3,
+                    ),
+                    dbc.Col(
+                        [
+                            dbc.Label("Class Value", className="text-muted"),
+                            dbc.Select(
+                                id="quality-class-value-select",
+                                options=[
+                                    {"label": "All Rows", "value": "all"},
+                                    {"label": "Positive", "value": "positive"},
+                                    {"label": "Negative", "value": "negative"},
+                                ],
+                                value="all",
+                                style=DROPDOWN_STYLE,
+                            ),
+                        ],
+                        md=3,
+                    ),
+                ],
+                className="mb-4",
+            ),
             dcc.Loading(
                 type="default",
                 children=html.Div(

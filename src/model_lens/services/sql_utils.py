@@ -63,10 +63,3 @@ def parse_string_array(value: Any) -> tuple[str, ...]:
         return tuple(str(item) for item in value)
     except TypeError:
         return ()
-
-
-def catalog_schema(table_name: str) -> str:
-    parts = validate_identifier(table_name).split(".")
-    if len(parts) < 3:
-        raise ValueError("Expected fully qualified table name catalog.schema.table")
-    return f"{parts[0]}.{parts[1]}"

@@ -23,6 +23,7 @@ from pyspark.sql.types import (
 from model_lens.config import settings
 from model_lens.domain.models import MonitorConfig, RefreshResult
 from model_lens.domain.performance_metrics import default_performance_metric_names
+from model_lens.services.class_filters import supports_binary_class_filters
 from model_lens.services.control_plane import (
     ControlPlaneRepository,
     _resolve_source_labels_join_col,
@@ -40,19 +41,57 @@ from model_lens.analytics.drift import (
 CATEGORICAL_TOP_N = 100
 PERFORMANCE_BIN_COUNT = 10
 NUMERIC_DRIFT_BIN_COUNT = 20
+def _class_filtered_df(
+    source_df: DataFrame,
+    *,
+    config: MonitorConfig,
+    class_basis: str,
+    class_value: str,
+) -> DataFrame:
+    if not config.contract.label_col:
+        return source_df.limit(0)
+    prediction_col = _spark_col(config.contract.prediction_col).cast("double")
+    label_col = _spark_col(config.contract.label_col).cast("double")
+    if class_basis == "predicted":
+        if class_value == "positive":
+            predicate = prediction_col >= F.lit(0.5)
+        else:
+            predicate = prediction_col < F.lit(0.5)
+        return source_df.filter(prediction_col.isNotNull() & predicate)
+    if class_value == "positive":
+        predicate = label_col == F.lit(1.0)
+    else:
+        predicate = label_col == F.lit(0.0)
+    return source_df.filter(label_col.isNotNull() & predicate)
 
 
 @dataclass(frozen=True)
 class SparkDailyProfiles:
     daily_quality_profile_rows: list[dict[str, Any]]
+    daily_class_quality_profile_rows: list[dict[str, Any]]
     daily_feature_profile_rows: list[dict[str, Any]]
+    daily_class_feature_profile_rows: list[dict[str, Any]]
     daily_performance_profile_rows: list[dict[str, Any]]
+    daily_label_metric_rows: list[dict[str, Any]]
     performance_bin_specs: dict[str, tuple[float, ...]]
 
 
 QUALITY_PROFILE_SCHEMA = StructType([
     StructField("model_key", StringType(), False),
     StructField("profile_date", StringType(), False),
+    StructField("row_count", LongType(), False),
+    StructField("prediction_mean", DoubleType(), True),
+    StructField("prediction_std", DoubleType(), True),
+    StructField("null_rates", StringType(), False),
+    StructField("label_row_count", LongType(), False),
+    StructField("computed_at", StringType(), False),
+])
+
+CLASS_QUALITY_PROFILE_SCHEMA = StructType([
+    StructField("model_key", StringType(), False),
+    StructField("profile_date", StringType(), False),
+    StructField("class_basis", StringType(), False),
+    StructField("class_value", StringType(), False),
     StructField("row_count", LongType(), False),
     StructField("prediction_mean", DoubleType(), True),
     StructField("prediction_std", DoubleType(), True),
@@ -77,6 +116,24 @@ FEATURE_PROFILE_SCHEMA = StructType([
     StructField("computed_at", StringType(), False),
 ])
 
+CLASS_FEATURE_PROFILE_SCHEMA = StructType([
+    StructField("model_key", StringType(), False),
+    StructField("profile_date", StringType(), False),
+    StructField("class_basis", StringType(), False),
+    StructField("class_value", StringType(), False),
+    StructField("feature_name", StringType(), False),
+    StructField("feature_kind", StringType(), False),
+    StructField("row_count", LongType(), False),
+    StructField("non_null_count", LongType(), False),
+    StructField("null_pct", DoubleType(), False),
+    StructField("mean", DoubleType(), True),
+    StructField("std", DoubleType(), True),
+    StructField("min_value", DoubleType(), True),
+    StructField("max_value", DoubleType(), True),
+    StructField("distribution_json", StringType(), False),
+    StructField("computed_at", StringType(), False),
+])
+
 PERFORMANCE_PROFILE_SCHEMA = StructType([
     StructField("model_key", StringType(), False),
     StructField("profile_date", StringType(), False),
@@ -86,6 +143,24 @@ PERFORMANCE_PROFILE_SCHEMA = StructType([
     StructField("metric_value", DoubleType(), False),
     StructField("row_count", LongType(), False),
     StructField("volume_pct", DoubleType(), False),
+    StructField("computed_at", StringType(), False),
+])
+
+DAILY_LABEL_METRIC_SCHEMA = StructType([
+    StructField("model_key", StringType(), False),
+    StructField("profile_date", StringType(), False),
+    StructField("actual_positive_count", LongType(), False),
+    StructField("actual_negative_count", LongType(), False),
+    StructField("predicted_positive_count", LongType(), False),
+    StructField("predicted_negative_count", LongType(), False),
+    StructField("tp", LongType(), False),
+    StructField("fp", LongType(), False),
+    StructField("fn", LongType(), False),
+    StructField("tn", LongType(), False),
+    StructField("precision", DoubleType(), True),
+    StructField("recall", DoubleType(), True),
+    StructField("f1", DoubleType(), True),
+    StructField("accuracy", DoubleType(), True),
     StructField("computed_at", StringType(), False),
 ])
 
@@ -165,8 +240,18 @@ DAILY_QUALITY_WRITE_SCHEMA = StructType([
     StructField("source_run_id", StringType(), False),
 ])
 
+DAILY_CLASS_QUALITY_WRITE_SCHEMA = StructType([
+    *CLASS_QUALITY_PROFILE_SCHEMA.fields,
+    StructField("source_run_id", StringType(), False),
+])
+
 DAILY_FEATURE_WRITE_SCHEMA = StructType([
     *FEATURE_PROFILE_SCHEMA.fields,
+    StructField("source_run_id", StringType(), False),
+])
+
+DAILY_CLASS_FEATURE_WRITE_SCHEMA = StructType([
+    *CLASS_FEATURE_PROFILE_SCHEMA.fields,
     StructField("source_run_id", StringType(), False),
 ])
 
@@ -188,6 +273,11 @@ PERFORMANCE_METRIC_SCHEMA = StructType([
 
 DAILY_PERFORMANCE_WRITE_SCHEMA = StructType([
     *PERFORMANCE_PROFILE_SCHEMA.fields,
+    StructField("source_run_id", StringType(), False),
+])
+
+DAILY_LABEL_METRIC_WRITE_SCHEMA = StructType([
+    *DAILY_LABEL_METRIC_SCHEMA.fields,
     StructField("source_run_id", StringType(), False),
 ])
 
@@ -506,6 +596,40 @@ class SparkRefreshRepository(ControlPlaneRepository):
             row_kind="daily_feature_profile",
         )
 
+    def _daily_class_quality_profile_persist_df_from_rows(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        source_run_id: str | None = None,
+        default_model_key: str | None = None,
+    ) -> DataFrame:
+        payload = [{**row, "source_run_id": source_run_id or ""} for row in rows]
+        return self._typed_df_from_rows(
+            payload,
+            schema=DAILY_CLASS_QUALITY_WRITE_SCHEMA,
+            date_columns=("profile_date",),
+            timestamp_columns=("computed_at",),
+            default_model_key=default_model_key,
+            row_kind="daily_class_quality_profile",
+        )
+
+    def _daily_class_feature_profile_persist_df_from_rows(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        source_run_id: str | None = None,
+        default_model_key: str | None = None,
+    ) -> DataFrame:
+        payload = [{**row, "source_run_id": source_run_id or ""} for row in rows]
+        return self._typed_df_from_rows(
+            payload,
+            schema=DAILY_CLASS_FEATURE_WRITE_SCHEMA,
+            date_columns=("profile_date",),
+            timestamp_columns=("computed_at",),
+            default_model_key=default_model_key,
+            row_kind="daily_class_feature_profile",
+        )
+
     def _performance_df_from_rows(self, rows: list[dict[str, Any]], *, default_model_key: str | None = None) -> DataFrame:
         return self._typed_df_from_rows(
             rows,
@@ -531,6 +655,23 @@ class SparkRefreshRepository(ControlPlaneRepository):
             timestamp_columns=("computed_at",),
             default_model_key=default_model_key,
             row_kind="daily_performance_profile",
+        )
+
+    def _daily_label_metric_persist_df_from_rows(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        source_run_id: str | None = None,
+        default_model_key: str | None = None,
+    ) -> DataFrame:
+        payload = [{**row, "source_run_id": source_run_id or ""} for row in rows]
+        return self._typed_df_from_rows(
+            payload,
+            schema=DAILY_LABEL_METRIC_WRITE_SCHEMA,
+            date_columns=("profile_date",),
+            timestamp_columns=("computed_at",),
+            default_model_key=default_model_key,
+            row_kind="daily_label_metric",
         )
 
     def _incident_df_from_rows(self, rows: list[dict[str, Any]], *, default_model_key: str | None = None) -> DataFrame:
@@ -944,8 +1085,23 @@ class SparkRefreshRepository(ControlPlaneRepository):
                 if include_drift_quality
                 else []
             )
+            daily_class_quality_rows = (
+                self._build_daily_class_quality_profile_rows(config=config, source_df=df, computed_at=computed_at)
+                if include_drift_quality
+                else []
+            )
             daily_feature_rows = (
                 self._build_daily_feature_profile_rows(
+                    config=config,
+                    source_df=df,
+                    computed_at=computed_at,
+                    bin_specs=numeric_bin_specs,
+                )
+                if include_drift_quality
+                else []
+            )
+            daily_class_feature_rows = (
+                self._build_daily_class_feature_profile_rows(
                     config=config,
                     source_df=df,
                     computed_at=computed_at,
@@ -964,10 +1120,22 @@ class SparkRefreshRepository(ControlPlaneRepository):
                 if include_performance
                 else []
             )
+            daily_label_metric_rows = (
+                self._build_daily_label_metric_rows(
+                    config=config,
+                    source_df=df,
+                    computed_at=computed_at,
+                )
+                if include_performance
+                else []
+            )
             return SparkDailyProfiles(
                 daily_quality_profile_rows=daily_quality_rows,
+                daily_class_quality_profile_rows=daily_class_quality_rows,
                 daily_feature_profile_rows=daily_feature_rows,
+                daily_class_feature_profile_rows=daily_class_feature_rows,
                 daily_performance_profile_rows=daily_performance_rows,
+                daily_label_metric_rows=daily_label_metric_rows,
                 performance_bin_specs=numeric_bin_specs,
             )
         finally:
@@ -1001,6 +1169,34 @@ class SparkRefreshRepository(ControlPlaneRepository):
         )
         return frame.withColumn("profile_date", F.to_date(F.col("profile_date")))
 
+    def _daily_class_quality_profile_df_from_rows(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        default_model_key: str | None = None,
+    ) -> DataFrame:
+        frame = self._typed_df_from_rows(
+            rows,
+            schema=CLASS_QUALITY_PROFILE_SCHEMA,
+            default_model_key=default_model_key,
+            row_kind="daily_class_quality_profile_current",
+        )
+        return frame.withColumn("profile_date", F.to_date(F.col("profile_date")))
+
+    def _daily_class_feature_profile_df_from_rows(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        default_model_key: str | None = None,
+    ) -> DataFrame:
+        frame = self._typed_df_from_rows(
+            rows,
+            schema=CLASS_FEATURE_PROFILE_SCHEMA,
+            default_model_key=default_model_key,
+            row_kind="daily_class_feature_profile_current",
+        )
+        return frame.withColumn("profile_date", F.to_date(F.col("profile_date")))
+
     def _daily_performance_profile_df_from_rows(
         self,
         rows: list[dict[str, Any]],
@@ -1012,6 +1208,20 @@ class SparkRefreshRepository(ControlPlaneRepository):
             schema=PERFORMANCE_PROFILE_SCHEMA,
             default_model_key=default_model_key,
             row_kind="daily_performance_profile_current",
+        )
+        return frame.withColumn("profile_date", F.to_date(F.col("profile_date")))
+
+    def _daily_label_metric_df_from_rows(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        default_model_key: str | None = None,
+    ) -> DataFrame:
+        frame = self._typed_df_from_rows(
+            rows,
+            schema=DAILY_LABEL_METRIC_SCHEMA,
+            default_model_key=default_model_key,
+            row_kind="daily_label_metric_current",
         )
         return frame.withColumn("profile_date", F.to_date(F.col("profile_date")))
 
@@ -1425,8 +1635,11 @@ class SparkRefreshRepository(ControlPlaneRepository):
             self._table_names.quality_metrics,
             self._table_names.quality_history,
             self._table_names.daily_quality_profiles,
+            self._table_names.daily_class_quality_profiles,
             self._table_names.daily_feature_profiles,
+            self._table_names.daily_class_feature_profiles,
             self._table_names.daily_performance_profiles,
+            self._table_names.daily_label_metrics,
             self._table_names.performance_bin_specs,
             self._table_names.incidents,
             self._table_names.incident_history,
@@ -1454,9 +1667,25 @@ class SparkRefreshRepository(ControlPlaneRepository):
             ),
         )
         self._append_df_to_table(
+            self._table_names.daily_class_quality_profiles,
+            self._daily_class_quality_profile_persist_df_from_rows(
+                result.daily_class_quality_profile_rows,
+                source_run_id=source_run_id,
+                default_model_key=model_key,
+            ),
+        )
+        self._append_df_to_table(
             self._table_names.daily_feature_profiles,
             self._daily_feature_profile_persist_df_from_rows(
                 result.daily_feature_profile_rows,
+                source_run_id=source_run_id,
+                default_model_key=model_key,
+            ),
+        )
+        self._append_df_to_table(
+            self._table_names.daily_class_feature_profiles,
+            self._daily_class_feature_profile_persist_df_from_rows(
+                result.daily_class_feature_profile_rows,
                 source_run_id=source_run_id,
                 default_model_key=model_key,
             ),
@@ -1469,6 +1698,14 @@ class SparkRefreshRepository(ControlPlaneRepository):
             self._table_names.daily_performance_profiles,
             self._daily_performance_profile_persist_df_from_rows(
                 result.daily_performance_profile_rows,
+                source_run_id=source_run_id,
+                default_model_key=model_key,
+            ),
+        )
+        self._append_df_to_table(
+            self._table_names.daily_label_metrics,
+            self._daily_label_metric_persist_df_from_rows(
+                result.daily_label_metric_rows,
                 source_run_id=source_run_id,
                 default_model_key=model_key,
             ),
@@ -1548,8 +1785,25 @@ class SparkRefreshRepository(ControlPlaneRepository):
         quality_windows = {str(row.get("window_id") or "") for row in result.quality_history_rows}
         incident_history_windows = {str(row.get("window_id") or "") for row in result.incident_history_rows}
         daily_quality_dates = {str(row.get("profile_date") or "") for row in result.daily_quality_profile_rows}
+        daily_class_quality_keys = {
+            (
+                str(row.get("profile_date") or ""),
+                str(row.get("class_basis") or ""),
+                str(row.get("class_value") or ""),
+            )
+            for row in result.daily_class_quality_profile_rows
+        }
         daily_feature_dates = {str(row.get("profile_date") or "") for row in result.daily_feature_profile_rows}
+        daily_class_feature_keys = {
+            (
+                str(row.get("profile_date") or ""),
+                str(row.get("class_basis") or ""),
+                str(row.get("class_value") or ""),
+            )
+            for row in result.daily_class_feature_profile_rows
+        }
         daily_performance_dates = {str(row.get("profile_date") or "") for row in result.daily_performance_profile_rows}
+        daily_label_metric_dates = {str(row.get("profile_date") or "") for row in result.daily_label_metric_rows}
         _delete_composite_windows(
             self._table_names.drift_metrics,
             drift_windows,
@@ -1568,8 +1822,47 @@ class SparkRefreshRepository(ControlPlaneRepository):
         _delete_string_values(self._table_names.quality_history, "window_id", quality_windows)
         _delete_string_values(self._table_names.incident_history, "window_id", incident_history_windows)
         _delete_date_values(self._table_names.daily_quality_profiles, "profile_date", daily_quality_dates)
+        if daily_class_quality_keys:
+            predicates = [
+                "("
+                + " AND ".join(
+                    [
+                        f"profile_date = {_sql_date_literal(profile_date)}",
+                        f"class_basis = {_sql_string_literal(class_basis)}",
+                        f"class_value = {_sql_string_literal(class_value)}",
+                    ]
+                )
+                + ")"
+                for profile_date, class_basis, class_value in sorted(daily_class_quality_keys)
+                if profile_date and class_basis and class_value
+            ]
+            if predicates:
+                self._delete_where(
+                    self._table_names.daily_class_quality_profiles,
+                    f"{model_key_predicate} AND (" + " OR ".join(predicates) + ")",
+                )
         _delete_date_values(self._table_names.daily_feature_profiles, "profile_date", daily_feature_dates)
+        if daily_class_feature_keys:
+            predicates = [
+                "("
+                + " AND ".join(
+                    [
+                        f"profile_date = {_sql_date_literal(profile_date)}",
+                        f"class_basis = {_sql_string_literal(class_basis)}",
+                        f"class_value = {_sql_string_literal(class_value)}",
+                    ]
+                )
+                + ")"
+                for profile_date, class_basis, class_value in sorted(daily_class_feature_keys)
+                if profile_date and class_basis and class_value
+            ]
+            if predicates:
+                self._delete_where(
+                    self._table_names.daily_class_feature_profiles,
+                    f"{model_key_predicate} AND (" + " OR ".join(predicates) + ")",
+                )
         _delete_date_values(self._table_names.daily_performance_profiles, "profile_date", daily_performance_dates)
+        _delete_date_values(self._table_names.daily_label_metrics, "profile_date", daily_label_metric_dates)
 
         if result.incident_rows or result.incident_history_rows:
             self._delete_where(
@@ -1598,9 +1891,25 @@ class SparkRefreshRepository(ControlPlaneRepository):
             ),
         )
         self._append_df_to_table(
+            self._table_names.daily_class_quality_profiles,
+            self._daily_class_quality_profile_persist_df_from_rows(
+                result.daily_class_quality_profile_rows,
+                source_run_id=source_run_id,
+                default_model_key=model_key,
+            ),
+        )
+        self._append_df_to_table(
             self._table_names.daily_feature_profiles,
             self._daily_feature_profile_persist_df_from_rows(
                 result.daily_feature_profile_rows,
+                source_run_id=source_run_id,
+                default_model_key=model_key,
+            ),
+        )
+        self._append_df_to_table(
+            self._table_names.daily_class_feature_profiles,
+            self._daily_class_feature_profile_persist_df_from_rows(
+                result.daily_class_feature_profile_rows,
                 source_run_id=source_run_id,
                 default_model_key=model_key,
             ),
@@ -1613,6 +1922,14 @@ class SparkRefreshRepository(ControlPlaneRepository):
             self._table_names.daily_performance_profiles,
             self._daily_performance_profile_persist_df_from_rows(
                 result.daily_performance_profile_rows,
+                source_run_id=source_run_id,
+                default_model_key=model_key,
+            ),
+        )
+        self._append_df_to_table(
+            self._table_names.daily_label_metrics,
+            self._daily_label_metric_persist_df_from_rows(
+                result.daily_label_metric_rows,
                 source_run_id=source_run_id,
                 default_model_key=model_key,
             ),
@@ -2291,8 +2608,11 @@ class SparkRefreshRepository(ControlPlaneRepository):
         config: MonitorConfig,
         metadata_list: list[dict[str, str]],
         current_daily_quality_profile_rows: list[dict[str, Any]],
+        current_daily_class_quality_profile_rows: list[dict[str, Any]],
         current_daily_feature_profile_rows: list[dict[str, Any]],
+        current_daily_class_feature_profile_rows: list[dict[str, Any]],
         current_daily_performance_profile_rows: list[dict[str, Any]],
+        current_daily_label_metric_rows: list[dict[str, Any]],
         derivation_start: str,
         derivation_end: str,
         computed_at: str,
@@ -2409,8 +2729,11 @@ class SparkRefreshRepository(ControlPlaneRepository):
             quality_history_rows=quality_history_rows,
             window_rows=window_rows,
             daily_quality_profile_rows=current_daily_quality_profile_rows,
+            daily_class_quality_profile_rows=current_daily_class_quality_profile_rows,
             daily_feature_profile_rows=current_daily_feature_profile_rows,
+            daily_class_feature_profile_rows=current_daily_class_feature_profile_rows,
             daily_performance_profile_rows=current_daily_performance_profile_rows,
+            daily_label_metric_rows=current_daily_label_metric_rows,
         )
 
     def _build_daily_quality_profile_rows(
@@ -2461,6 +2784,39 @@ class SparkRefreshRepository(ControlPlaneRepository):
                 "label_row_count": int(row["label_row_count"] or 0),
                 "computed_at": computed_at,
             })
+        return payload
+
+    def _build_daily_class_quality_profile_rows(
+        self,
+        *,
+        config: MonitorConfig,
+        source_df: DataFrame,
+        computed_at: str,
+    ) -> list[dict[str, Any]]:
+        if not supports_binary_class_filters(config):
+            return []
+        payload: list[dict[str, Any]] = []
+        for class_basis in ("actual", "predicted"):
+            for class_value in ("positive", "negative"):
+                filtered = _class_filtered_df(
+                    source_df,
+                    config=config,
+                    class_basis=class_basis,
+                    class_value=class_value,
+                )
+                rows = self._build_daily_quality_profile_rows(
+                    config=config,
+                    source_df=filtered,
+                    computed_at=computed_at,
+                )
+                payload.extend(
+                    {
+                        **row,
+                        "class_basis": class_basis,
+                        "class_value": class_value,
+                    }
+                    for row in rows
+                )
         return payload
 
     def _build_daily_feature_profile_rows(
@@ -2516,6 +2872,41 @@ class SparkRefreshRepository(ControlPlaneRepository):
                     )
                 )
         return rows
+
+    def _build_daily_class_feature_profile_rows(
+        self,
+        *,
+        config: MonitorConfig,
+        source_df: DataFrame,
+        computed_at: str,
+        bin_specs: dict[str, tuple[float, ...]],
+    ) -> list[dict[str, Any]]:
+        if not supports_binary_class_filters(config):
+            return []
+        payload: list[dict[str, Any]] = []
+        for class_basis in ("actual", "predicted"):
+            for class_value in ("positive", "negative"):
+                filtered = _class_filtered_df(
+                    source_df,
+                    config=config,
+                    class_basis=class_basis,
+                    class_value=class_value,
+                )
+                rows = self._build_daily_feature_profile_rows(
+                    config=config,
+                    source_df=filtered,
+                    computed_at=computed_at,
+                    bin_specs=bin_specs,
+                )
+                payload.extend(
+                    {
+                        **row,
+                        "class_basis": class_basis,
+                        "class_value": class_value,
+                    }
+                    for row in rows
+                )
+        return payload
 
     def _build_daily_numeric_feature_stats_map(
         self,
@@ -2885,6 +3276,79 @@ class SparkRefreshRepository(ControlPlaneRepository):
                 "metric_value": float(row["metric_value"]),
                 "row_count": int(row["row_count"] or 0),
                 "volume_pct": round(float(row["volume_pct"] or 0.0), 2),
+                "computed_at": computed_at,
+            })
+        return payload
+
+    def _build_daily_label_metric_rows(
+        self,
+        *,
+        config: MonitorConfig,
+        source_df: DataFrame,
+        computed_at: str,
+    ) -> list[dict[str, Any]]:
+        if not supports_binary_class_filters(config):
+            return []
+        prediction = _spark_col(config.contract.prediction_col).cast("double")
+        label = _spark_col(config.contract.label_col).cast("double")
+        metrics_df = (
+            source_df
+            .select("_model_lens_profile_date", prediction.alias("_model_lens_prediction"), label.alias("_model_lens_label"))
+            .filter(F.col("_model_lens_prediction").isNotNull() & F.col("_model_lens_label").isNotNull())
+            .withColumn("_model_lens_pred_binary", F.when(F.col("_model_lens_prediction") >= F.lit(0.5), F.lit(1)).otherwise(F.lit(0)))
+            .withColumn("_model_lens_truth_binary", F.col("_model_lens_label").cast("int"))
+            .groupBy("_model_lens_profile_date")
+            .agg(
+                F.sum(F.when(F.col("_model_lens_truth_binary") == 1, F.lit(1)).otherwise(F.lit(0))).alias("actual_positive_count"),
+                F.sum(F.when(F.col("_model_lens_truth_binary") == 0, F.lit(1)).otherwise(F.lit(0))).alias("actual_negative_count"),
+                F.sum(F.when(F.col("_model_lens_pred_binary") == 1, F.lit(1)).otherwise(F.lit(0))).alias("predicted_positive_count"),
+                F.sum(F.when(F.col("_model_lens_pred_binary") == 0, F.lit(1)).otherwise(F.lit(0))).alias("predicted_negative_count"),
+                F.sum(F.when((F.col("_model_lens_pred_binary") == 1) & (F.col("_model_lens_truth_binary") == 1), F.lit(1)).otherwise(F.lit(0))).alias("tp"),
+                F.sum(F.when((F.col("_model_lens_pred_binary") == 1) & (F.col("_model_lens_truth_binary") == 0), F.lit(1)).otherwise(F.lit(0))).alias("fp"),
+                F.sum(F.when((F.col("_model_lens_pred_binary") == 0) & (F.col("_model_lens_truth_binary") == 1), F.lit(1)).otherwise(F.lit(0))).alias("fn"),
+                F.sum(F.when((F.col("_model_lens_pred_binary") == 0) & (F.col("_model_lens_truth_binary") == 0), F.lit(1)).otherwise(F.lit(0))).alias("tn"),
+            )
+            .withColumn(
+                "precision",
+                F.when(F.col("tp") + F.col("fp") > 0, F.col("tp") / (F.col("tp") + F.col("fp"))).otherwise(F.lit(None).cast("double")),
+            )
+            .withColumn(
+                "recall",
+                F.when(F.col("tp") + F.col("fn") > 0, F.col("tp") / (F.col("tp") + F.col("fn"))).otherwise(F.lit(None).cast("double")),
+            )
+            .withColumn(
+                "f1",
+                F.when(
+                    F.col("precision").isNotNull() & F.col("recall").isNotNull() & ((F.col("precision") + F.col("recall")) > 0),
+                    (F.lit(2.0) * F.col("precision") * F.col("recall")) / (F.col("precision") + F.col("recall")),
+                ).otherwise(F.lit(None).cast("double")),
+            )
+            .withColumn(
+                "accuracy",
+                F.when(
+                    F.col("tp") + F.col("fp") + F.col("fn") + F.col("tn") > 0,
+                    (F.col("tp") + F.col("tn")) / (F.col("tp") + F.col("fp") + F.col("fn") + F.col("tn")),
+                ).otherwise(F.lit(None).cast("double")),
+            )
+            .orderBy("_model_lens_profile_date")
+        )
+        payload: list[dict[str, Any]] = []
+        for row in _iter_local_rows(metrics_df):
+            payload.append({
+                "model_key": config.model_key,
+                "profile_date": str(row["_model_lens_profile_date"]),
+                "actual_positive_count": int(row["actual_positive_count"] or 0),
+                "actual_negative_count": int(row["actual_negative_count"] or 0),
+                "predicted_positive_count": int(row["predicted_positive_count"] or 0),
+                "predicted_negative_count": int(row["predicted_negative_count"] or 0),
+                "tp": int(row["tp"] or 0),
+                "fp": int(row["fp"] or 0),
+                "fn": int(row["fn"] or 0),
+                "tn": int(row["tn"] or 0),
+                "precision": _safe_float(row["precision"]),
+                "recall": _safe_float(row["recall"]),
+                "f1": _safe_float(row["f1"]),
+                "accuracy": _safe_float(row["accuracy"]),
                 "computed_at": computed_at,
             })
         return payload

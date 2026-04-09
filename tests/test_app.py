@@ -755,9 +755,12 @@ def test_performance_metric_selector_uses_monitor_configured_metrics(monkeypatch
 def test_render_drift_callback_reports_when_only_one_window_exists(monkeypatch) -> None:
     class _FakeBackend:
         def get_monitor_config(self, model_id):
-            return SimpleNamespace(contract=SimpleNamespace(categorical_columns=("segment",)))
+            return SimpleNamespace(
+                contract=SimpleNamespace(categorical_columns=("segment",), label_col="label"),
+                problem_type="classification",
+            )
 
-        def get_drift_results(self, model_id, granularity="daily"):
+        def get_drift_results(self, model_id, granularity="daily", **kwargs):
             return pd.DataFrame(
                 [
                     {
@@ -775,7 +778,7 @@ def test_render_drift_callback_reports_when_only_one_window_exists(monkeypatch) 
     callback = app.callback_map[RENDER_DRIFT_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn("/drift", "fraud_model_demo", "psi", "weekly", 10, 0, {})
+    result = fn("/drift", "fraud_model_demo", "psi", "weekly", 10, None, None, "all", "all", 0, {})
 
     assert "Only one weekly comparison window is available" in str(result[1])
     assert "Categorical features are stored" in str(result[1])
@@ -784,9 +787,12 @@ def test_render_drift_callback_reports_when_only_one_window_exists(monkeypatch) 
 def test_render_drift_callback_respects_top_n_selection(monkeypatch) -> None:
     class _FakeBackend:
         def get_monitor_config(self, model_id):
-            return SimpleNamespace(contract=SimpleNamespace(categorical_columns=()))
+            return SimpleNamespace(
+                contract=SimpleNamespace(categorical_columns=(), label_col="label"),
+                problem_type="classification",
+            )
 
-        def get_drift_results(self, model_id, granularity="daily"):
+        def get_drift_results(self, model_id, granularity="daily", **kwargs):
             assert granularity == "daily"
             return pd.DataFrame(
                 [
@@ -810,8 +816,8 @@ def test_render_drift_callback_respects_top_n_selection(monkeypatch) -> None:
     callback = app.callback_map[RENDER_DRIFT_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result_top_5 = fn("/drift", "fraud_model_demo", "psi", "daily", 5, 0, {})
-    result_top_6 = fn("/drift", "fraud_model_demo", "psi", "daily", 6, 0, {})
+    result_top_5 = fn("/drift", "fraud_model_demo", "psi", "daily", 5, None, None, "all", "all", 0, {})
+    result_top_6 = fn("/drift", "fraud_model_demo", "psi", "daily", 6, None, None, "all", "all", 0, {})
 
     heatmap_5 = result_top_5[0].children.children.figure
     top_5_figure = result_top_5[3].children.children.figure
@@ -914,7 +920,10 @@ def test_render_performance_callback_handles_partial_window_note_and_missing_met
 
 def test_render_quality_callback_surfaces_history_and_latest_snapshot(monkeypatch) -> None:
     class _FakeBackend:
-        def get_quality_stats(self, model_id):
+        def get_monitor_config(self, model_id):
+            return SimpleNamespace(contract=SimpleNamespace(label_col="label"), problem_type="classification")
+
+        def get_quality_stats(self, model_id, **kwargs):
             return {
                 "total_rows": 840,
                 "min_date": "2026-01-01",
@@ -925,7 +934,7 @@ def test_render_quality_callback_surfaces_history_and_latest_snapshot(monkeypatc
                 "null_rates": {"amount": 0.0, "velocity_7d": 1.2},
             }
 
-        def get_quality_history(self, model_id):
+        def get_quality_history(self, model_id, **kwargs):
             return pd.DataFrame(
                 [
                     {
@@ -943,7 +952,7 @@ def test_render_quality_callback_surfaces_history_and_latest_snapshot(monkeypatc
                 ]
             )
 
-        def get_null_rate_history(self, model_id):
+        def get_null_rate_history(self, model_id, **kwargs):
             return pd.DataFrame(
                 [
                     {"period": "2026-01-20", "feature": "velocity_7d", "null_rate": 0.8},
@@ -951,25 +960,34 @@ def test_render_quality_callback_surfaces_history_and_latest_snapshot(monkeypatc
                 ]
             )
 
-        def get_prediction_distribution(self, model_id):
-            return pd.Series([0.2, 0.4, 0.8], dtype=float)
+        def get_latest_class_mix(self, model_id):
+            return {
+                "Actual Positive": 42,
+                "Actual Negative": 58,
+                "Predicted Positive": 40,
+                "Predicted Negative": 60,
+            }
 
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
     app = create_app()
     callback = app.callback_map[RENDER_QUALITY_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn("/quality", "fraud_model_demo", 0, {})
+    result = fn("/quality", "fraud_model_demo", None, None, "all", "all", 0, {})
 
     assert "Monitoring Rows" in str(result[0])
     assert "Rows Per Comparison Window" in str(result[1])
     assert "Null Rate Trends" in str(result[2])
-    assert "Prediction Mean Over Time" in str(result[3])
+    class_mix_figure = result[3].children[1].children.children.figure
+    assert class_mix_figure.layout.title.text == "Latest Window Class Mix"
 
 
 def test_render_quality_callback_uses_na_for_missing_prediction_mean_and_shows_std(monkeypatch) -> None:
     class _FakeBackend:
-        def get_quality_stats(self, model_id):
+        def get_monitor_config(self, model_id):
+            return SimpleNamespace(contract=SimpleNamespace(label_col="label"), problem_type="classification")
+
+        def get_quality_stats(self, model_id, **kwargs):
             return {
                 "total_rows": 840,
                 "min_date": "2026-01-01",
@@ -980,21 +998,21 @@ def test_render_quality_callback_uses_na_for_missing_prediction_mean_and_shows_s
                 "null_rates": {"amount": 0.0, "velocity_7d": 1.2},
             }
 
-        def get_quality_history(self, model_id):
+        def get_quality_history(self, model_id, **kwargs):
             return pd.DataFrame([{"period": "2026-01-21", "row_count": 120, "prediction_mean": None, "prediction_std": 0.13}])
 
-        def get_null_rate_history(self, model_id):
+        def get_null_rate_history(self, model_id, **kwargs):
             return pd.DataFrame()
 
-        def get_prediction_distribution(self, model_id):
-            return pd.Series(dtype=float)
+        def get_latest_class_mix(self, model_id):
+            return {}
 
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
     app = create_app()
     callback = app.callback_map[RENDER_QUALITY_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn("/quality", "fraud_model_demo", 0, {})
+    result = fn("/quality", "fraud_model_demo", None, None, "all", "all", 0, {})
 
     rendered = str(result[0])
     assert "Prediction Mean" in rendered
@@ -1048,7 +1066,7 @@ def test_populate_feature_deep_dive_prefers_most_drifted_feature(monkeypatch) ->
 
 def test_render_feature_deep_dive_reports_distribution_context(monkeypatch) -> None:
     class _FakeBackend:
-        def get_feature_distribution_details(self, model_id, feature):
+        def get_feature_distribution_details(self, model_id, feature, require_exact_samples=False):
             return {
                 "baseline": pd.Series([1.0, 2.0], dtype=float),
                 "current": pd.Series([3.0, 4.0], dtype=float),
@@ -1058,13 +1076,23 @@ def test_render_feature_deep_dive_reports_distribution_context(monkeypatch) -> N
             }
 
         def get_dimension_breakdown(self, model_id, feature, dimension):
-            return pd.DataFrame([{"dimension_value": "(missing)", "feature_mean": 1.5, "feature_std": 0.1, "null_pct": 0.0}])
+            return pd.DataFrame(
+                [
+                    {
+                        "dimension_value": "(missing)",
+                        "feature_average": 1.5,
+                        "feature_p25": 1.2,
+                        "feature_p50": 1.4,
+                        "feature_p75": 1.7,
+                    }
+                ]
+            )
 
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
     app = create_app()
     fn = _find_callback_by_input_and_output(app, "deepdive-feature-select", "deepdive-distribution-container")
 
-    distribution, dimension, context = fn("/features", "fraud_model_demo", "amount", "region", 0, {})
+    distribution, dimension, context = fn("/features", "fraud_model_demo", "amount", "region", "auto", 40, "", "off", 1.0, 0, {})
 
     assert "Distribution: amount" in str(distribution)
     assert "amount by region" in str(dimension).lower()
@@ -1074,14 +1102,14 @@ def test_render_feature_deep_dive_reports_distribution_context(monkeypatch) -> N
 
 def test_render_feature_deep_dive_handles_backend_errors(monkeypatch) -> None:
     class _FakeBackend:
-        def get_feature_distribution_details(self, model_id, feature):
+        def get_feature_distribution_details(self, model_id, feature, require_exact_samples=False):
             raise RuntimeError("feature read failed")
 
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
     app = create_app()
     fn = _find_callback_by_input_and_output(app, "deepdive-feature-select", "deepdive-distribution-container")
 
-    distribution, dimension, context = fn("/features", "fraud_model_demo", "amount", "", 0, {})
+    distribution, dimension, context = fn("/features", "fraud_model_demo", "amount", "", "auto", 40, "", "off", 1.0, 0, {})
 
     assert "Could not load feature detail: feature read failed" in str(distribution)
     assert "Feature detail is unavailable right now." in str(context)

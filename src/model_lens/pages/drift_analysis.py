@@ -60,6 +60,55 @@ def layout():
                         ],
                         md=2,
                     ),
+                    dbc.Col(
+                        [
+                            dbc.Label("Date Range", className="text-muted"),
+                            dcc.DatePickerRange(
+                                id="drift-date-range",
+                                display_format="YYYY-MM-DD",
+                                minimum_nights=0,
+                                className="w-100",
+                            ),
+                        ],
+                        md=4,
+                    ),
+                ],
+                className="mb-3",
+            ),
+            dbc.Row(
+                [
+                    dbc.Col(
+                        [
+                            dbc.Label("Class Basis", className="text-muted"),
+                            dbc.Select(
+                                id="drift-class-basis-select",
+                                options=[
+                                    {"label": "All Rows", "value": "all"},
+                                    {"label": "Actual Label", "value": "actual"},
+                                    {"label": "Predicted Label", "value": "predicted"},
+                                ],
+                                value="all",
+                                style=DROPDOWN_STYLE,
+                            ),
+                        ],
+                        md=3,
+                    ),
+                    dbc.Col(
+                        [
+                            dbc.Label("Class Value", className="text-muted"),
+                            dbc.Select(
+                                id="drift-class-value-select",
+                                options=[
+                                    {"label": "All Rows", "value": "all"},
+                                    {"label": "Positive", "value": "positive"},
+                                    {"label": "Negative", "value": "negative"},
+                                ],
+                                value="all",
+                                style=DROPDOWN_STYLE,
+                            ),
+                        ],
+                        md=3,
+                    ),
                 ],
                 className="mb-4",
             ),

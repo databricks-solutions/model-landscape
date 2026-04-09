@@ -26,6 +26,7 @@ from model_lens.domain.performance_metrics import (
     performance_metric_options,
 )
 from model_lens.pages import onboarding
+from model_lens.services.class_filters import normalize_class_filter, supports_binary_class_filters
 from model_lens.services.inference_contracts import build_inference_contract
 from model_lens.services.onboarding import baseline_label, build_default_baseline, build_fixed_baseline
 from model_lens.services.refresh_jobs import (
@@ -104,13 +105,61 @@ def _format_metric_value(value: float | None, *, decimals: int = 4) -> str:
     return f"{float(value):.{decimals}f}"
 
 
-def _feature_distribution_source_message(source: str, *, approximate: bool) -> str:
+def _parse_custom_edges(value: object) -> list[float] | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    edges: list[float] = []
+    for token in text.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        numeric = pd.to_numeric(pd.Series([token]), errors="coerce").iloc[0]
+        if pd.isna(numeric):
+            raise ValueError(f"Invalid edge value: {token}")
+        edges.append(float(numeric))
+    if len(edges) < 2:
+        raise ValueError("Enter at least two numeric edges.")
+    if any(right <= left for left, right in zip(edges, edges[1:])):
+        raise ValueError("Custom bin edges must be strictly increasing.")
+    return edges
+
+
+def _trim_percentile_value(toggle: str | None, raw_value: object) -> float | None:
+    if str(toggle or "off").strip().lower() != "on":
+        return None
+    numeric = pd.to_numeric(pd.Series([raw_value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        return 1.0
+    return max(0.0, min(49.0, float(numeric)))
+
+
+def _analysis_filter_summary(
+    *,
+    start_date: str | None,
+    end_date: str | None,
+    class_basis: str | None,
+    class_value: str | None,
+) -> str:
+    parts: list[str] = []
+    if start_date or end_date:
+        parts.append(f"Date range: {start_date or 'start'} to {end_date or 'end'}")
+    basis = str(class_basis or "all").strip().lower()
+    value = str(class_value or "all").strip().lower()
+    if basis in {"actual", "predicted"} and value in {"positive", "negative"}:
+        parts.append(f"{basis.title()} {value.title()}")
+    return " | ".join(parts)
+
+
+def _feature_distribution_source_message(source: str) -> str:
     if source == "persisted_histogram":
         return "Distribution source: persisted daily feature profiles (approximate histogram reconstruction)."
     if source == "persisted_samples":
         return "Distribution source: persisted daily feature profiles."
     if source == "bounded_window_read":
         return "Distribution source: bounded source-window read."
+    if source == "unavailable_requested_raw":
+        return "Requested exact distribution controls need a bounded source-window read, but that path is unavailable for this monitor right now."
     return "Distribution source unavailable. Refresh more history or check bounded source-read support."
 
 
@@ -684,17 +733,6 @@ def _control_plane_ready(
 
 def _workspace_readiness_mode(readiness_state: dict | None) -> str:
     return str((readiness_state or {}).get("overall_mode") or "not_ready").strip().lower() or "not_ready"
-
-
-def _workspace_ready_for_onboarding(
-    ready_state: dict | None,
-    readiness_state: dict | None,
-    session_data: dict | None,
-) -> bool:
-    return _ready_for_session(ready_state, session_data) and _workspace_readiness_mode(readiness_state) in {
-        "scheduler_only",
-        "fully_ready",
-    }
 
 
 def _workspace_readiness_for_session(ready_state: dict | None, session_data: dict | None) -> dict[str, object]:
@@ -2331,10 +2369,14 @@ def register_callbacks(app) -> None:
         Input("drift-metric-select", "value"),
         Input("drift-granularity-select", "value"),
         Input("drift-top-n", "value"),
+        Input("drift-date-range", "start_date"),
+        Input("drift-date-range", "end_date"),
+        Input("drift-class-basis-select", "value"),
+        Input("drift-class-value-select", "value"),
         Input("reload-token", "data"),
         Input("session-config-store", "data"),
     )
-    def render_drift(pathname, model_id, metric, granularity, top_n, _, session_data):
+    def render_drift(pathname, model_id, metric, granularity, top_n, start_date, end_date, class_basis, class_value, _, session_data):
         if pathname != "/drift":
             return no_update, no_update, no_update, no_update
         if not model_id:
@@ -2342,9 +2384,30 @@ def register_callbacks(app) -> None:
             return empty, html.Div(), html.Div(), html.Div()
         backend = _make_backend(session_data)
         config = backend.get_monitor_config(model_id)
-        drift = backend.get_drift_results(model_id, granularity=granularity or "daily")
+        _, _, class_filter_active = normalize_class_filter(class_basis, class_value)
+        notes: list[object] = []
+        if class_filter_active and not supports_binary_class_filters(config):
+            empty = make_empty_state(
+                "Class filters are available only for binary classification monitors with labels.",
+                icon="fas fa-wave-square",
+            )
+            return empty, html.Div([_status_alert("Class filters are available only for binary classification monitors with labels.", "warning")]), html.Div(), html.Div()
+        drift = backend.get_drift_results(
+            model_id,
+            granularity=granularity or "daily",
+            start_date=start_date,
+            end_date=end_date,
+            class_basis=class_basis,
+            class_value=class_value,
+        )
         if drift.empty:
-            empty = make_empty_state("No drift history available yet. Run a refresh to populate this page.", icon="fas fa-wave-square")
+            if class_filter_active:
+                empty = make_empty_state(
+                    "Filtered drift history is unavailable until the next refresh populates class-aware daily facts.",
+                    icon="fas fa-wave-square",
+                )
+            else:
+                empty = make_empty_state("No drift history available yet. Run a refresh to populate this page.", icon="fas fa-wave-square")
             return empty, html.Div(), html.Div(), html.Div()
         normalized_top_n = _normalize_top_n(top_n, default=10, minimum=5, maximum=50)
         ranked_features = _historical_drift_feature_ranking(
@@ -2352,12 +2415,18 @@ def register_callbacks(app) -> None:
             metric=metric or "psi",
             top_n=normalized_top_n,
         )
-        thresholds = dict(zip(("warning", "critical"), get_thresholds(metric or "psi")))
-        notes: list[object] = []
         period_count = int(drift["period"].nunique()) if "period" in drift.columns else 0
         history_message = _comparison_history_message(period_count, granularity or "daily")
         if history_message:
             notes.append(_status_alert(history_message, "info"))
+        filter_summary = _analysis_filter_summary(
+            start_date=start_date,
+            end_date=end_date,
+            class_basis=class_basis,
+            class_value=class_value,
+        )
+        if filter_summary:
+            notes.append(_status_alert(f"Active filters: {filter_summary}", "secondary"))
         notes.append(
             _status_alert(
                 f"Top features are ranked by the highest historical {(metric or 'psi').upper()} across comparison windows.",
@@ -2370,12 +2439,13 @@ def register_callbacks(app) -> None:
                     "Categorical features are stored in the monitor contract, but the current drift engine renders only numeric feature drift on this page.",
                     "secondary",
                 )
-            )
+        )
         timeline_features = ranked_features["feature"].tolist() if "feature" in ranked_features.columns else []
         if not timeline_features and "feature" in drift.columns:
             timeline_features = drift["feature"].dropna().astype(str).drop_duplicates().tolist()[:8]
         filtered_drift = drift[drift["feature"].isin(timeline_features)].copy() if timeline_features else drift
-        heatmap_title = f"{(granularity or 'daily').title()} Feature Drift Heatmap"
+        title_suffix = f" ({filter_summary})" if filter_summary else ""
+        heatmap_title = f"{(granularity or 'daily').title()} Feature Drift Heatmap{title_suffix}"
         return (
             make_chart_card(charts.build_drift_heatmap(filtered_drift, metric=metric or "psi", title=heatmap_title)),
             html.Div(notes) if notes else html.Div(),
@@ -2384,10 +2454,17 @@ def register_callbacks(app) -> None:
                     filtered_drift,
                     timeline_features,
                     metric=metric or "psi",
-                    thresholds=thresholds,
+                    title=f"{(metric or 'psi').upper()} Over Time{title_suffix}",
                 )
             ),
-            make_chart_card(charts.build_top_drifters_bar(filtered_drift, metric=metric or "psi", top_n=normalized_top_n)),
+            make_chart_card(
+                charts.build_top_drifters_bar(
+                    filtered_drift,
+                    metric=metric or "psi",
+                    top_n=normalized_top_n,
+                    title=f"Top {normalized_top_n} Drifting Features (Historical Max){title_suffix}",
+                )
+            ),
         )
 
     @app.callback(
@@ -2433,6 +2510,18 @@ def register_callbacks(app) -> None:
         return feature_options, selected_feature, dimension_options, selected_dimension
 
     @app.callback(
+        Output("deepdive-bin-count-input", "disabled"),
+        Output("deepdive-custom-edges-input", "disabled"),
+        Output("deepdive-trim-percentile-input", "disabled"),
+        Input("deepdive-binning-mode-select", "value"),
+        Input("deepdive-trim-toggle", "value"),
+    )
+    def sync_deepdive_controls(binning_mode, trim_toggle):
+        normalized_mode = str(binning_mode or "auto").strip().lower()
+        trim_enabled = str(trim_toggle or "off").strip().lower() == "on"
+        return normalized_mode != "fixed", normalized_mode != "custom", not trim_enabled
+
+    @app.callback(
         Output("deepdive-distribution-container", "children"),
         Output("deepdive-dimension-container", "children"),
         Output("deepdive-context-container", "children"),
@@ -2440,10 +2529,27 @@ def register_callbacks(app) -> None:
         Input("global-model-select", "value"),
         Input("deepdive-feature-select", "value"),
         Input("deepdive-dimension-select", "value"),
+        Input("deepdive-binning-mode-select", "value"),
+        Input("deepdive-bin-count-input", "value"),
+        Input("deepdive-custom-edges-input", "value"),
+        Input("deepdive-trim-toggle", "value"),
+        Input("deepdive-trim-percentile-input", "value"),
         Input("reload-token", "data"),
         Input("session-config-store", "data"),
     )
-    def render_feature_deep_dive(pathname, model_id, feature, dimension, _, session_data):
+    def render_feature_deep_dive(
+        pathname,
+        model_id,
+        feature,
+        dimension,
+        binning_mode,
+        bin_count,
+        custom_edges_text,
+        trim_toggle,
+        trim_percentile_raw,
+        _,
+        session_data,
+    ):
         if pathname != "/features":
             return no_update, no_update, no_update
         if not model_id or not feature:
@@ -2451,10 +2557,27 @@ def register_callbacks(app) -> None:
             return empty, html.Div(), "Select a model and feature to inspect."
         try:
             backend = _make_backend(session_data)
-            details = backend.get_feature_distribution_details(model_id, feature)
+            normalized_mode = str(binning_mode or "auto").strip().lower()
+            custom_edges = _parse_custom_edges(custom_edges_text) if normalized_mode == "custom" else None
+            trim_percentile = _trim_percentile_value(trim_toggle, trim_percentile_raw)
+            details = backend.get_feature_distribution_details(
+                model_id,
+                feature,
+                require_exact_samples=(normalized_mode == "custom" or trim_percentile is not None),
+            )
             baseline = details["baseline"]
             current = details["current"]
-            distribution = make_chart_card(charts.build_feature_distribution(baseline, current, feature))
+            distribution = make_chart_card(
+                charts.build_feature_distribution(
+                    baseline,
+                    current,
+                    feature,
+                    binning_mode=normalized_mode,
+                    n_bins=_normalize_top_n(bin_count, default=40, minimum=2, maximum=200),
+                    custom_edges=custom_edges,
+                    trim_percentile=trim_percentile,
+                )
+            )
             dimension_chart = html.Div()
             if dimension:
                 breakdown = backend.get_dimension_breakdown(model_id, feature, dimension)
@@ -2465,8 +2588,17 @@ def register_callbacks(app) -> None:
                     html.Div(
                         _feature_distribution_source_message(
                             str(details.get("distribution_source") or "unavailable"),
-                            approximate=bool(details.get("approximate")),
                         )
+                    ),
+                    html.Div(
+                        f"Binning: {normalized_mode.title()}"
+                        + (
+                            f" | Bin Count: {_normalize_top_n(bin_count, default=40, minimum=2, maximum=200)}"
+                            if normalized_mode == "fixed"
+                            else ""
+                        )
+                        + (" | Percentile clipping enabled" if trim_percentile is not None else ""),
+                        className="mt-1",
                     ),
                 ]
             )
@@ -2481,23 +2613,64 @@ def register_callbacks(app) -> None:
         Output("quality-prediction-container", "children"),
         Input("url", "pathname"),
         Input("global-model-select", "value"),
+        Input("quality-date-range", "start_date"),
+        Input("quality-date-range", "end_date"),
+        Input("quality-class-basis-select", "value"),
+        Input("quality-class-value-select", "value"),
         Input("reload-token", "data"),
         Input("session-config-store", "data"),
     )
-    def render_quality(pathname, model_id, _, session_data):
+    def render_quality(pathname, model_id, start_date, end_date, class_basis, class_value, _, session_data):
         if pathname != "/quality":
             return no_update, no_update, no_update, no_update
         if not model_id:
             empty = make_empty_state("Select a model to inspect quality.", icon="fas fa-database")
             return empty, html.Div(), html.Div(), html.Div()
         backend = _make_backend(session_data)
-        quality = backend.get_quality_stats(model_id)
-        if not quality:
-            empty = make_empty_state("No quality snapshot available yet. Run a refresh first.", icon="fas fa-database")
+        config = backend.get_monitor_config(model_id)
+        _, _, class_filter_active = normalize_class_filter(class_basis, class_value)
+        if class_filter_active and not supports_binary_class_filters(config):
+            empty = make_empty_state(
+                "Class filters are available only for binary classification monitors with labels.",
+                icon="fas fa-database",
+            )
             return empty, html.Div(), html.Div(), html.Div()
-        quality_history = backend.get_quality_history(model_id)
-        null_rate_history = backend.get_null_rate_history(model_id)
+        quality = backend.get_quality_stats(
+            model_id,
+            start_date=start_date,
+            end_date=end_date,
+            class_basis=class_basis,
+            class_value=class_value,
+        )
+        if not quality:
+            empty_message = (
+                "Filtered quality history is unavailable until the next refresh populates class-aware daily facts."
+                if class_filter_active
+                else "No quality snapshot available yet. Run a refresh first."
+            )
+            empty = make_empty_state(empty_message, icon="fas fa-database")
+            return empty, html.Div(), html.Div(), html.Div()
+        quality_history = backend.get_quality_history(
+            model_id,
+            start_date=start_date,
+            end_date=end_date,
+            class_basis=class_basis,
+            class_value=class_value,
+        )
+        null_rate_history = backend.get_null_rate_history(
+            model_id,
+            start_date=start_date,
+            end_date=end_date,
+            class_basis=class_basis,
+            class_value=class_value,
+        )
         history_note = _comparison_history_message(len(quality_history), "daily")
+        filter_summary = _analysis_filter_summary(
+            start_date=start_date,
+            end_date=end_date,
+            class_basis=class_basis,
+            class_value=class_value,
+        )
         kpis = [
             dbc.Col(
                 make_metric_card(
@@ -2515,6 +2688,14 @@ def register_callbacks(app) -> None:
         volume_children_items: list[object] = []
         if history_note:
             volume_children_items.append(_status_alert(history_note, "info"))
+        if filter_summary:
+            volume_children_items.append(_status_alert(f"Active filters: {filter_summary}", "secondary"))
+        volume_children_items.append(
+            html.Small(
+                "Comparison windows aggregate the latest persisted current range for each baseline/current pairing.",
+                className="text-muted d-block mb-2",
+            )
+        )
         volume_children_items.append(
             dbc.Row(
                 [
@@ -2535,7 +2716,7 @@ def register_callbacks(app) -> None:
             [
                 make_chart_card(charts.build_prediction_quality_timeline(quality_history)),
                 make_chart_card(
-                    charts.build_prediction_distribution(backend.get_prediction_distribution(model_id)),
+                    charts.build_class_mix_chart(backend.get_latest_class_mix(model_id)),
                     class_name="mb-0",
                 ),
             ]
@@ -2830,6 +3011,8 @@ def register_callbacks(app) -> None:
                         "daily_profiles_ms",
                         "derivation_ms",
                         "persistence_ms",
+                        "rows_scanned",
+                        "label_rows_scanned",
                     )
                     if recent_runs and column in recent_runs[0]
                 ]
@@ -2850,6 +3033,8 @@ def register_callbacks(app) -> None:
                     "daily_profiles_ms": "Daily Profiles",
                     "derivation_ms": "Derivation",
                     "persistence_ms": "Persistence",
+                    "rows_scanned": "Rows Scanned",
+                    "label_rows_scanned": "Label Rows",
                 }
             )
             for column in ("Total Duration", "Source Metadata", "Daily Profiles", "Derivation", "Persistence"):
@@ -3147,10 +3332,19 @@ def register_callbacks(app) -> None:
                     className="text-muted mb-3",
                 ),
                 schedule_card,
+                dbc.Alert(
+                    "The shared refresh workflow checks due monitors hourly by default. The cadence settings above decide whether this monitor actually runs drift/quality or performance work when that shared job wakes up.",
+                    color="secondary",
+                    className="py-2 mb-3",
+                ),
                 html.H6("Runtime State", className="text-light mb-2"),
                 _render_frame(runtime_frame, "No runtime state yet."),
                 html.Hr(),
                 html.H6("Refresh Diagnostics", className="text-light mb-2"),
+                html.Small(
+                    "Recent duration and scanned-row telemetry is the best practical proxy for compute footprint in this deployment model.",
+                    className="text-muted d-block mb-2",
+                ),
                 _render_refresh_diagnostics(refresh_diagnostics),
                 html.Hr(),
                 html.H6("Recent Refresh Runs", className="text-light mb-2"),

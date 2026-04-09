@@ -429,6 +429,261 @@ def test_get_performance_summary_supports_alternate_metric_names() -> None:
     assert rmse["timeline"][0]["rmse"] == 0.813
 
 
+def test_get_performance_summary_prefers_daily_label_metrics_and_keeps_null_gaps() -> None:
+    config = MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.model_lens_demo.inference_logs",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=("amount",),
+        ),
+        baseline=BaselinePolicy(n_days=7),
+        model_id_value="fraud_model_v1",
+    )
+    repository = SimpleNamespace(
+        _warehouse=_FakeWarehouse(),
+        table_names=SimpleNamespace(
+            performance_metrics="performance_metrics",
+        ),
+        list_monitor_configs=lambda status="active": [config],
+        get_monitor_summary=lambda: pd.DataFrame(),
+        get_daily_label_metric_rows=lambda model_id, start_date=None, end_date=None: [
+            {
+                "model_key": model_id,
+                "profile_date": "2026-01-20",
+                "actual_positive_count": 4,
+                "actual_negative_count": 6,
+                "predicted_positive_count": 0,
+                "predicted_negative_count": 10,
+                "tp": 0,
+                "fp": 0,
+                "fn": 4,
+                "tn": 6,
+                "precision": None,
+                "recall": 0.0,
+                "f1": None,
+                "accuracy": 0.6,
+            },
+            {
+                "model_key": model_id,
+                "profile_date": "2026-01-21",
+                "actual_positive_count": 5,
+                "actual_negative_count": 5,
+                "predicted_positive_count": 4,
+                "predicted_negative_count": 6,
+                "tp": 3,
+                "fp": 1,
+                "fn": 2,
+                "tn": 4,
+                "precision": 0.75,
+                "recall": 0.6,
+                "f1": 0.6667,
+                "accuracy": 0.7,
+            },
+        ],
+    )
+    backend = DashboardBackend(repository=repository)
+
+    performance = backend.get_performance_summary("fraud_model_demo", metric_name="precision")
+
+    assert performance["timeline"] == [
+        {"period": "2026-01-20", "precision": None},
+        {"period": "2026-01-21", "precision": 0.75},
+    ]
+
+
+def test_get_quality_stats_and_history_support_class_filters_from_daily_profiles() -> None:
+    config = MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.model_lens_demo.inference_logs",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=("amount",),
+        ),
+        baseline=BaselinePolicy(n_days=7),
+        model_id_value="fraud_model_v1",
+    )
+    repository = SimpleNamespace(
+        _warehouse=_FakeWarehouse(),
+        table_names=SimpleNamespace(),
+        list_monitor_configs=lambda status="active": [config],
+        get_monitor_summary=lambda: pd.DataFrame(),
+        get_daily_class_quality_profile_rows=lambda model_id, start_date=None, end_date=None, class_basis=None, class_value=None: [
+            {
+                "model_key": model_id,
+                "profile_date": "2026-01-20",
+                "class_basis": class_basis,
+                "class_value": class_value,
+                "row_count": 40,
+                "prediction_mean": 0.6,
+                "prediction_std": 0.1,
+                "null_rates": '{"amount": 0.0}',
+                "label_row_count": 40,
+                "computed_at": "2026-01-20T10:00:00",
+            },
+            {
+                "model_key": model_id,
+                "profile_date": "2026-01-21",
+                "class_basis": class_basis,
+                "class_value": class_value,
+                "row_count": 60,
+                "prediction_mean": 0.8,
+                "prediction_std": 0.2,
+                "null_rates": '{"amount": 5.0}',
+                "label_row_count": 60,
+                "computed_at": "2026-01-21T10:00:00",
+            },
+        ],
+    )
+    backend = DashboardBackend(repository=repository)
+
+    quality = backend.get_quality_stats(
+        "fraud_model_demo",
+        start_date="2026-01-20",
+        end_date="2026-01-21",
+        class_basis="actual",
+        class_value="positive",
+    )
+    history = backend.get_quality_history(
+        "fraud_model_demo",
+        start_date="2026-01-20",
+        end_date="2026-01-21",
+        class_basis="actual",
+        class_value="positive",
+    )
+
+    assert quality["total_rows"] == 100
+    assert quality["daily_volume"] == {"2026-01-20": 40, "2026-01-21": 60}
+    assert quality["null_rates"] == {"amount": 3.0}
+    assert list(history["period"]) == ["2026-01-20", "2026-01-21"]
+    assert list(history["row_count"]) == [40, 60]
+
+
+def test_get_drift_results_supports_class_filtered_daily_feature_profiles() -> None:
+    class _WindowWarehouse(_FakeWarehouse):
+        def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
+            if "FROM comparison_windows" in sql:
+                return pd.DataFrame(
+                    [
+                        {
+                            "window_id": "rolling|2026-01-01|2026-01-02|2026-01-03|2026-01-04",
+                            "model_key": params[0],
+                            "window_grain": "day",
+                            "window_start": "2026-01-03",
+                            "window_end": "2026-01-04",
+                            "baseline_start": "2026-01-01",
+                            "baseline_end": "2026-01-02",
+                            "baseline_kind": "rolling",
+                        }
+                    ]
+                )
+            return super().query_params(sql, params)
+
+    config = MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.model_lens_demo.inference_logs",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=("amount",),
+        ),
+        baseline=BaselinePolicy(n_days=2),
+        model_id_value="fraud_model_v1",
+    )
+    repository = SimpleNamespace(
+        _warehouse=_WindowWarehouse(),
+        table_names=SimpleNamespace(
+            comparison_windows="comparison_windows",
+            drift_metrics="drift_metrics",
+        ),
+        list_monitor_configs=lambda status="active": [config],
+        get_monitor_summary=lambda: pd.DataFrame(),
+        get_daily_class_feature_profile_rows=lambda model_id, start_date=None, end_date=None, class_basis=None, class_value=None: [
+            {
+                "model_key": model_id,
+                "profile_date": "2026-01-01",
+                "class_basis": class_basis,
+                "class_value": class_value,
+                "feature_name": "amount",
+                "feature_kind": "numeric",
+                "row_count": 3,
+                "non_null_count": 3,
+                "null_pct": 0.0,
+                "mean": 1.0,
+                "std": 0.1,
+                "distribution_json": '{"sample_values":[0.9,1.0,1.1]}',
+            },
+            {
+                "model_key": model_id,
+                "profile_date": "2026-01-02",
+                "class_basis": class_basis,
+                "class_value": class_value,
+                "feature_name": "amount",
+                "feature_kind": "numeric",
+                "row_count": 3,
+                "non_null_count": 3,
+                "null_pct": 0.0,
+                "mean": 1.1,
+                "std": 0.1,
+                "distribution_json": '{"sample_values":[1.0,1.1,1.2]}',
+            },
+            {
+                "model_key": model_id,
+                "profile_date": "2026-01-03",
+                "class_basis": class_basis,
+                "class_value": class_value,
+                "feature_name": "amount",
+                "feature_kind": "numeric",
+                "row_count": 3,
+                "non_null_count": 3,
+                "null_pct": 0.0,
+                "mean": 5.0,
+                "std": 0.1,
+                "distribution_json": '{"sample_values":[4.9,5.0,5.1]}',
+            },
+            {
+                "model_key": model_id,
+                "profile_date": "2026-01-04",
+                "class_basis": class_basis,
+                "class_value": class_value,
+                "feature_name": "amount",
+                "feature_kind": "numeric",
+                "row_count": 3,
+                "non_null_count": 3,
+                "null_pct": 0.0,
+                "mean": 5.1,
+                "std": 0.1,
+                "distribution_json": '{"sample_values":[5.0,5.1,5.2]}',
+            },
+        ],
+    )
+    backend = DashboardBackend(repository=repository)
+
+    drift = backend.get_drift_results(
+        "fraud_model_demo",
+        granularity="daily",
+        start_date="2026-01-03",
+        end_date="2026-01-04",
+        class_basis="actual",
+        class_value="positive",
+    )
+
+    assert list(drift["feature"]) == ["amount"]
+    assert drift.iloc[0]["period"] == "2026-01-04"
+    assert drift.iloc[0]["psi"] > 0.0
+
+
 def test_feature_detail_load_uses_bounded_sampled_frame() -> None:
     calls: list[dict[str, object]] = []
     config = MonitorConfig(

@@ -12,8 +12,8 @@ import pandas as pd
 from model_lens.config import settings
 from model_lens.domain.models import MLflowLineage, MonitorConfig, RefreshResult
 from model_lens.services import refresh_runner as refresh_runner_module
-from model_lens.services.contracts import build_contract
 from model_lens.services.control_plane import ControlPlaneRepository
+from model_lens.services.inference_contracts import build_inference_contract as build_contract
 from model_lens.services.onboarding import build_default_baseline, build_fixed_baseline
 from model_lens.services.refresh_engine import (
     build_daily_feature_profile_rows,
@@ -703,9 +703,12 @@ def test_ensure_control_plane_skips_create_when_schema_and_tables_already_exist(
         "model_observability.control_plane.quality_metrics",
         "model_observability.control_plane.quality_history",
         "model_observability.control_plane.daily_quality_profiles",
+        "model_observability.control_plane.daily_class_quality_profiles",
         "model_observability.control_plane.daily_feature_profiles",
+        "model_observability.control_plane.daily_class_feature_profiles",
         "model_observability.control_plane.performance_metrics",
         "model_observability.control_plane.daily_performance_profiles",
+        "model_observability.control_plane.daily_label_metrics",
         "model_observability.control_plane.performance_bin_specs",
         "model_observability.control_plane.incidents",
         "model_observability.control_plane.incident_history",
@@ -896,6 +899,20 @@ def test_append_refresh_result_replaces_daily_profile_rows_by_profile_date() -> 
                     "computed_at": "2026-01-20T00:00:00+00:00",
                 }
             ],
+            daily_class_quality_profile_rows=[
+                {
+                    "model_key": "payments_risk_v1",
+                    "profile_date": "2026-01-20",
+                    "class_basis": "actual",
+                    "class_value": "positive",
+                    "row_count": 70,
+                    "prediction_mean": 0.63,
+                    "prediction_std": 0.07,
+                    "null_rates": '{"amount": 0.0}',
+                    "label_row_count": 70,
+                    "computed_at": "2026-01-20T00:00:00+00:00",
+                }
+            ],
             daily_feature_profile_rows=[
                 {
                     "model_key": "payments_risk_v1",
@@ -913,6 +930,25 @@ def test_append_refresh_result_replaces_daily_profile_rows_by_profile_date() -> 
                     "computed_at": "2026-01-20T00:00:00+00:00",
                 }
             ],
+            daily_class_feature_profile_rows=[
+                {
+                    "model_key": "payments_risk_v1",
+                    "profile_date": "2026-01-20",
+                    "class_basis": "actual",
+                    "class_value": "positive",
+                    "feature_name": "amount",
+                    "feature_kind": "numeric",
+                    "row_count": 70,
+                    "non_null_count": 70,
+                    "null_pct": 0.0,
+                    "mean": 15.0,
+                    "std": 1.0,
+                    "min_value": 13.0,
+                    "max_value": 17.0,
+                    "distribution_json": '{"sample_values":[13.0,15.0,17.0]}',
+                    "computed_at": "2026-01-20T00:00:00+00:00",
+                }
+            ],
             daily_performance_profile_rows=[
                 {
                     "model_key": "payments_risk_v1",
@@ -926,22 +962,53 @@ def test_append_refresh_result_replaces_daily_profile_rows_by_profile_date() -> 
                     "computed_at": "2026-01-20T00:00:00+00:00",
                 }
             ],
+            daily_label_metric_rows=[
+                {
+                    "model_key": "payments_risk_v1",
+                    "profile_date": "2026-01-20",
+                    "actual_positive_count": 40,
+                    "actual_negative_count": 60,
+                    "predicted_positive_count": 45,
+                    "predicted_negative_count": 55,
+                    "tp": 35,
+                    "fp": 10,
+                    "fn": 5,
+                    "tn": 50,
+                    "precision": 0.7778,
+                    "recall": 0.875,
+                    "f1": 0.8235,
+                    "accuracy": 0.85,
+                    "computed_at": "2026-01-20T00:00:00+00:00",
+                }
+            ],
         ),
         source_run_id="run-2",
     )
 
     assert any("DELETE FROM model_observability.control_plane.daily_quality_profiles" in sql for sql, _ in warehouse.executed_params)
+    assert any("DELETE FROM model_observability.control_plane.daily_class_quality_profiles" in sql for sql, _ in warehouse.executed_params)
     assert any("DELETE FROM model_observability.control_plane.daily_feature_profiles" in sql for sql, _ in warehouse.executed_params)
+    assert any("DELETE FROM model_observability.control_plane.daily_class_feature_profiles" in sql for sql, _ in warehouse.executed_params)
     assert any("DELETE FROM model_observability.control_plane.daily_performance_profiles" in sql for sql, _ in warehouse.executed_params)
+    assert any("DELETE FROM model_observability.control_plane.daily_label_metrics" in sql for sql, _ in warehouse.executed_params)
     assert any("INSERT INTO model_observability.control_plane.daily_quality_profiles" in sql for sql, _ in warehouse.batch_calls)
+    assert any("INSERT INTO model_observability.control_plane.daily_class_quality_profiles" in sql for sql, _ in warehouse.batch_calls)
     assert any("INSERT INTO model_observability.control_plane.daily_feature_profiles" in sql for sql, _ in warehouse.batch_calls)
+    assert any("INSERT INTO model_observability.control_plane.daily_class_feature_profiles" in sql for sql, _ in warehouse.batch_calls)
     assert any("INSERT INTO model_observability.control_plane.daily_performance_profiles" in sql for sql, _ in warehouse.batch_calls)
+    assert any("INSERT INTO model_observability.control_plane.daily_label_metrics" in sql for sql, _ in warehouse.batch_calls)
     performance_insert_rows = next(
         rows
         for sql, rows in warehouse.batch_calls
         if "INSERT INTO model_observability.control_plane.daily_performance_profiles" in sql
     )
     assert performance_insert_rows[0][7] == 60.0
+    label_metric_insert_rows = next(
+        rows
+        for sql, rows in warehouse.batch_calls
+        if "INSERT INTO model_observability.control_plane.daily_label_metrics" in sql
+    )
+    assert label_metric_insert_rows[0][10] == 0.7778
 
 
 def test_append_refresh_result_rebuilds_quality_summary_from_persisted_daily_profiles() -> None:
@@ -1564,12 +1631,15 @@ class SparkProfileRepository(BoundedWindowRepository):
                 inference_df=range_frame,
                 computed_at=computed_at,
             ),
+            daily_class_quality_profile_rows=[],
             daily_feature_profile_rows=build_daily_feature_profile_rows(
                 config=config,
                 inference_df=range_frame,
                 computed_at=computed_at,
             ),
+            daily_class_feature_profile_rows=[],
             daily_performance_profile_rows=[],
+            daily_label_metric_rows=[],
             performance_bin_specs=existing_bin_specs or {},
         )
 
@@ -1579,8 +1649,11 @@ class SparkProfileRepository(BoundedWindowRepository):
         config: MonitorConfig,
         metadata_list: list[dict[str, str]],
         current_daily_quality_profile_rows: list[dict[str, object]],
+        current_daily_class_quality_profile_rows: list[dict[str, object]],
         current_daily_feature_profile_rows: list[dict[str, object]],
+        current_daily_class_feature_profile_rows: list[dict[str, object]],
         current_daily_performance_profile_rows: list[dict[str, object]],
+        current_daily_label_metric_rows: list[dict[str, object]],
         derivation_start: str,
         derivation_end: str,
         computed_at: str,
@@ -1593,8 +1666,11 @@ class SparkProfileRepository(BoundedWindowRepository):
             "model_key": config.model_key,
             "window_count": len(metadata_list),
             "quality_rows": len(current_daily_quality_profile_rows),
+            "class_quality_rows": len(current_daily_class_quality_profile_rows),
             "feature_rows": len(current_daily_feature_profile_rows),
+            "class_feature_rows": len(current_daily_class_feature_profile_rows),
             "performance_rows": len(current_daily_performance_profile_rows),
+            "label_metric_rows": len(current_daily_label_metric_rows),
             "derivation_start": derivation_start,
             "derivation_end": derivation_end,
             "computed_at": computed_at,
@@ -1652,8 +1728,11 @@ class SparkProfileRepository(BoundedWindowRepository):
                 "created_at": computed_at,
             }],
             daily_quality_profile_rows=[dict(row) for row in current_daily_quality_profile_rows],
+            daily_class_quality_profile_rows=[dict(row) for row in current_daily_class_quality_profile_rows],
             daily_feature_profile_rows=[dict(row) for row in current_daily_feature_profile_rows],
+            daily_class_feature_profile_rows=[dict(row) for row in current_daily_class_feature_profile_rows],
             daily_performance_profile_rows=[dict(row) for row in current_daily_performance_profile_rows],
+            daily_label_metric_rows=[dict(row) for row in current_daily_label_metric_rows],
         )
 
     def get_daily_quality_profile_rows(self, *args, **kwargs):

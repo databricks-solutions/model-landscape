@@ -19,6 +19,11 @@ It is built for teams that want an in-house alternative to external observabilit
 - keep `Monitor Settings` aligned with the sidebar-selected monitor by default, clear old action banners when the selected monitor/page changes, and show only the lifecycle actions that apply to the current monitor state
 - organize `Monitor Settings` into `Contract`, `Settings`, and `Admin` tabs so read-only contract details, editable cadence/metric settings, and lifecycle/runtime actions are easier to navigate during demos and operator reviews
 - backfill drift, quality, and performance window history on the first refresh so timelines are populated immediately
+- support inclusive date-range filters on Drift and Data Quality, plus `actual` / `predicted` positive/negative filters for binary classification monitors after the next refresh populates class-aware daily facts
+- rank Drift heatmaps, timelines, and top-feature charts from the same historical-max feature subset and automatically switch to scientific notation for very small drift values
+- drive the Performance timeline from raw persisted daily label metrics so undefined daily precision/recall/F1 render as gaps instead of looking like smoothed window aggregates
+- give Feature Deep Dive explicit binning controls (`Auto`, fixed bin count, or custom edges) plus optional percentile clipping, while refusing to fall back to an unbounded raw-table read when exact samples are unavailable
+- replace the old prediction-distribution tile on Data Quality with a latest-window class-mix chart for binary classification monitors
 - keep giant inference tables off the app memory hot path by using Spark-backed exact source reads for refresh computation and only bounded pandas reads for small UI drilldowns
 - read Overview in bulk for large tenants by querying historical max drift summaries plus the latest quality snapshot across all active monitors instead of replaying full per-monitor history queries on page load
 - keep monitors with no persisted drift history in an explicit `Computing/Pending` state on Overview instead of showing them as healthy-zero rows
@@ -125,9 +130,11 @@ Current protections:
 - the shared refresh workflow now runs on Spark-capable Databricks job compute rather than a serverless Python-only environment
 - scheduled refresh first reads date-range/profile metadata natively, then processes one exact bounded source range per monitor scope in Spark instead of loading raw source rows into pandas
 - the workflow materializes `daily_quality_profiles`, `daily_feature_profiles`, and `daily_performance_profiles` from that Spark range and derives the persisted window/history tables from those daily profiles inside the same refresh pass
+- for binary classification monitors, the workflow also persists `daily_class_quality_profiles`, `daily_class_feature_profiles`, and `daily_label_metrics` so Drift and Data Quality can filter by class without rescanning raw source data and Performance can render raw daily scores
 - the shared Spark workflow now defaults to serial monitor execution inside the driver even if the global worker cap is higher; that avoids running multiple large monitor Spark jobs through one shared session unless an operator deliberately overrides it
 - feature deep-dive charts no longer reread the full source table when daily feature samples are available; they read sampled values from `daily_feature_profiles` first and only fall back to a bounded raw load when needed
 - feature deep-dive distribution reads no longer fall back to an unbounded full-table source scan; if the repository cannot serve a bounded window read, the page degrades to an explicit unavailable state instead
+- if a user asks Feature Deep Dive for custom edges or percentile clipping and only approximate histogram reconstruction is available, the app now attempts a bounded exact-window read; if that path is unavailable, the page says so explicitly instead of silently ignoring the requested control
 - when a feature/detail fallback still needs raw rows, the app now loads only the latest current comparison window for prediction and dimension views instead of rereading the full baseline+current span
 - raw current-window fallbacks now treat `window_end` as inclusive through the end of that calendar day, so same-day rows are not dropped when the lightweight repository path is used
 - Feature Deep Dive now labels whether the distribution came from persisted daily-profile samples / histogram reconstruction or from a bounded source-window read, together with the active baseline/current window dates

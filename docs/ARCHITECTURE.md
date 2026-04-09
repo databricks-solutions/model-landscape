@@ -107,9 +107,12 @@ Current tables:
 - `quality_metrics`
 - `quality_history`
 - `daily_quality_profiles`
+- `daily_class_quality_profiles`
 - `daily_feature_profiles`
+- `daily_class_feature_profiles`
 - `performance_metrics`
 - `daily_performance_profiles`
+- `daily_label_metrics`
 - `performance_bin_specs`
 - `incidents`
 - `incident_history`
@@ -120,6 +123,14 @@ Current tables:
 This is the system of record.
 
 The app also derives a monitor-level diagnostics summary from recent `refresh_runs` rows so operators can see whether source scans, daily profile generation, derivation, or persistence are dominating the last few runs.
+
+For binary classification monitors, the new class-aware daily tables stay additive:
+
+- `daily_class_quality_profiles` stores per-day quality facts split by `actual` / `predicted` positive-or-negative class slices
+- `daily_class_feature_profiles` stores the matching per-day feature distributions for those same slices
+- `daily_label_metrics` stores raw daily `precision`, `recall`, `f1`, and `accuracy` plus the underlying class counts
+
+Those tables are not required for the unfiltered pages. The unfiltered Drift and Data Quality views continue to read the stable window/history tables, while class-filtered views and the raw daily Performance timeline can switch to these daily facts after the next refresh populates them.
 
 `monitor_configs` now also stores the monitor's configured performance metric set and default Performance-tab metric. The persisted performance tables stay generic on `metric_name`, so refresh and readback can handle different built-in metric combinations per monitor without changing the warehouse schema again.
 
@@ -243,6 +254,8 @@ Primary code:
 13. It replaces or appends persisted rows for that model without duplicating logical windows, and recovery windows clear the open-incident projection when no incidents remain active.
 14. If Lakebase mode is active, it refreshes the Lakebase monitor summary and open-incident projection.
 
+For binary classification monitors, the same refresh pass also persists class-aware daily facts so the app can answer filtered Drift/Data Quality queries without raw rescans and can render a raw daily Performance timeline with null gaps on undefined days.
+
 The current numeric drift implementation now stabilizes out-of-range current distributions by expanding the outer histogram bounds to include the current min/max while preserving the reference-derived interior bin edges. That keeps PSI / KL / JS finite for genuine severe-drift cases instead of producing divide-by-zero warnings.
 With the Spark refresh repository active, those numeric-drift histograms and PSI / KL / JS aggregations now run in Spark from persisted daily numeric histogram edges/counts instead of collecting per-window sample arrays back into Python.
 
@@ -261,8 +274,10 @@ Current limitation:
 1. In Lakebase mode, the app reads monitor summary and incident inbox data from Lakebase.
 2. In warehouse-only mode, or if Lakebase is unavailable, it reads those views from the warehouse-backed repository.
 3. Overview severity and the Drift top-feature ranking are derived from historical max drift across the stored comparison windows, while `quality_metrics` remains the latest model-wide compatibility row rebuilt from daily quality facts.
-4. Feature Deep Dive reads persisted daily-feature distributions first and only uses bounded source-window fallbacks; it no longer falls back to an unbounded raw-table scan.
-5. The app renders the current state for operators with loading indicators around the slower warehouse-backed panes.
+4. Drift and Data Quality date-range filters are applied inclusively, and binary class filters (`actual` / `predicted`, `positive` / `negative`) read the new class-aware daily facts instead of rescanning source tables. If a class filter is requested before those daily facts exist, the app returns an explicit unavailable state.
+5. Feature Deep Dive reads persisted daily-feature distributions first and only uses bounded source-window fallbacks; it no longer falls back to an unbounded raw-table scan. Custom edges and percentile clipping request exact bounded samples when they are available.
+6. The Performance timeline prefers `daily_label_metrics`, so undefined daily precision / recall / F1 render as gaps instead of being implied as zeros or weighted window aggregates.
+7. The app renders the current state for operators with loading indicators around the slower warehouse-backed panes.
 
 `incidents` is intentionally the current open-incident projection. Historical openings, escalations, and recoveries are preserved separately in `incident_history`, so a model can have severe historical drift with zero current open incidents if the latest comparison window has recovered.
 

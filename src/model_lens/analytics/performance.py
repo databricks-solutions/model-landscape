@@ -29,6 +29,55 @@ def compute_classification_metrics(df: pd.DataFrame, prediction_col: str, label_
     }
 
 
+def compute_daily_classification_metrics(df: pd.DataFrame, prediction_col: str, label_col: str) -> dict[str, float | int | None]:
+    pred = pd.to_numeric(df[prediction_col], errors="coerce").to_numpy()
+    truth = pd.to_numeric(df[label_col], errors="coerce").to_numpy()
+    mask = ~(np.isnan(pred) | np.isnan(truth))
+    pred = pred[mask]
+    truth = truth[mask]
+    if len(pred) == 0:
+        return {
+            "actual_positive_count": 0,
+            "actual_negative_count": 0,
+            "predicted_positive_count": 0,
+            "predicted_negative_count": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "tn": 0,
+            "precision": None,
+            "recall": None,
+            "f1": None,
+            "accuracy": None,
+        }
+    pred_binary = (pred >= 0.5).astype(int)
+    truth_binary = truth.astype(int)
+    tp = int(((pred_binary == 1) & (truth_binary == 1)).sum())
+    fp = int(((pred_binary == 1) & (truth_binary == 0)).sum())
+    fn = int(((pred_binary == 0) & (truth_binary == 1)).sum())
+    tn = int(((pred_binary == 0) & (truth_binary == 0)).sum())
+    precision = (tp / (tp + fp)) if (tp + fp) > 0 else None
+    recall = (tp / (tp + fn)) if (tp + fn) > 0 else None
+    f1 = None
+    if precision is not None and recall is not None and (precision + recall) > 0:
+        f1 = (2.0 * precision * recall) / (precision + recall)
+    accuracy = (tp + tn) / len(pred_binary) if len(pred_binary) > 0 else None
+    return {
+        "actual_positive_count": int((truth_binary == 1).sum()),
+        "actual_negative_count": int((truth_binary == 0).sum()),
+        "predicted_positive_count": int((pred_binary == 1).sum()),
+        "predicted_negative_count": int((pred_binary == 0).sum()),
+        "tp": tp,
+        "fp": fp,
+        "fn": fn,
+        "tn": tn,
+        "precision": round(float(precision), 4) if precision is not None else None,
+        "recall": round(float(recall), 4) if recall is not None else None,
+        "f1": round(float(f1), 4) if f1 is not None else None,
+        "accuracy": round(float(accuracy), 4) if accuracy is not None else None,
+    }
+
+
 def compute_regression_metrics(df: pd.DataFrame, prediction_col: str, label_col: str) -> dict[str, float]:
     pred = pd.to_numeric(df[prediction_col], errors="coerce").to_numpy()
     truth = pd.to_numeric(df[label_col], errors="coerce").to_numpy()

@@ -39,6 +39,24 @@ def _numeric_array(values) -> np.ndarray:
     return series.to_numpy(dtype=float)
 
 
+def _metric_tickformat(metric: str, values: pd.Series | np.ndarray | list[float]) -> str:
+    series = pd.to_numeric(pd.Series(values), errors="coerce").dropna()
+    max_abs = float(series.abs().max()) if not series.empty else 0.0
+    if metric != "null_rate" and max_abs > 0 and max_abs < 0.01:
+        return ".2e"
+    if metric == "null_rate":
+        return ".2f"
+    return ".4f"
+
+
+def _apply_percentile_trim(values: np.ndarray, percentile: float | None) -> np.ndarray:
+    if percentile is None or percentile <= 0 or percentile >= 50 or values.size == 0:
+        return values
+    lower = np.nanpercentile(values, percentile)
+    upper = np.nanpercentile(values, 100 - percentile)
+    return values[(values >= lower) & (values <= upper)]
+
+
 def _heatmap_colorscale(metric: str, *, zmax: float) -> list[list[float | str]]:
     warning, critical = get_thresholds(metric)
     safe_max = max(float(zmax), float(critical) * 1.5, 1e-9)
@@ -62,8 +80,9 @@ def build_drift_heatmap(df: pd.DataFrame, metric: str = "psi", title: str = "Fea
 
     pivot = df.pivot_table(index="feature", columns="period", values=metric, aggfunc="max").sort_index()
     values = pd.to_numeric(pd.Series(pivot.values.ravel()), errors="coerce").dropna()
-    warning, critical = get_thresholds(metric)
+    _, critical = get_thresholds(metric)
     zmax = max(values.max(), critical * 1.5) if not values.empty else critical * 1.5
+    tickformat = _metric_tickformat(metric, values)
     fig = go.Figure(
         data=go.Heatmap(
             z=pivot.values,
@@ -72,19 +91,9 @@ def build_drift_heatmap(df: pd.DataFrame, metric: str = "psi", title: str = "Fea
             zmin=0,
             zmax=zmax,
             colorscale=_heatmap_colorscale(metric, zmax=zmax),
-            colorbar=dict(title=metric.upper(), tickfont=dict(color=COLORS["text"])),
-            hovertemplate="<b>%{y}</b><br>Period: %{x}<br>" + f"{metric.upper()}: %{{z:.4f}}<extra></extra>",
+            colorbar=dict(title=metric.upper(), tickfont=dict(color=COLORS["text"]), tickformat=tickformat),
+            hovertemplate="<b>%{y}</b><br>Period: %{x}<br>" + f"{metric.upper()}: %{{z:{tickformat}}}<extra></extra>",
         )
-    )
-    fig.add_annotation(
-        text=f"Warning {warning:.2f} | Critical {critical:.2f}",
-        xref="paper",
-        yref="paper",
-        x=1,
-        y=1.1,
-        xanchor="right",
-        showarrow=False,
-        font=dict(size=11, color=COLORS["muted"]),
     )
     return _apply_layout(
         fig,
@@ -95,7 +104,7 @@ def build_drift_heatmap(df: pd.DataFrame, metric: str = "psi", title: str = "Fea
     )
 
 
-def build_drift_timeline(df: pd.DataFrame, features: list[str], metric: str = "psi", thresholds: dict | None = None):
+def build_drift_timeline(df: pd.DataFrame, features: list[str], metric: str = "psi", thresholds: dict | None = None, title: str | None = None):
     if df.empty:
         fig = go.Figure()
         fig.add_annotation(text="No drift data available", showarrow=False)
@@ -107,6 +116,7 @@ def build_drift_timeline(df: pd.DataFrame, features: list[str], metric: str = "p
     if not selected_features:
         selected_features = df["feature"].dropna().astype(str).drop_duplicates().tolist()
     period_count = int(df["period"].nunique()) if "period" in df.columns else 0
+    tickformat = _metric_tickformat(metric, df.get(metric, pd.Series(dtype=float)))
 
     for index, feature in enumerate(selected_features):
         feature_frame = df[df["feature"] == feature].sort_values("period")
@@ -121,24 +131,9 @@ def build_drift_timeline(df: pd.DataFrame, features: list[str], metric: str = "p
                 mode="markers" if int(feature_frame["period"].nunique()) < 2 else "lines+markers",
                 line=dict(color=colors[index % len(colors)], width=2),
                 marker=dict(size=8 if period_count < 2 else 5),
+                hovertemplate="<b>%{fullData.name}</b><br>Period: %{x}<br>" + f"{metric.upper()}: %{{y:{tickformat}}}<extra></extra>",
             )
         )
-
-    if thresholds:
-        if "warning" in thresholds:
-            fig.add_hline(
-                y=thresholds["warning"],
-                line_dash="dash",
-                line_color=COLORS["moderate"],
-                annotation_text="Warning",
-            )
-        if "critical" in thresholds:
-            fig.add_hline(
-                y=thresholds["critical"],
-                line_dash="dash",
-                line_color=COLORS["high"],
-                annotation_text="Critical",
-            )
 
     if not fig.data:
         fig.add_annotation(text="No feature timeline data available yet", showarrow=False)
@@ -156,15 +151,15 @@ def build_drift_timeline(df: pd.DataFrame, features: list[str], metric: str = "p
 
     return _apply_layout(
         fig,
-        title=f"{metric.upper()} Over Time",
+        title=title or f"{metric.upper()} Over Time",
         xaxis_title="Time Period",
-        yaxis_title=metric.upper(),
+        yaxis=dict(title=metric.upper(), tickformat=tickformat, gridcolor=COLORS["grid"], zerolinecolor=COLORS["grid"]),
         legend=dict(bgcolor="rgba(0,0,0,0.5)", font=dict(size=10)),
         height=400,
     )
 
 
-def build_top_drifters_bar(df: pd.DataFrame, metric: str = "psi", top_n: int = 10):
+def build_top_drifters_bar(df: pd.DataFrame, metric: str = "psi", top_n: int = 10, title: str | None = None):
     if df.empty:
         fig = go.Figure()
         fig.add_annotation(text="No drift data available", showarrow=False)
@@ -178,53 +173,74 @@ def build_top_drifters_bar(df: pd.DataFrame, metric: str = "psi", top_n: int = 1
         .nlargest(top_n, metric)
     )
     colors = [_metric_color(value, metric) for value in latest[metric]]
+    tickformat = _metric_tickformat(metric, latest[metric] if metric in latest.columns else pd.Series(dtype=float))
     fig = go.Figure(
         go.Bar(
             x=latest[metric],
             y=latest["feature"],
             orientation="h",
             marker_color=colors,
-            hovertemplate="<b>%{y}</b><br>" + f"{metric.upper()}: %{{x:.4f}}<extra></extra>",
+            hovertemplate="<b>%{y}</b><br>" + f"{metric.upper()}: %{{x:{tickformat}}}<extra></extra>",
         )
     )
     return _apply_layout(
         fig,
-        title=f"Top {top_n} Drifting Features (Historical Max)",
-        xaxis_title=metric.upper(),
+        title=title or f"Top {top_n} Drifting Features (Historical Max)",
+        xaxis=dict(title=metric.upper(), tickformat=tickformat, gridcolor=COLORS["grid"], zerolinecolor=COLORS["grid"]),
         yaxis=dict(autorange="reversed", gridcolor=COLORS["grid"]),
         height=max(300, top_n * 35 + 80),
     )
 
 
-def build_feature_distribution(reference, current, feature_name: str, n_bins: int = 40):
+def build_feature_distribution(
+    reference,
+    current,
+    feature_name: str,
+    *,
+    binning_mode: str = "auto",
+    n_bins: int = 40,
+    custom_edges: list[float] | None = None,
+    trim_percentile: float | None = None,
+):
     ref_clean = _numeric_array(reference)
     cur_clean = _numeric_array(current)
+    ref_clean = _apply_percentile_trim(ref_clean, trim_percentile)
+    cur_clean = _apply_percentile_trim(cur_clean, trim_percentile)
     if len(ref_clean) == 0 and len(cur_clean) == 0:
         fig = go.Figure()
         fig.add_annotation(text="No data available", showarrow=False)
         return _apply_layout(fig, title=f"Distribution: {feature_name}")
 
     fig = go.Figure()
-    fig.add_trace(
-        go.Histogram(
-            x=ref_clean,
-            nbinsx=n_bins,
-            name="Baseline",
-            opacity=0.6,
-            marker_color=COLORS["blue"],
-            histnorm="probability density",
+    if binning_mode == "custom" and custom_edges and len(custom_edges) >= 2:
+        baseline_hist, edges = np.histogram(ref_clean, bins=np.asarray(custom_edges, dtype=float), density=True)
+        current_hist, _ = np.histogram(cur_clean, bins=np.asarray(custom_edges, dtype=float), density=True)
+        centers = (edges[:-1] + edges[1:]) / 2.0
+        widths = np.diff(edges)
+        fig.add_trace(go.Bar(x=centers, y=baseline_hist, width=widths, name="Baseline", opacity=0.55, marker_color=COLORS["blue"]))
+        fig.add_trace(go.Bar(x=centers, y=current_hist, width=widths, name="Current", opacity=0.55, marker_color=COLORS["highlight"]))
+    else:
+        histogram_kwargs = {} if binning_mode == "auto" else {"nbinsx": max(int(n_bins), 2)}
+        fig.add_trace(
+            go.Histogram(
+                x=ref_clean,
+                name="Baseline",
+                opacity=0.6,
+                marker_color=COLORS["blue"],
+                histnorm="probability density",
+                **histogram_kwargs,
+            )
         )
-    )
-    fig.add_trace(
-        go.Histogram(
-            x=cur_clean,
-            nbinsx=n_bins,
-            name="Current",
-            opacity=0.6,
-            marker_color=COLORS["highlight"],
-            histnorm="probability density",
+        fig.add_trace(
+            go.Histogram(
+                x=cur_clean,
+                name="Current",
+                opacity=0.6,
+                marker_color=COLORS["highlight"],
+                histnorm="probability density",
+                **histogram_kwargs,
+            )
         )
-    )
     return _apply_layout(
         fig,
         title=f"Distribution: {feature_name}",
@@ -239,12 +255,12 @@ def build_feature_distribution(reference, current, feature_name: str, n_bins: in
 def build_volume_timeline(daily_volume: dict[str, int]):
     if not daily_volume:
         fig = go.Figure()
-        fig.add_annotation(text="No daily volume data available", showarrow=False)
-        return _apply_layout(fig, title="Daily Inference Volume", height=300)
+        fig.add_annotation(text="No daily monitoring rows available", showarrow=False)
+        return _apply_layout(fig, title="Daily Monitoring Rows", height=300)
     dates = sorted(daily_volume.keys())
     volumes = [daily_volume[date] for date in dates]
     fig = go.Figure(go.Bar(x=[str(date) for date in dates], y=volumes, marker_color=COLORS["accent"]))
-    return _apply_layout(fig, title="Daily Inference Volume", xaxis_title="Date", yaxis_title="Transaction Count", height=300)
+    return _apply_layout(fig, title="Daily Monitoring Rows", xaxis_title="Date", yaxis_title="Rows", height=300)
 
 
 def build_quality_window_timeline(history_df: pd.DataFrame):
@@ -446,30 +462,34 @@ def build_dimension_breakdown(breakdown_df: pd.DataFrame, feature_name: str, dim
     fig.add_trace(
         go.Bar(
             x=breakdown_df["dimension_value"],
-            y=breakdown_df["feature_mean"],
-            name="Mean",
+            y=breakdown_df["feature_average"],
+            name="Average",
             marker_color=COLORS["blue"],
-            error_y=dict(type="data", array=breakdown_df["feature_std"], visible=True),
         )
     )
     fig.add_trace(
-        go.Bar(
+        go.Scatter(
             x=breakdown_df["dimension_value"],
-            y=breakdown_df["null_pct"],
-            name="Null %",
-            marker_color=COLORS["highlight"],
-            opacity=0.7,
-            yaxis="y2",
+            y=breakdown_df["feature_p50"],
+            name="P50",
+            mode="markers+lines",
+            line=dict(color=COLORS["highlight"], width=2),
+            marker=dict(size=7),
+            error_y=dict(
+                type="data",
+                symmetric=False,
+                array=(breakdown_df["feature_p75"] - breakdown_df["feature_p50"]).clip(lower=0).fillna(0.0),
+                arrayminus=(breakdown_df["feature_p50"] - breakdown_df["feature_p25"]).clip(lower=0).fillna(0.0),
+                visible=True,
+            ),
         )
     )
     return _apply_layout(
         fig,
         title=f"{feature_name} by {dimension_name}",
         xaxis_title=dimension_name,
-        yaxis_title="Mean Value",
-        yaxis2=dict(title="Null %", overlaying="y", side="right", gridcolor=COLORS["grid"]),
+        yaxis_title="Value",
         legend=dict(bgcolor="rgba(0,0,0,0.5)"),
-        barmode="group",
         height=350,
     )
 
@@ -485,6 +505,10 @@ def build_performance_timeline(metrics_over_time: list[dict], metric_name: str =
         fig = go.Figure()
         fig.add_annotation(text=f"No {metric_name.upper()} values are available yet", showarrow=False)
         return _apply_layout(fig, title=f"{metric_name.upper()} Over Time")
+    if pd.to_numeric(frame[metric_name], errors="coerce").dropna().empty:
+        fig = go.Figure()
+        fig.add_annotation(text=f"{metric_name.upper()} is undefined for the available days", showarrow=False)
+        return _apply_layout(fig, title=f"{metric_name.upper()} Over Time")
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(
@@ -494,8 +518,7 @@ def build_performance_timeline(metrics_over_time: list[dict], metric_name: str =
             line=dict(color=COLORS["cyan"], width=3),
             marker=dict(size=10 if len(frame) < 2 else 8),
             name=metric_name.upper(),
-            fill="tozeroy",
-            fillcolor="rgba(26,188,156,0.1)",
+            connectgaps=False,
         )
     )
     if len(frame) < 2:
@@ -636,22 +659,19 @@ def build_bin_detail(bin_df: pd.DataFrame, feature_name: str, metric_name: str =
         legend=dict(bgcolor="rgba(0,0,0,0.5)"),
         height=400,
     )
-
-
-def build_prediction_distribution(values, prob_column: str = "prediction"):
-    series = pd.Series(values)
-    if series.empty:
+def build_class_mix_chart(class_mix: dict[str, int]):
+    if not class_mix:
         fig = go.Figure()
-        fig.add_annotation(text="No prediction data", showarrow=False)
-        return _apply_layout(fig, title="Prediction Score Distribution")
-
+        fig.add_annotation(text="No class mix is available yet", showarrow=False)
+        return _apply_layout(fig, title="Latest Window Class Mix", height=300)
+    frame = pd.DataFrame(
+        [{"label": label, "count": int(count)} for label, count in class_mix.items()]
+    )
     fig = go.Figure(
-        go.Histogram(
-            x=series.dropna(),
-            nbinsx=50,
-            marker_color=COLORS["cyan"],
-            opacity=0.8,
-            histnorm="probability density",
+        go.Bar(
+            x=frame["label"],
+            y=frame["count"],
+            marker_color=[COLORS["blue"], COLORS["accent"], COLORS["highlight"], COLORS["cyan"]][: len(frame)],
         )
     )
-    return _apply_layout(fig, title="Prediction Score Distribution", xaxis_title=prob_column, yaxis_title="Density", height=300)
+    return _apply_layout(fig, title="Latest Window Class Mix", xaxis_title="", yaxis_title="Rows", height=300)

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 from datetime import timezone
-from functools import lru_cache
 from typing import Any
 from uuid import uuid4
 
@@ -608,9 +607,12 @@ class ControlPlaneRepository:
             self._table_names.quality_metrics,
             self._table_names.quality_history,
             self._table_names.daily_quality_profiles,
+            self._table_names.daily_class_quality_profiles,
             self._table_names.daily_feature_profiles,
+            self._table_names.daily_class_feature_profiles,
             self._table_names.performance_metrics,
             self._table_names.daily_performance_profiles,
+            self._table_names.daily_label_metrics,
             self._table_names.performance_bin_specs,
             self._table_names.incidents,
             self._table_names.incident_history,
@@ -1467,6 +1469,40 @@ class ControlPlaneRepository:
         )
         return [row.to_dict() for _, row in frame.iterrows()] if not frame.empty else []
 
+    def get_daily_class_quality_profile_rows(
+        self,
+        model_key: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        class_basis: str | None = None,
+        class_value: str | None = None,
+    ) -> list[dict[str, Any]]:
+        filters = ["model_key = %s"]
+        params: list[object] = [model_key]
+        if start_date:
+            filters.append("profile_date >= CAST(%s AS DATE)")
+            params.append(start_date)
+        if end_date:
+            filters.append("profile_date <= CAST(%s AS DATE)")
+            params.append(end_date)
+        if class_basis:
+            filters.append("class_basis = %s")
+            params.append(class_basis)
+        if class_value:
+            filters.append("class_value = %s")
+            params.append(class_value)
+        frame = self._warehouse.query_params(
+            f"""
+            SELECT *
+            FROM {self._table_names.daily_class_quality_profiles}
+            WHERE {' AND '.join(filters)}
+            ORDER BY profile_date, class_basis, class_value
+            """,
+            tuple(params),
+        )
+        return [row.to_dict() for _, row in frame.iterrows()] if not frame.empty else []
+
     def get_daily_feature_profile_rows(
         self,
         model_key: str,
@@ -1493,6 +1529,40 @@ class ControlPlaneRepository:
         )
         return [row.to_dict() for _, row in frame.iterrows()] if not frame.empty else []
 
+    def get_daily_class_feature_profile_rows(
+        self,
+        model_key: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        class_basis: str | None = None,
+        class_value: str | None = None,
+    ) -> list[dict[str, Any]]:
+        filters = ["model_key = %s"]
+        params: list[object] = [model_key]
+        if start_date:
+            filters.append("profile_date >= CAST(%s AS DATE)")
+            params.append(start_date)
+        if end_date:
+            filters.append("profile_date <= CAST(%s AS DATE)")
+            params.append(end_date)
+        if class_basis:
+            filters.append("class_basis = %s")
+            params.append(class_basis)
+        if class_value:
+            filters.append("class_value = %s")
+            params.append(class_value)
+        frame = self._warehouse.query_params(
+            f"""
+            SELECT *
+            FROM {self._table_names.daily_class_feature_profiles}
+            WHERE {' AND '.join(filters)}
+            ORDER BY profile_date, class_basis, class_value, feature_name
+            """,
+            tuple(params),
+        )
+        return [row.to_dict() for _, row in frame.iterrows()] if not frame.empty else []
+
     def get_daily_performance_profile_rows(
         self,
         model_key: str,
@@ -1514,6 +1584,32 @@ class ControlPlaneRepository:
             FROM {self._table_names.daily_performance_profiles}
             WHERE {' AND '.join(filters)}
             ORDER BY profile_date, feature_name, bin_label, metric_name
+            """,
+            tuple(params),
+        )
+        return [row.to_dict() for _, row in frame.iterrows()] if not frame.empty else []
+
+    def get_daily_label_metric_rows(
+        self,
+        model_key: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        filters = ["model_key = %s"]
+        params: list[object] = [model_key]
+        if start_date:
+            filters.append("profile_date >= CAST(%s AS DATE)")
+            params.append(start_date)
+        if end_date:
+            filters.append("profile_date <= CAST(%s AS DATE)")
+            params.append(end_date)
+        frame = self._warehouse.query_params(
+            f"""
+            SELECT *
+            FROM {self._table_names.daily_label_metrics}
+            WHERE {' AND '.join(filters)}
+            ORDER BY profile_date
             """,
             tuple(params),
         )
@@ -1591,8 +1687,11 @@ class ControlPlaneRepository:
             self._table_names.quality_metrics,
             self._table_names.quality_history,
             self._table_names.daily_quality_profiles,
+            self._table_names.daily_class_quality_profiles,
             self._table_names.daily_feature_profiles,
+            self._table_names.daily_class_feature_profiles,
             self._table_names.daily_performance_profiles,
+            self._table_names.daily_label_metrics,
             self._table_names.performance_bin_specs,
             self._table_names.incidents,
             self._table_names.incident_history,
@@ -1606,9 +1705,12 @@ class ControlPlaneRepository:
         self._insert_drift_rows(result.drift_rows)
         self._insert_quality_history_rows(result.quality_history_rows)
         self._insert_daily_quality_profile_rows(result.daily_quality_profile_rows, source_run_id=source_run_id)
+        self._insert_daily_class_quality_profile_rows(result.daily_class_quality_profile_rows, source_run_id=source_run_id)
         self._insert_daily_feature_profile_rows(result.daily_feature_profile_rows, source_run_id=source_run_id)
+        self._insert_daily_class_feature_profile_rows(result.daily_class_feature_profile_rows, source_run_id=source_run_id)
         self._insert_performance_rows(result.performance_rows)
         self._insert_daily_performance_profile_rows(result.daily_performance_profile_rows, source_run_id=source_run_id)
+        self._insert_daily_label_metric_rows(result.daily_label_metric_rows, source_run_id=source_run_id)
         self.replace_performance_bin_specs(model_key, result.performance_bin_specs)
         self._insert_incident_rows(result.incident_rows)
         self._insert_incident_history_rows(result.incident_history_rows)
@@ -1635,8 +1737,25 @@ class ControlPlaneRepository:
         quality_windows = {_as_text(row.get("window_id")) for row in result.quality_history_rows}
         incident_history_windows = {_as_text(row.get("window_id")) for row in result.incident_history_rows}
         daily_quality_dates = {_as_text(row.get("profile_date")) for row in result.daily_quality_profile_rows}
+        daily_class_quality_keys = {
+            (
+                _as_text(row.get("profile_date")),
+                _as_text(row.get("class_basis")),
+                _as_text(row.get("class_value")),
+            )
+            for row in result.daily_class_quality_profile_rows
+        }
         daily_feature_dates = {_as_text(row.get("profile_date")) for row in result.daily_feature_profile_rows}
+        daily_class_feature_keys = {
+            (
+                _as_text(row.get("profile_date")),
+                _as_text(row.get("class_basis")),
+                _as_text(row.get("class_value")),
+            )
+            for row in result.daily_class_feature_profile_rows
+        }
         daily_performance_dates = {_as_text(row.get("profile_date")) for row in result.daily_performance_profile_rows}
+        daily_label_metric_dates = {_as_text(row.get("profile_date")) for row in result.daily_label_metric_rows}
 
         for baseline_start, baseline_end, window_start, window_end in drift_windows:
             self._warehouse.execute_params(
@@ -1686,15 +1805,45 @@ class ControlPlaneRepository:
                 (model_key, profile_date),
             )
 
+        for profile_date, class_basis, class_value in daily_class_quality_keys:
+            self._warehouse.execute_params(
+                f"""
+                DELETE FROM {self._table_names.daily_class_quality_profiles}
+                WHERE model_key = %s
+                  AND profile_date = CAST(%s AS DATE)
+                  AND class_basis = %s
+                  AND class_value = %s
+                """,
+                (model_key, profile_date, class_basis, class_value),
+            )
+
         for profile_date in daily_feature_dates:
             self._warehouse.execute_params(
                 f"DELETE FROM {self._table_names.daily_feature_profiles} WHERE model_key = %s AND profile_date = CAST(%s AS DATE)",
                 (model_key, profile_date),
             )
 
+        for profile_date, class_basis, class_value in daily_class_feature_keys:
+            self._warehouse.execute_params(
+                f"""
+                DELETE FROM {self._table_names.daily_class_feature_profiles}
+                WHERE model_key = %s
+                  AND profile_date = CAST(%s AS DATE)
+                  AND class_basis = %s
+                  AND class_value = %s
+                """,
+                (model_key, profile_date, class_basis, class_value),
+            )
+
         for profile_date in daily_performance_dates:
             self._warehouse.execute_params(
                 f"DELETE FROM {self._table_names.daily_performance_profiles} WHERE model_key = %s AND profile_date = CAST(%s AS DATE)",
+                (model_key, profile_date),
+            )
+
+        for profile_date in daily_label_metric_dates:
+            self._warehouse.execute_params(
+                f"DELETE FROM {self._table_names.daily_label_metrics} WHERE model_key = %s AND profile_date = CAST(%s AS DATE)",
                 (model_key, profile_date),
             )
 
@@ -1708,9 +1857,12 @@ class ControlPlaneRepository:
         self._insert_drift_rows(result.drift_rows)
         self._insert_quality_history_rows(result.quality_history_rows)
         self._insert_daily_quality_profile_rows(result.daily_quality_profile_rows, source_run_id=source_run_id)
+        self._insert_daily_class_quality_profile_rows(result.daily_class_quality_profile_rows, source_run_id=source_run_id)
         self._insert_daily_feature_profile_rows(result.daily_feature_profile_rows, source_run_id=source_run_id)
+        self._insert_daily_class_feature_profile_rows(result.daily_class_feature_profile_rows, source_run_id=source_run_id)
         self._insert_performance_rows(result.performance_rows)
         self._insert_daily_performance_profile_rows(result.daily_performance_profile_rows, source_run_id=source_run_id)
+        self._insert_daily_label_metric_rows(result.daily_label_metric_rows, source_run_id=source_run_id)
         if result.performance_bin_specs:
             persisted_specs = self.get_performance_bin_specs(model_key)
             persisted_specs.update(result.performance_bin_specs)
@@ -1863,6 +2015,34 @@ class ControlPlaneRepository:
             payload,
         )
 
+    def _insert_daily_class_quality_profile_rows(self, rows: list[dict], *, source_run_id: str | None = None) -> None:
+        payload = [
+            (
+                row["model_key"],
+                row["profile_date"],
+                row["class_basis"],
+                row["class_value"],
+                row["row_count"],
+                row["prediction_mean"],
+                row["prediction_std"],
+                row["null_rates"],
+                row["label_row_count"],
+                row["computed_at"],
+                source_run_id or "",
+            )
+            for row in rows
+        ]
+        self._warehouse.execute_batch(
+            f"""
+            INSERT INTO {self._table_names.daily_class_quality_profiles} (
+                model_key, profile_date, class_basis, class_value, row_count,
+                prediction_mean, prediction_std, null_rates, label_row_count,
+                computed_at, source_run_id
+            ) VALUES
+            """.strip(),
+            payload,
+        )
+
     def _insert_daily_feature_profile_rows(self, rows: list[dict], *, source_run_id: str | None = None) -> None:
         payload = [
             (
@@ -1887,6 +2067,40 @@ class ControlPlaneRepository:
             f"""
             INSERT INTO {self._table_names.daily_feature_profiles} (
                 model_key, profile_date, feature_name, feature_kind,
+                row_count, non_null_count, null_pct,
+                mean, std, min_value, max_value,
+                distribution_json, computed_at, source_run_id
+            ) VALUES
+            """.strip(),
+            payload,
+        )
+
+    def _insert_daily_class_feature_profile_rows(self, rows: list[dict], *, source_run_id: str | None = None) -> None:
+        payload = [
+            (
+                row["model_key"],
+                row["profile_date"],
+                row["class_basis"],
+                row["class_value"],
+                row["feature_name"],
+                row["feature_kind"],
+                row["row_count"],
+                row["non_null_count"],
+                row["null_pct"],
+                row["mean"],
+                row["std"],
+                row["min_value"],
+                row["max_value"],
+                row["distribution_json"],
+                row["computed_at"],
+                source_run_id or "",
+            )
+            for row in rows
+        ]
+        self._warehouse.execute_batch(
+            f"""
+            INSERT INTO {self._table_names.daily_class_feature_profiles} (
+                model_key, profile_date, class_basis, class_value, feature_name, feature_kind,
                 row_count, non_null_count, null_pct,
                 mean, std, min_value, max_value,
                 distribution_json, computed_at, source_run_id
@@ -1947,6 +2161,42 @@ class ControlPlaneRepository:
             INSERT INTO {self._table_names.daily_performance_profiles} (
                 model_key, profile_date, feature_name, bin_label,
                 metric_name, metric_value, row_count, volume_pct, computed_at, source_run_id
+            ) VALUES
+            """.strip(),
+            payload,
+        )
+
+    def _insert_daily_label_metric_rows(self, rows: list[dict], *, source_run_id: str | None = None) -> None:
+        payload = [
+            (
+                row["model_key"],
+                row["profile_date"],
+                row["actual_positive_count"],
+                row["actual_negative_count"],
+                row["predicted_positive_count"],
+                row["predicted_negative_count"],
+                row["tp"],
+                row["fp"],
+                row["fn"],
+                row["tn"],
+                row["precision"],
+                row["recall"],
+                row["f1"],
+                row["accuracy"],
+                row["computed_at"],
+                source_run_id or "",
+            )
+            for row in rows
+        ]
+        self._warehouse.execute_batch(
+            f"""
+            INSERT INTO {self._table_names.daily_label_metrics} (
+                model_key, profile_date,
+                actual_positive_count, actual_negative_count,
+                predicted_positive_count, predicted_negative_count,
+                tp, fp, fn, tn,
+                precision, recall, f1, accuracy,
+                computed_at, source_run_id
             ) VALUES
             """.strip(),
             payload,
@@ -2171,21 +2421,6 @@ def _build_read_model(
         connection=connection,
         schema=lakebase_schema or settings.lakebase_schema,
     )
-
-
-@lru_cache(maxsize=1)
-def get_default_repository() -> ControlPlaneRepository:
-    table_names = TableNames(
-        catalog=settings.control_plane_catalog,
-        schema=settings.control_plane_schema,
-    )
-    return ControlPlaneRepository(
-        warehouse=get_warehouse(),
-        table_names=table_names,
-        read_model=_build_read_model(),
-    )
-
-
 def build_repository(
     *,
     warehouse_id: str = "",
