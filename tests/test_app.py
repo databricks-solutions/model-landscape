@@ -557,6 +557,32 @@ def test_render_onboarding_wizard_blocks_when_workspace_wiring_is_not_ready() ->
     assert "Shared refresh workflow is missing." in str(result[1])
 
 
+def test_render_onboarding_wizard_surfaces_error_alert_instead_of_raising(monkeypatch) -> None:
+    app = create_app()
+    callback = app.callback_map[RENDER_WIZARD_CALLBACK]["callback"]
+    fn = getattr(callback, "__wrapped__", callback)
+
+    monkeypatch.setattr(
+        callbacks_module,
+        "_monitor_contract_ready",
+        lambda **_: (_ for _ in ()).throw(RuntimeError("wizard exploded")),
+    )
+
+    args = [None] * 38
+    args[0] = 3
+    args[1] = {"control_plane_catalog": "model_observability", "control_plane_schema": "control_plane"}
+    args[2] = {"overall_mode": "fully_ready", "blocking_issues": [], "warnings": []}
+    args[3] = "model_observability"
+    args[4] = "control_plane"
+
+    result = fn(*args)
+
+    assert len(result) == 12
+    assert "Could not load onboarding wizard" in str(result[1])
+    assert result[8] is True
+    assert result[10] is True
+
+
 def test_validate_workspace_wiring_callback_renders_readiness_card(monkeypatch) -> None:
     monkeypatch.setattr(
         callbacks_module,

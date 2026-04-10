@@ -1479,134 +1479,155 @@ def register_callbacks(app) -> None:
         lakebase_database_name,
         lakebase_schema,
     ):
-        step = max(1, min(int(current_step or 1), len(onboarding.STEP_LABELS)))
-        control_plane_ready = _control_plane_ready(
-            control_plane_ready_state,
-            control_plane_catalog=control_plane_catalog,
-            control_plane_schema=control_plane_schema,
-            lakebase_instance_name=lakebase_instance_name,
-            lakebase_database_name=lakebase_database_name,
-            lakebase_schema=lakebase_schema,
-        )
-        readiness_mode = _workspace_readiness_mode(workspace_readiness_state)
-        workspace_ready = control_plane_ready and readiness_mode in {"scheduler_only", "fully_ready"}
-        source_ready = bool(scan_data and scan_data.get("columns"))
-        contract_ready = _monitor_contract_ready(
-            scan_data=scan_data,
-            display_name=display_name,
-            model_key=model_key,
-            timestamp_col=timestamp_col,
-            model_id_col=model_id_col,
-            prediction_col=prediction_col,
-            model_id_value=model_id_value,
-            model_version_col=model_version_col,
-            model_version_value=model_version_value,
-            entity_id_col=entity_id_col,
-            source_label_col=source_label_col,
-            external_label_col=external_label_col,
-            labels_table=labels_table,
-            labels_join_col=labels_join_col,
-            feature_columns=feature_columns,
-            baseline_kind=baseline_kind,
-            baseline_days=baseline_days,
-            baseline_start=baseline_start,
-            baseline_end=baseline_end,
-        )
-        next_disabled = {
-            1: not workspace_ready,
-            2: not source_ready,
-            3: not contract_ready,
-            4: True,
-        }.get(step, False)
-        readiness_issues = [str(item) for item in (workspace_readiness_state or {}).get("blocking_issues", []) if str(item).strip()]
-        primary_readiness_issue = readiness_issues[0] if readiness_issues else ""
-        guidance = {
-            1: (
-                (
-                    "Workspace setup is fully ready. The app can save a monitor and trigger bootstrap immediately."
-                    if readiness_mode == "fully_ready"
-                    else (
-                        "Workspace setup is ready in scheduler-only mode. The app can save monitors, and the scheduled shared refresh workflow will pick them up."
-                        if readiness_mode == "scheduler_only"
+        try:
+            step = max(1, min(int(current_step or 1), len(onboarding.STEP_LABELS)))
+            control_plane_ready = _control_plane_ready(
+                control_plane_ready_state,
+                control_plane_catalog=control_plane_catalog,
+                control_plane_schema=control_plane_schema,
+                lakebase_instance_name=lakebase_instance_name,
+                lakebase_database_name=lakebase_database_name,
+                lakebase_schema=lakebase_schema,
+            )
+            readiness_mode = _workspace_readiness_mode(workspace_readiness_state)
+            workspace_ready = control_plane_ready and readiness_mode in {"scheduler_only", "fully_ready"}
+            source_ready = bool(scan_data and scan_data.get("columns"))
+            contract_ready = _monitor_contract_ready(
+                scan_data=scan_data,
+                display_name=display_name,
+                model_key=model_key,
+                timestamp_col=timestamp_col,
+                model_id_col=model_id_col,
+                prediction_col=prediction_col,
+                model_id_value=model_id_value,
+                model_version_col=model_version_col,
+                model_version_value=model_version_value,
+                entity_id_col=entity_id_col,
+                source_label_col=source_label_col,
+                external_label_col=external_label_col,
+                labels_table=labels_table,
+                labels_join_col=labels_join_col,
+                feature_columns=feature_columns,
+                baseline_kind=baseline_kind,
+                baseline_days=baseline_days,
+                baseline_start=baseline_start,
+                baseline_end=baseline_end,
+            )
+            next_disabled = {
+                1: not workspace_ready,
+                2: not source_ready,
+                3: not contract_ready,
+                4: True,
+            }.get(step, False)
+            readiness_issues = [str(item) for item in (workspace_readiness_state or {}).get("blocking_issues", []) if str(item).strip()]
+            primary_readiness_issue = readiness_issues[0] if readiness_issues else ""
+            guidance = {
+                1: (
+                    (
+                        "Workspace setup is fully ready. The app can save a monitor and trigger bootstrap immediately."
+                        if readiness_mode == "fully_ready"
                         else (
-                            primary_readiness_issue
-                            or "Confirm the control-plane namespace, verify the warehouse and shared refresh workflow, and use Validate Workspace Wiring before onboarding a monitor."
+                            "Workspace setup is ready in scheduler-only mode. The app can save monitors, and the scheduled shared refresh workflow will pick them up."
+                            if readiness_mode == "scheduler_only"
+                            else (
+                                primary_readiness_issue
+                                or "Confirm the control-plane namespace, verify the warehouse and shared refresh workflow, and use Validate Workspace Wiring before onboarding a monitor."
+                            )
                         )
-                    )
+                    ),
+                    "success" if readiness_mode == "fully_ready" else ("info" if readiness_mode == "scheduler_only" else "secondary"),
                 ),
-                "success" if readiness_mode == "fully_ready" else ("info" if readiness_mode == "scheduler_only" else "secondary"),
-            ),
-            2: (
-                "Enter the inference table and click Discover. Optional labels and MLflow inputs help Model Lens infer a better draft.",
-                "success" if source_ready else "secondary",
-            ),
-            3: (
-                "Confirm the inferred draft. Most monitors should only need name, problem type, and baseline before continuing.",
-                "success" if contract_ready else "secondary",
-            ),
-            4: (
-                (
-                    "Activate the monitor. Model Lens saves the config and triggers bootstrap immediately through the shared refresh workflow."
-                    if readiness_mode == "fully_ready"
-                    else (
-                        "Activate the monitor. Model Lens saves the config, marks bootstrap pending, and the scheduled shared refresh workflow picks it up."
-                        if readiness_mode == "scheduler_only"
-                        else "Activation is blocked until the workspace readiness checks pass."
-                    )
+                2: (
+                    "Enter the inference table and click Discover. Optional labels and MLflow inputs help Model Lens infer a better draft.",
+                    "success" if source_ready else "secondary",
                 ),
-                "primary" if readiness_mode == "fully_ready" else ("secondary" if readiness_mode == "scheduler_only" else "warning"),
-            ),
-        }
-        next_labels = {
-            1: "Continue to Source",
-            2: "Continue to Contract",
-            3: "Continue to Review",
-            4: "Continue",
-        }
-        review = _review_summary(
-            control_plane_catalog=control_plane_catalog,
-            control_plane_schema=control_plane_schema,
-            source_table=(scan_data or {}).get("table_name") or source_table,
-            display_name=display_name,
-            model_key=model_key,
-            model_id_col=model_id_col,
-            feature_columns=feature_columns,
-            categorical_columns=categorical_columns,
-            slice_columns=slice_columns,
-            model_id_value=model_id_value,
-            model_version_value=model_version_value,
-            labels_table=labels_table,
-            source_label_col=source_label_col,
-            external_label_col=external_label_col,
-            baseline_kind=baseline_kind,
-            baseline_days=baseline_days,
-            baseline_start=baseline_start,
-            baseline_end=baseline_end,
-            problem_type=problem_type,
-            performance_metric_names=review_performance_metrics,
-            default_performance_metric=review_default_performance_metric,
-            drift_cadence_preset=review_drift_cadence,
-            performance_cadence_preset=review_performance_cadence,
-            schedule_enabled="enabled" in (review_schedule_enabled or []),
-            lakebase_instance_name=lakebase_instance_name,
-            lakebase_database_name=lakebase_database_name,
-            mlflow_experiment_name=mlflow_experiment_name,
-            mlflow_registered_model_name=mlflow_registered_model_name,
-        )
-        return (
-            [make_wizard_step(index + 1, label, step) for index, label in enumerate(onboarding.STEP_LABELS)],
-            _status_alert(*guidance[step]),
-            _step_style(step == 1),
-            _step_style(step == 2),
-            _step_style(step == 3),
-            _step_style(step == 4),
-            {"display": "none"} if step == 1 else {},
-            {"display": "none"} if step == 4 else {},
-            next_disabled,
-            next_labels[step],
-            not (workspace_ready and contract_ready),
-            review,
-        )
+                3: (
+                    "Confirm the inferred draft. Most monitors should only need name, problem type, and baseline before continuing.",
+                    "success" if contract_ready else "secondary",
+                ),
+                4: (
+                    (
+                        "Activate the monitor. Model Lens saves the config and triggers bootstrap immediately through the shared refresh workflow."
+                        if readiness_mode == "fully_ready"
+                        else (
+                            "Activate the monitor. Model Lens saves the config, marks bootstrap pending, and the scheduled shared refresh workflow picks it up."
+                            if readiness_mode == "scheduler_only"
+                            else "Activation is blocked until the workspace readiness checks pass."
+                        )
+                    ),
+                    "primary" if readiness_mode == "fully_ready" else ("secondary" if readiness_mode == "scheduler_only" else "warning"),
+                ),
+            }
+            next_labels = {
+                1: "Continue to Source",
+                2: "Continue to Contract",
+                3: "Continue to Review",
+                4: "Continue",
+            }
+            review = _review_summary(
+                control_plane_catalog=control_plane_catalog,
+                control_plane_schema=control_plane_schema,
+                source_table=(scan_data or {}).get("table_name") or source_table,
+                display_name=display_name,
+                model_key=model_key,
+                model_id_col=model_id_col,
+                feature_columns=feature_columns,
+                categorical_columns=categorical_columns,
+                slice_columns=slice_columns,
+                model_id_value=model_id_value,
+                model_version_value=model_version_value,
+                labels_table=labels_table,
+                source_label_col=source_label_col,
+                external_label_col=external_label_col,
+                baseline_kind=baseline_kind,
+                baseline_days=baseline_days,
+                baseline_start=baseline_start,
+                baseline_end=baseline_end,
+                problem_type=problem_type,
+                performance_metric_names=review_performance_metrics,
+                default_performance_metric=review_default_performance_metric,
+                drift_cadence_preset=review_drift_cadence,
+                performance_cadence_preset=review_performance_cadence,
+                schedule_enabled="enabled" in (review_schedule_enabled or []),
+                lakebase_instance_name=lakebase_instance_name,
+                lakebase_database_name=lakebase_database_name,
+                mlflow_experiment_name=mlflow_experiment_name,
+                mlflow_registered_model_name=mlflow_registered_model_name,
+            )
+            return (
+                [make_wizard_step(index + 1, label, step) for index, label in enumerate(onboarding.STEP_LABELS)],
+                _status_alert(*guidance[step]),
+                _step_style(step == 1),
+                _step_style(step == 2),
+                _step_style(step == 3),
+                _step_style(step == 4),
+                {"display": "none"} if step == 1 else {},
+                {"display": "none"} if step == 4 else {},
+                next_disabled,
+                next_labels[step],
+                not (workspace_ready and contract_ready),
+                review,
+            )
+        except Exception as error:
+            logger.exception("Failed to render onboarding wizard", exc_info=error)
+            try:
+                fallback_step = max(1, min(int(current_step or 1), len(onboarding.STEP_LABELS)))
+            except (TypeError, ValueError):
+                fallback_step = 1
+            return (
+                [make_wizard_step(index + 1, label, fallback_step) for index, label in enumerate(onboarding.STEP_LABELS)],
+                _status_alert(_callback_error_message("onboarding wizard", error), "danger"),
+                _step_style(fallback_step == 1),
+                _step_style(fallback_step == 2),
+                _step_style(fallback_step == 3),
+                _step_style(fallback_step == 4),
+                {"display": "none"} if fallback_step == 1 else {},
+                {"display": "none"} if fallback_step == 4 else {},
+                True,
+                "Continue",
+                True,
+                html.Div(),
+            )
 
     @app.callback(
         Output("review-performance-metrics-dropdown", "options"),

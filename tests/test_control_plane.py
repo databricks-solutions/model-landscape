@@ -849,6 +849,21 @@ def test_ensure_control_plane_adds_refresh_run_migration_columns() -> None:
     )
 
 
+def test_ensure_control_plane_backfills_legacy_published_refresh_run_metadata() -> None:
+    warehouse = FakeWarehouse()
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    repository.ensure_control_plane()
+
+    assert any(
+        "UPDATE model_observability.control_plane.refresh_runs" in sql
+        and "generation_id = CASE" in sql
+        and "published_at = CASE" in sql
+        and "status = 'completed'" in sql
+        for sql in warehouse.executed
+    )
+
+
 def test_ensure_control_plane_adds_daily_performance_profile_migration_columns() -> None:
     warehouse = FakeWarehouse()
     repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
@@ -2117,6 +2132,10 @@ class StableWatermarkMissingFactsRepository(PerformanceRepairRepository):
         assert model_key == self.config.model_key
         return self._has_daily_label_rows
 
+    def needs_daily_label_metric_backfill(self, model_key: str) -> bool:
+        assert model_key == self.config.model_key
+        return not self._has_daily_label_rows
+
 
 def test_run_refresh_cycle_performance_repair_forces_recompute_when_daily_label_metrics_are_missing() -> None:
     repository = StableWatermarkMissingFactsRepository(has_daily_label_rows=False)
@@ -2136,6 +2155,25 @@ def test_run_refresh_cycle_performance_repair_still_skips_when_watermark_is_stab
     assert counts.models == 0
     assert repository.completed_runs[-1]["status"] == "skipped"
     assert repository.window_load_calls == []
+
+
+class StableWatermarkBrokenFactsProbeRepository(StableWatermarkMissingFactsRepository):
+    def __init__(self) -> None:
+        super().__init__(has_daily_label_rows=True)
+
+    def has_daily_label_metric_rows(self, model_key: str) -> bool:
+        assert model_key == self.config.model_key
+        raise RuntimeError("published daily label metric probe failed")
+
+
+def test_run_refresh_cycle_performance_repair_recomputes_when_daily_label_metric_probe_errors() -> None:
+    repository = StableWatermarkBrokenFactsProbeRepository()
+
+    counts = run_refresh_cycle(repository, mode="auto", scope="performance_repair")
+
+    assert counts.models == 1
+    assert repository.completed_runs[-1]["status"] == "completed"
+    assert repository.window_load_calls
 
 
 class RefreshMetadataRepository(BoundedWindowRepository):

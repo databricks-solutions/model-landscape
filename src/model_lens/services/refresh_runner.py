@@ -518,9 +518,24 @@ def _has_daily_label_metric_rows(
         except TypeError:
             return bool(repository.has_daily_label_metric_rows(model_key=model_key))
         except Exception:
-            # Preserve the existing skip behavior when the existence check is unavailable.
-            return True
-    return True
+            # Be conservative for backfills: if we cannot prove current daily facts exist,
+            # force recompute instead of skipping on a stale watermark.
+            return False
+    return False
+
+
+def _needs_daily_label_metric_backfill(
+    repository: ControlPlaneRepository,
+    model_key: str,
+) -> bool:
+    if hasattr(repository, "needs_daily_label_metric_backfill"):
+        try:
+            return bool(repository.needs_daily_label_metric_backfill(model_key))
+        except TypeError:
+            return bool(repository.needs_daily_label_metric_backfill(model_key=model_key))
+        except Exception:
+            return not _has_daily_label_metric_rows(repository, model_key)
+    return not _has_daily_label_metric_rows(repository, model_key)
 
 
 def _merge_daily_rows(
@@ -990,11 +1005,13 @@ def _execute_target(
                 end_date=range_end,
             )
             has_daily_label_rows = _has_daily_label_metric_rows(repository, config.model_key)
+            needs_daily_label_backfill = _needs_daily_label_metric_backfill(repository, config.model_key)
             if (
                 latest_watermark
                 and latest_watermark == state.last_label_watermark
                 and state.last_performance_refresh_at
                 and has_daily_label_rows
+                and not needs_daily_label_backfill
             ):
                 repository.complete_refresh_run(
                     run_id,

@@ -241,6 +241,7 @@ class ControlPlaneRepository:
             self._ensure_table_exists(table_name, statement)
         self._ensure_monitor_config_columns()
         self._ensure_refresh_run_columns()
+        self._backfill_legacy_published_refresh_runs()
         self._ensure_runtime_state_columns()
         self._ensure_drift_metric_columns()
         self._ensure_performance_metric_columns()
@@ -359,6 +360,33 @@ class ControlPlaneRepository:
     def _ensure_refresh_run_columns(self) -> None:
         self._ensure_table_columns(self._table_names.refresh_runs, refresh_run_migration_columns())
 
+    def _backfill_legacy_published_refresh_runs(self) -> None:
+        try:
+            self._warehouse.execute(
+                f"""
+                UPDATE {self._table_names.refresh_runs}
+                SET
+                    generation_id = CASE
+                        WHEN generation_id IS NULL OR generation_id = '' THEN run_id
+                        ELSE generation_id
+                    END,
+                    published_at = CASE
+                        WHEN published_at IS NULL THEN completed_at
+                        ELSE published_at
+                    END
+                WHERE status = 'completed'
+                  AND completed_at IS NOT NULL
+                  AND (
+                      generation_id IS NULL
+                      OR generation_id = ''
+                      OR published_at IS NULL
+                  )
+                """
+            )
+        except Exception:
+            # Old workspaces should still come up even if this additive backfill is not permitted.
+            return
+
     def _ensure_runtime_state_columns(self) -> None:
         self._ensure_table_columns(self._table_names.monitor_runtime_state, runtime_state_migration_columns())
 
@@ -417,23 +445,33 @@ class ControlPlaneRepository:
         )
 
     def _monitor_needs_daily_label_metric_backfill(self, model_key: str) -> bool:
+        generation_id = self.get_latest_published_generation_id(model_key)
+        performance_filters = ["model_key = %s"]
+        performance_params: list[object] = [model_key]
+        daily_label_filters = ["model_key = %s"]
+        daily_label_params: list[object] = [model_key]
+        if generation_id:
+            performance_filters.append("source_run_id = %s")
+            performance_params.append(generation_id)
+            daily_label_filters.append("source_run_id = %s")
+            daily_label_params.append(generation_id)
         frame = self._warehouse.query_params(
             f"""
             SELECT
                 CASE WHEN EXISTS (
                     SELECT 1
                     FROM {self._table_names.performance_metrics}
-                    WHERE model_key = %s
+                    WHERE {' AND '.join(performance_filters)}
                     LIMIT 1
                 ) THEN 1 ELSE 0 END AS has_performance_rows,
                 CASE WHEN EXISTS (
                     SELECT 1
                     FROM {self._table_names.daily_label_metrics}
-                    WHERE model_key = %s
+                    WHERE {' AND '.join(daily_label_filters)}
                     LIMIT 1
                 ) THEN 1 ELSE 0 END AS has_daily_label_rows
             """,
-            (model_key, model_key),
+            tuple([*performance_params, *daily_label_params]),
         )
         if frame.empty or not {"has_performance_rows", "has_daily_label_rows"}.issubset(frame.columns):
             return False
@@ -441,6 +479,9 @@ class ControlPlaneRepository:
         has_performance_rows = bool(int(row.get("has_performance_rows", 0) or 0))
         has_daily_label_rows = bool(int(row.get("has_daily_label_rows", 0) or 0))
         return has_performance_rows and not has_daily_label_rows
+
+    def needs_daily_label_metric_backfill(self, model_key: str) -> bool:
+        return self._monitor_needs_daily_label_metric_backfill(model_key)
 
     def _queue_missing_daily_label_metric_backfills(self) -> None:
         try:
