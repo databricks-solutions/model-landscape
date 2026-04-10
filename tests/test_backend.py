@@ -453,8 +453,11 @@ def test_get_performance_summary_keeps_zero_delta_rows_visible() -> None:
 
     performance = backend.get_performance_summary("fraud_model_demo", metric_name="f1")
 
-    assert performance["timeline"] == []
-    assert "daily labeled facts are populated" in performance["timeline_unavailable_reason"]
+    assert performance["timeline"] == [
+        {"period": "2026-01-20", "f1": 0.813},
+        {"period": "2026-01-21", "f1": 0.813},
+    ]
+    assert "weighted comparison-window performance rows" in performance["timeline_unavailable_reason"]
     assert len(performance["latest_bins"]) == 2
     assert len(performance["all_bins"]) == 4
     assert set(performance["contributors"]["feature"]) == {"amount", "velocity_7d"}
@@ -488,8 +491,11 @@ def test_get_performance_summary_supports_alternate_metric_names() -> None:
     precision = backend.get_performance_summary("fraud_model_demo", metric_name="precision")
     rmse = backend.get_performance_summary("fraud_model_demo", metric_name="rmse")
 
-    assert precision["timeline"] == []
-    assert "daily labeled facts are populated" in precision["timeline_unavailable_reason"]
+    assert precision["timeline"] == [
+        {"period": "2026-01-20", "precision": 0.813},
+        {"period": "2026-01-21", "precision": 0.813},
+    ]
+    assert "weighted comparison-window performance rows" in precision["timeline_unavailable_reason"]
     assert rmse["timeline"][0]["rmse"] == 0.813
 
 
@@ -558,6 +564,76 @@ def test_get_performance_summary_prefers_daily_label_metrics_and_keeps_null_gaps
         {"period": "2026-01-20", "precision": None},
         {"period": "2026-01-21", "precision": 0.75},
     ]
+
+
+def test_get_performance_summary_falls_back_to_daily_performance_profiles_when_daily_label_metrics_are_empty() -> None:
+    config = MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.model_lens_demo.inference_logs",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=("amount",),
+        ),
+        baseline=BaselinePolicy(n_days=7),
+        model_id_value="fraud_model_v1",
+    )
+    repository = SimpleNamespace(
+        _warehouse=_FakeWarehouse(),
+        table_names=SimpleNamespace(
+            performance_metrics="performance_metrics",
+        ),
+        list_monitor_configs=lambda status="active": [config],
+        get_monitor_summary=lambda: pd.DataFrame(),
+        get_daily_label_metric_rows=lambda model_id, start_date=None, end_date=None: [],
+        get_daily_performance_profile_rows=lambda model_id, start_date=None, end_date=None: [
+            {
+                "model_key": model_id,
+                "profile_date": "2026-01-20",
+                "feature_name": "amount",
+                "bin_label": "[0.0, 1.0)",
+                "metric_name": "precision",
+                "metric_value": 0.8,
+                "row_count": 2,
+                "volume_pct": 40.0,
+                "computed_at": "2026-01-20T00:00:00+00:00",
+            },
+            {
+                "model_key": model_id,
+                "profile_date": "2026-01-20",
+                "feature_name": "amount",
+                "bin_label": "[1.0, 2.0)",
+                "metric_name": "precision",
+                "metric_value": 0.5,
+                "row_count": 3,
+                "volume_pct": 60.0,
+                "computed_at": "2026-01-20T00:00:00+00:00",
+            },
+            {
+                "model_key": model_id,
+                "profile_date": "2026-01-21",
+                "feature_name": "amount",
+                "bin_label": "[0.0, 1.0)",
+                "metric_name": "precision",
+                "metric_value": 0.75,
+                "row_count": 4,
+                "volume_pct": 100.0,
+                "computed_at": "2026-01-21T00:00:00+00:00",
+            },
+        ],
+    )
+    backend = DashboardBackend(repository=repository)
+
+    performance = backend.get_performance_summary("fraud_model_demo", metric_name="precision")
+
+    assert performance["timeline"] == [
+        {"period": "2026-01-20", "precision": 0.62},
+        {"period": "2026-01-21", "precision": 0.75},
+    ]
+    assert "weighted daily performance profiles" in performance["timeline_unavailable_reason"]
 
 
 def test_get_latest_window_metrics_aggregates_latest_daily_label_facts() -> None:
@@ -636,6 +712,103 @@ def test_get_latest_window_metrics_aggregates_latest_daily_label_facts() -> None
         "f1": 0.6667,
         "accuracy": 0.8,
     }
+
+
+def test_get_latest_window_metrics_falls_back_to_daily_performance_profiles() -> None:
+    config = MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.model_lens_demo.inference_logs",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=("amount",),
+        ),
+        baseline=BaselinePolicy(n_days=7),
+        model_id_value="fraud_model_v1",
+    )
+
+    class _SnapshotWarehouse:
+        def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
+            if "FROM comparison_windows" in sql:
+                return pd.DataFrame(
+                    [
+                        {
+                            "baseline_start": "2026-01-07",
+                            "baseline_end": "2026-01-13",
+                            "window_start": "2026-01-14",
+                            "window_end": "2026-01-21",
+                        }
+                    ]
+                )
+            raise AssertionError(f"Unexpected query: {sql}")
+
+    repository = SimpleNamespace(
+        _warehouse=_SnapshotWarehouse(),
+        table_names=SimpleNamespace(comparison_windows="comparison_windows", performance_metrics="performance_metrics"),
+        list_monitor_configs=lambda status="active": [config],
+        get_monitor_summary=lambda: pd.DataFrame(),
+        get_daily_label_metric_rows=lambda model_id, start_date=None, end_date=None: [],
+        get_daily_performance_profile_rows=lambda model_id, start_date=None, end_date=None: [
+            {
+                "model_key": model_id,
+                "profile_date": "2026-01-20",
+                "feature_name": "amount",
+                "bin_label": "[0.0, 1.0)",
+                "metric_name": "precision",
+                "metric_value": 0.75,
+                "row_count": 4,
+                "volume_pct": 100.0,
+                "computed_at": "2026-01-20T00:00:00+00:00",
+            },
+            {
+                "model_key": model_id,
+                "profile_date": "2026-01-20",
+                "feature_name": "amount",
+                "bin_label": "[0.0, 1.0)",
+                "metric_name": "recall",
+                "metric_value": 0.6,
+                "row_count": 4,
+                "volume_pct": 100.0,
+                "computed_at": "2026-01-20T00:00:00+00:00",
+            },
+            {
+                "model_key": model_id,
+                "profile_date": "2026-01-20",
+                "feature_name": "amount",
+                "bin_label": "[0.0, 1.0)",
+                "metric_name": "f1",
+                "metric_value": 0.6667,
+                "row_count": 4,
+                "volume_pct": 100.0,
+                "computed_at": "2026-01-20T00:00:00+00:00",
+            },
+            {
+                "model_key": model_id,
+                "profile_date": "2026-01-20",
+                "feature_name": "amount",
+                "bin_label": "[0.0, 1.0)",
+                "metric_name": "accuracy",
+                "metric_value": 0.7,
+                "row_count": 4,
+                "volume_pct": 100.0,
+                "computed_at": "2026-01-20T00:00:00+00:00",
+            },
+        ],
+    )
+    backend = DashboardBackend(repository=repository)
+
+    snapshot = backend.get_latest_window_metrics("fraud_model_demo")
+
+    assert snapshot["metrics"] == {
+        "precision": 0.75,
+        "recall": 0.6,
+        "f1": 0.6667,
+        "accuracy": 0.7,
+    }
+    assert "weighted daily performance profiles" in snapshot["message"]
 
 
 def test_get_quality_stats_and_history_support_class_filters_from_daily_profiles() -> None:
@@ -1223,7 +1396,7 @@ def test_get_overview_rows_uses_bulk_historical_snapshot_queries() -> None:
                         },
                     ]
                 )
-            if "WITH feature_metric_history AS" in sql and "FROM drift_metrics" in sql:
+            if "feature_metric_history AS" in sql and "FROM drift_metrics" in sql:
                 return pd.DataFrame(
                     [
                         {
@@ -1306,6 +1479,7 @@ def test_get_overview_rows_uses_bulk_historical_snapshot_queries() -> None:
             quality_metrics="quality_metrics",
             quality_history="quality_history",
             performance_metrics="performance_metrics",
+            refresh_runs="refresh_runs",
         ),
         list_monitor_configs=lambda status="active": [fraud_config, chargeback_config],
         get_monitor_summary=lambda: pd.DataFrame(
@@ -1359,13 +1533,13 @@ def test_get_overview_rows_uses_bulk_historical_snapshot_queries() -> None:
     quality_query = next(sql for sql in queries if "ROW_NUMBER() OVER" in sql and "FROM quality_metrics" in sql)
     normalized_quality_query = " ".join(quality_query.split())
     assert ") latest_quality WHERE row_num = 1" in normalized_quality_query
-    drift_query = next(sql for sql in queries if "WITH feature_metric_history AS" in sql and "FROM drift_metrics" in sql)
+    assert "PARTITION BY quality.model_key ORDER BY quality.computed_at DESC" in normalized_quality_query
+    drift_query = next(sql for sql in queries if "feature_metric_history AS" in sql and "FROM drift_metrics" in sql)
     normalized_drift_query = " ".join(drift_query.split())
-    assert "MAX(metric_value) AS metric_value" in normalized_drift_query
-    assert "GROUP BY model_key, feature_name, metric_name" in normalized_drift_query
+    assert "MAX(drift.metric_value) AS metric_value" in normalized_drift_query
+    assert "GROUP BY drift.model_key, drift.feature_name, drift.metric_name" in normalized_drift_query
     assert "FROM feature_metric_history" in normalized_drift_query
     assert not any("ORDER BY window_end, feature_name, metric_name" in sql for sql in queries)
-    assert "ROW_NUMBER() OVER" not in normalized_drift_query
 
 
 def test_get_overview_rows_marks_models_without_drift_as_computing() -> None:

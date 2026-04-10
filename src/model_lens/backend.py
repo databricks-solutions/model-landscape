@@ -154,6 +154,19 @@ def _aggregated_classification_metrics(frame: pd.DataFrame) -> dict[str, float |
     }
 
 
+def _weighted_average(values: pd.Series, weights: pd.Series) -> float | None:
+    numeric_values = pd.to_numeric(values, errors="coerce")
+    numeric_weights = pd.to_numeric(weights, errors="coerce")
+    valid = numeric_values.notna() & numeric_weights.notna() & (numeric_weights > 0)
+    if not valid.any():
+        return None
+    weighted_sum = float((numeric_values[valid] * numeric_weights[valid]).sum())
+    total_weight = float(numeric_weights[valid].sum())
+    if total_weight <= 0:
+        return None
+    return weighted_sum / total_weight
+
+
 def _null_rate_dict(value: object) -> dict[str, float]:
     parsed = _safe_json_dict(value)
     rates: dict[str, float] = {}
@@ -879,7 +892,10 @@ class DashboardBackend:
                 FROM (
                     SELECT
                         quality.*,
-                        ROW_NUMBER() OVER (PARTITION BY model_key ORDER BY computed_at DESC) AS row_num
+                        ROW_NUMBER() OVER (
+                            PARTITION BY quality.model_key
+                            ORDER BY quality.computed_at DESC
+                        ) AS row_num
                     FROM {self.repository.table_names.quality_metrics} quality
                     LEFT JOIN latest_published published
                         ON quality.model_key = published.model_key
@@ -1407,6 +1423,105 @@ class DashboardBackend:
                 frame[column] = pd.to_numeric(frame[column], errors="coerce")
         return frame.sort_values("profile_date_ts").reset_index(drop=True)
 
+    def get_daily_performance_profiles(
+        self,
+        model_id: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> pd.DataFrame:
+        if not hasattr(self.repository, "get_daily_performance_profile_rows"):
+            return pd.DataFrame()
+        frame = pd.DataFrame(
+            self.repository.get_daily_performance_profile_rows(
+                model_id,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        )
+        if frame.empty:
+            return frame
+        frame["profile_date_ts"] = pd.to_datetime(frame.get("profile_date"), errors="coerce")
+        if "metric_name" in frame.columns:
+            frame["metric_name"] = frame["metric_name"].astype(str).str.strip().str.lower()
+        for column in ("metric_value", "row_count", "volume_pct"):
+            if column in frame.columns:
+                frame[column] = pd.to_numeric(frame[column], errors="coerce")
+        sort_columns = [column for column in ("profile_date_ts", "feature_name", "bin_label", "metric_name") if column in frame.columns]
+        return frame.sort_values(sort_columns).reset_index(drop=True) if sort_columns else frame.reset_index(drop=True)
+
+    def _daily_performance_timeline_fallback(self, model_id: str, metric_name: str) -> list[dict[str, float | None]]:
+        profiles = self.get_daily_performance_profiles(model_id)
+        if profiles.empty or "metric_name" not in profiles.columns:
+            return []
+        selected = profiles[
+            (profiles["metric_name"] == str(metric_name or "").strip().lower())
+            & profiles["profile_date_ts"].notna()
+        ].copy()
+        if selected.empty:
+            return []
+        timeline: list[dict[str, float | None]] = []
+        for profile_date, group in selected.groupby("profile_date_ts", sort=True):
+            value = _weighted_average(
+                group.get("metric_value", pd.Series(dtype=float)),
+                group.get("row_count", pd.Series(dtype=float)),
+            )
+            timeline.append(
+                {
+                    "period": str(pd.Timestamp(profile_date).date()),
+                    metric_name: round(float(value), 4) if value is not None else None,
+                }
+            )
+        return timeline
+
+    def _latest_window_metric_fallback_from_daily_profiles(
+        self,
+        model_id: str,
+        *,
+        window_start: str | None,
+        window_end: str | None,
+    ) -> dict[str, float | None]:
+        profiles = self.get_daily_performance_profiles(
+            model_id,
+            start_date=window_start,
+            end_date=window_end,
+        )
+        if profiles.empty or "metric_name" not in profiles.columns:
+            return {}
+        metrics: dict[str, float | None] = {}
+        for metric_name in ("precision", "recall", "f1", "accuracy"):
+            selected = profiles[profiles["metric_name"] == metric_name]
+            if selected.empty:
+                metrics[metric_name] = None
+                continue
+            value = _weighted_average(
+                selected.get("metric_value", pd.Series(dtype=float)),
+                selected.get("row_count", pd.Series(dtype=float)),
+            )
+            metrics[metric_name] = round(float(value), 4) if value is not None else None
+        return metrics
+
+    def _latest_window_metric_fallback_from_window_rows(self, model_id: str) -> dict[str, float | None]:
+        metrics: dict[str, float | None] = {}
+        for metric_name in ("precision", "recall", "f1", "accuracy"):
+            rows = self.get_performance_rows(model_id, metric_name=metric_name)
+            if rows.empty:
+                metrics[metric_name] = None
+                continue
+            rows = rows.copy()
+            rows["window_end"] = pd.to_datetime(rows["window_end"], errors="coerce")
+            dated = rows[rows["window_end"].notna()].copy()
+            if dated.empty:
+                metrics[metric_name] = None
+                continue
+            latest = dated[dated["window_end"] == dated["window_end"].max()]
+            value = _weighted_average(
+                latest.get("current_metric", pd.Series(dtype=float)),
+                latest.get("current_volume_pct", pd.Series(dtype=float)),
+            )
+            metrics[metric_name] = round(float(value), 4) if value is not None else None
+        return metrics
+
     def get_latest_window_metrics(self, model_id: str) -> dict[str, object]:
         config = self.get_monitor_config(model_id, status=None)
         if not supports_binary_class_filters(config):
@@ -1430,6 +1545,28 @@ class DashboardBackend:
             end_date=bounds.get("window_end") or None,
         )
         if frame.empty:
+            profile_metrics = self._latest_window_metric_fallback_from_daily_profiles(
+                model_id,
+                window_start=bounds.get("window_start") or None,
+                window_end=bounds.get("window_end") or None,
+            )
+            if any(value is not None for value in profile_metrics.values()):
+                return {
+                    "supported": True,
+                    "metrics": profile_metrics,
+                    "message": "Using weighted daily performance profiles until daily labeled facts are backfilled for this monitor.",
+                    "window_start": bounds.get("window_start") or "",
+                    "window_end": bounds.get("window_end") or "",
+                }
+            row_metrics = self._latest_window_metric_fallback_from_window_rows(model_id)
+            if any(value is not None for value in row_metrics.values()):
+                return {
+                    "supported": True,
+                    "metrics": row_metrics,
+                    "message": "Using weighted comparison-window performance rows until daily labeled facts are backfilled for this monitor.",
+                    "window_start": bounds.get("window_start") or "",
+                    "window_end": bounds.get("window_end") or "",
+                }
             return {
                 "supported": True,
                 "metrics": {},
@@ -1518,10 +1655,34 @@ class DashboardBackend:
                 if pd.notna(row.get("profile_date_ts"))
             ]
         elif uses_daily_classification_timeline:
-            timeline = []
-            timeline_unavailable_reason = (
-                f"{metric_name.upper()} over time is unavailable until daily labeled facts are populated for this monitor."
-            )
+            timeline = self._daily_performance_timeline_fallback(model_id, metric_name)
+            if timeline:
+                timeline_unavailable_reason = (
+                    f"{metric_name.upper()} over time is currently using weighted daily performance profiles until daily labeled facts are backfilled for this monitor."
+                )
+            else:
+                timeline = (
+                    [
+                        {
+                            "period": str(window_end.date()),
+                            metric_name: float(
+                                (group["current_metric"] * group["current_volume_pct"]).sum()
+                                / max(group["current_volume_pct"].sum(), 1)
+                            ),
+                        }
+                        for window_end, group in dated.groupby("window_end", sort=True)
+                    ]
+                    if not dated.empty
+                    else []
+                )
+                if timeline:
+                    timeline_unavailable_reason = (
+                        f"{metric_name.upper()} over time is currently using weighted comparison-window performance rows until daily labeled facts are backfilled for this monitor."
+                    )
+                else:
+                    timeline_unavailable_reason = (
+                        f"{metric_name.upper()} over time is unavailable until daily labeled facts are populated for this monitor."
+                    )
         else:
             timeline = (
                 [

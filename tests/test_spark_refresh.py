@@ -175,6 +175,7 @@ def test_build_daily_profiles_uses_spark_for_quality_feature_and_performance_row
     assert len(result.daily_feature_profile_rows) == 4
     assert "amount" in result.performance_bin_specs
     assert result.daily_performance_profile_rows
+    assert result.daily_label_metric_rows
     amount_profile = next(
         row
         for row in result.daily_feature_profile_rows
@@ -692,6 +693,25 @@ def test_spark_refresh_repository_replace_all_refresh_results_uses_spark_table_w
                     "computed_at": "2026-01-20T00:00:00+00:00",
                 }
             ],
+            daily_label_metric_rows=[
+                {
+                    "model_key": "payments_risk_v1",
+                    "profile_date": "2026-01-20",
+                    "actual_positive_count": 40,
+                    "actual_negative_count": 60,
+                    "predicted_positive_count": 45,
+                    "predicted_negative_count": 55,
+                    "tp": 35,
+                    "fp": 10,
+                    "fn": 5,
+                    "tn": 50,
+                    "precision": 0.7778,
+                    "recall": 0.875,
+                    "f1": 0.8235,
+                    "accuracy": 0.85,
+                    "computed_at": "2026-01-20T00:00:00+00:00",
+                }
+            ],
             performance_bin_specs={"amount": (0.0, 10.0, 20.0)},
         ),
         source_run_id="run-1",
@@ -704,6 +724,7 @@ def test_spark_refresh_repository_replace_all_refresh_results_uses_spark_table_w
     appended_tables = {table_name for table_name, _ in repository.appended}
     assert table_names.comparison_windows in appended_tables
     assert table_names.daily_quality_profiles in appended_tables
+    assert table_names.daily_label_metrics in appended_tables
     assert repository.rewritten == ["payments_risk_v1"]
     assert repository.synced is True
     assert repository.replaced_bin_specs == [("payments_risk_v1", {"amount": (0.0, 10.0, 20.0)})]

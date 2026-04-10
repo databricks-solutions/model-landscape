@@ -256,6 +256,7 @@ class ControlPlaneRepository:
         self._ensure_daily_performance_profile_columns()
         self._ensure_daily_label_metric_columns()
         self._ensure_comparison_window_columns()
+        self._queue_missing_daily_label_metric_backfills()
         if self._read_model and self._read_model.configured:
             self._read_model.ensure_schema()
 
@@ -414,6 +415,76 @@ class ControlPlaneRepository:
             self._table_names.comparison_windows,
             comparison_window_migration_columns(),
         )
+
+    def _monitor_needs_daily_label_metric_backfill(self, model_key: str) -> bool:
+        frame = self._warehouse.query_params(
+            f"""
+            SELECT
+                CASE WHEN EXISTS (
+                    SELECT 1
+                    FROM {self._table_names.performance_metrics}
+                    WHERE model_key = %s
+                    LIMIT 1
+                ) THEN 1 ELSE 0 END AS has_performance_rows,
+                CASE WHEN EXISTS (
+                    SELECT 1
+                    FROM {self._table_names.daily_label_metrics}
+                    WHERE model_key = %s
+                    LIMIT 1
+                ) THEN 1 ELSE 0 END AS has_daily_label_rows
+            """,
+            (model_key, model_key),
+        )
+        if frame.empty or not {"has_performance_rows", "has_daily_label_rows"}.issubset(frame.columns):
+            return False
+        row = frame.iloc[0]
+        has_performance_rows = bool(int(row.get("has_performance_rows", 0) or 0))
+        has_daily_label_rows = bool(int(row.get("has_daily_label_rows", 0) or 0))
+        return has_performance_rows and not has_daily_label_rows
+
+    def _queue_missing_daily_label_metric_backfills(self) -> None:
+        try:
+            configs = self.list_monitor_configs(status="active")
+        except Exception:
+            return
+        if not configs:
+            return
+        queued_at = pd.Timestamp.now(tz=timezone.utc).isoformat()
+        for config in configs:
+            if (
+                not config.schedule_enabled
+                or not config.has_labels
+                or config.performance_cadence_preset in {"disabled", "manual"}
+            ):
+                continue
+            try:
+                needs_backfill = self._monitor_needs_daily_label_metric_backfill(config.model_key)
+            except Exception:
+                continue
+            if not needs_backfill:
+                continue
+            existing = self.get_monitor_runtime_state(config.model_key)
+            self.upsert_monitor_runtime_state(
+                MonitorRuntimeState(
+                    model_key=config.model_key,
+                    bootstrap_status=(
+                        existing.bootstrap_status
+                        if existing and existing.bootstrap_status
+                        else "completed"
+                    ),
+                    last_drift_refresh_at=existing.last_drift_refresh_at if existing else None,
+                    last_performance_refresh_at=None,
+                    next_drift_due_at=existing.next_drift_due_at if existing else None,
+                    next_performance_due_at=queued_at,
+                    last_label_watermark=None,
+                    last_run_status=existing.last_run_status if existing else None,
+                    last_run_error="Queued performance repair to populate daily labeled facts after schema migration.",
+                    last_run_started_at=existing.last_run_started_at if existing else None,
+                    last_run_completed_at=existing.last_run_completed_at if existing else None,
+                    backoff_until=None,
+                    consecutive_failures=0,
+                )
+            )
 
     def _ensure_quality_metric_columns(self) -> None:
         self._ensure_table_columns(
@@ -1887,6 +1958,24 @@ class ControlPlaneRepository:
             tuple(params),
         )
         return [row.to_dict() for _, row in frame.iterrows()] if not frame.empty else []
+
+    def has_daily_label_metric_rows(self, model_key: str) -> bool:
+        filters = ["model_key = %s"]
+        params: list[object] = [model_key]
+        generation_id = self.get_latest_published_generation_id(model_key)
+        if generation_id:
+            filters.append("source_run_id = %s")
+            params.append(generation_id)
+        frame = self._warehouse.query_params(
+            f"""
+            SELECT 1 AS has_rows
+            FROM {self._table_names.daily_label_metrics}
+            WHERE {' AND '.join(filters)}
+            LIMIT 1
+            """,
+            tuple(params),
+        )
+        return not frame.empty
 
     def get_performance_bin_specs(self, model_key: str) -> dict[str, tuple[float, ...]]:
         generation_id = self.get_latest_published_generation_id(model_key)

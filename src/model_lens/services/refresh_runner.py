@@ -508,6 +508,21 @@ def _get_label_watermark(
     return None
 
 
+def _has_daily_label_metric_rows(
+    repository: ControlPlaneRepository,
+    model_key: str,
+) -> bool:
+    if hasattr(repository, "has_daily_label_metric_rows"):
+        try:
+            return bool(repository.has_daily_label_metric_rows(model_key))
+        except TypeError:
+            return bool(repository.has_daily_label_metric_rows(model_key=model_key))
+        except Exception:
+            # Preserve the existing skip behavior when the existence check is unavailable.
+            return True
+    return True
+
+
 def _merge_daily_rows(
     persisted_rows: list[dict[str, object]],
     current_rows: list[dict[str, object]],
@@ -974,7 +989,13 @@ def _execute_target(
                 start_date=range_start,
                 end_date=range_end,
             )
-            if latest_watermark and latest_watermark == state.last_label_watermark and state.last_performance_refresh_at:
+            has_daily_label_rows = _has_daily_label_metric_rows(repository, config.model_key)
+            if (
+                latest_watermark
+                and latest_watermark == state.last_label_watermark
+                and state.last_performance_refresh_at
+                and has_daily_label_rows
+            ):
                 repository.complete_refresh_run(
                     run_id,
                     status="skipped",

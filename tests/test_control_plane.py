@@ -1394,6 +1394,25 @@ def test_replace_all_refresh_results_stages_generation_without_deleting_existing
             quality_history_rows=[],
             window_rows=[],
             daily_quality_profile_rows=[],
+            daily_label_metric_rows=[
+                {
+                    "model_key": "payments_risk_v1",
+                    "profile_date": "2026-01-14",
+                    "actual_positive_count": 40,
+                    "actual_negative_count": 60,
+                    "predicted_positive_count": 45,
+                    "predicted_negative_count": 55,
+                    "tp": 35,
+                    "fp": 10,
+                    "fn": 5,
+                    "tn": 50,
+                    "precision": 0.7778,
+                    "recall": 0.875,
+                    "f1": 0.8235,
+                    "accuracy": 0.85,
+                    "computed_at": "2026-01-14T00:00:00+00:00",
+                }
+            ],
             performance_bin_specs={},
         ),
         source_run_id="generation-1",
@@ -1409,6 +1428,41 @@ def test_replace_all_refresh_results_stages_generation_without_deleting_existing
         if "INSERT INTO model_observability.control_plane.drift_metrics" in sql
     )
     assert drift_insert_rows[0][-1] == "generation-1"
+    label_metric_insert_rows = next(
+        rows
+        for sql, rows in warehouse.batch_calls
+        if "INSERT INTO model_observability.control_plane.daily_label_metrics" in sql
+    )
+    assert label_metric_insert_rows[0][-1] == "generation-1"
+
+
+def test_ensure_control_plane_queues_performance_repair_when_daily_label_metrics_are_missing() -> None:
+    class _BackfillWarehouse(FakeWarehouse):
+        def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
+            if "has_performance_rows" in sql and "has_daily_label_rows" in sql:
+                return pd.DataFrame([{"has_performance_rows": 1, "has_daily_label_rows": 0}])
+            if "FROM model_observability.control_plane.monitor_runtime_state" in sql:
+                return pd.DataFrame(columns=["model_key"])
+            return super().query_params(sql, params)
+
+    warehouse = _BackfillWarehouse()
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    repository.ensure_control_plane()
+
+    runtime_inserts = [
+        params
+        for sql, params in warehouse.executed_params
+        if "INSERT INTO model_observability.control_plane.monitor_runtime_state" in sql
+    ]
+    assert runtime_inserts
+    latest = runtime_inserts[-1]
+    assert latest[0] == "payments_risk_v1"
+    assert latest[1] == "completed"
+    assert latest[3] is None
+    assert latest[5]
+    assert latest[6] == ""
+    assert "daily labeled facts" in latest[8]
 
 
 def test_get_label_watermark_uses_label_signature_for_in_source_labels() -> None:
@@ -2021,6 +2075,67 @@ def test_run_refresh_cycle_performance_repair_uses_label_signature_not_only_max_
 
     assert counts.models == 1
     assert repository.completed_runs[-1]["status"] == "completed"
+
+
+class StableWatermarkMissingFactsRepository(PerformanceRepairRepository):
+    def __init__(self, *, has_daily_label_rows: bool) -> None:
+        super().__init__()
+        self._has_daily_label_rows = has_daily_label_rows
+        self._runtime_state = type("State", (), {
+            "model_key": self.config.model_key,
+            "bootstrap_status": "completed",
+            "last_drift_refresh_at": "2026-01-20T00:00:00+00:00",
+            "last_performance_refresh_at": "2026-01-20T00:00:00+00:00",
+            "next_drift_due_at": "2026-01-20T00:00:00+00:00",
+            "next_performance_due_at": "2026-01-20T00:00:00+00:00",
+            "last_label_watermark": "2026-01-21T00:00:00|4",
+            "last_run_status": "completed",
+            "last_run_error": None,
+            "last_run_started_at": "2026-01-20T00:00:00+00:00",
+            "last_run_completed_at": "2026-01-20T00:00:00+00:00",
+            "backoff_until": None,
+            "consecutive_failures": 0,
+        })()
+
+    def get_monitor_runtime_state(self, model_key: str):
+        assert model_key == self.config.model_key
+        return self._runtime_state
+
+    def get_label_watermark(
+        self,
+        config: MonitorConfig,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> str | None:
+        assert config.model_key == self.config.model_key
+        assert start_date is not None
+        assert end_date is not None
+        return "2026-01-21T00:00:00|4"
+
+    def has_daily_label_metric_rows(self, model_key: str) -> bool:
+        assert model_key == self.config.model_key
+        return self._has_daily_label_rows
+
+
+def test_run_refresh_cycle_performance_repair_forces_recompute_when_daily_label_metrics_are_missing() -> None:
+    repository = StableWatermarkMissingFactsRepository(has_daily_label_rows=False)
+
+    counts = run_refresh_cycle(repository, mode="auto", scope="performance_repair")
+
+    assert counts.models == 1
+    assert repository.completed_runs[-1]["status"] == "completed"
+    assert repository.window_load_calls
+
+
+def test_run_refresh_cycle_performance_repair_still_skips_when_watermark_is_stable_and_daily_label_metrics_exist() -> None:
+    repository = StableWatermarkMissingFactsRepository(has_daily_label_rows=True)
+
+    counts = run_refresh_cycle(repository, mode="auto", scope="performance_repair")
+
+    assert counts.models == 0
+    assert repository.completed_runs[-1]["status"] == "skipped"
+    assert repository.window_load_calls == []
 
 
 class RefreshMetadataRepository(BoundedWindowRepository):
