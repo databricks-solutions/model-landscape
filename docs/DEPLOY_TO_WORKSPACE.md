@@ -31,11 +31,11 @@ If you use Lakebase mode, you also need a Lakebase database user for the refresh
 
 If you already have an app and want to keep its existing compute and app service principal, use the dedicated manual walkthrough:
 
-- [Manual Setup With An Existing Databricks App](/Users/volo.vragov/Desktop/work/model-lens/docs/MANUAL_EXISTING_APP_SETUP.md)
-- [Constrained Workspace Runbook](/Users/volo.vragov/Desktop/work/model-lens/docs/CONSTRAINED_WORKSPACE_RUNBOOK.md)
+- [Manual Setup With An Existing Databricks App](./MANUAL_EXISTING_APP_SETUP.md)
+- [Constrained Workspace Runbook](./CONSTRAINED_WORKSPACE_RUNBOOK.md)
 
 If the app already exists, do not use the generic `bundle deploy` path below with that same app name unless you first bind the bundle app resource to the existing app. Otherwise Databricks tries to create the app resource again and the deploy fails with an "App already exists" error.
-If the operator cannot manage the app's `sql_warehouse` resource, do not keep retrying that bind/deploy path. Use the generated manual existing-app source path from [prepare_existing_app_source.py](/Users/volo.vragov/Desktop/work/model-lens/scripts/prepare_existing_app_source.py) instead.
+If the operator cannot manage the app's `sql_warehouse` resource, do not keep retrying that bind/deploy path. Use the generated manual existing-app source path from [prepare_existing_app_source.py](../scripts/prepare_existing_app_source.py) instead.
 The manual guide also now includes a detailed refresh-job creation and verification sequence for that path, including `jobs create`, `jobs reset`, `jobs get`, `jobs run-now`, and the `REFRESH_JOB_ID` hardening step.
 If the customer workspace already has a shared refresh job, prefer reusing that exact job ID by resetting it to the generated `refresh-job.json` contract and then wiring the app with `REFRESH_JOB_ID`.
 
@@ -157,7 +157,7 @@ From the repo root:
 Warehouse-only:
 
 ```bash
-cd /Users/volo.vragov/Desktop/work/model-lens
+cd <repo-root>
 python3 -m pytest
 python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
 
@@ -210,7 +210,7 @@ If you know the workspace will monitor very large or very wide inference tables,
 ## 3. Deploy The Bundle
 
 This section assumes the bundle is managing creation of the Databricks App resource.
-If the app already exists and you want to preserve its current service principal, use [Manual Setup With An Existing Databricks App](/Users/volo.vragov/Desktop/work/model-lens/docs/MANUAL_EXISTING_APP_SETUP.md) instead of this section.
+If the app already exists and you want to preserve its current service principal, use [Manual Setup With An Existing Databricks App](./MANUAL_EXISTING_APP_SETUP.md) instead of this section.
 
 Warehouse-only:
 
@@ -374,7 +374,7 @@ Expected:
 
 ## 7. Load Test Data
 
-Run [`examples/scratch_dataset.sql`](/Users/volo.vragov/Desktop/work/model-lens/examples/scratch_dataset.sql) in Databricks SQL.
+Run [`examples/scratch_dataset.sql`](../examples/scratch_dataset.sql) in Databricks SQL.
 
 If `main` is not writable in your workspace, replace the catalog name first.
 

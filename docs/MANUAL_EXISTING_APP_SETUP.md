@@ -34,11 +34,12 @@ Use this walkthrough if all of the following are true:
 - you want to deploy Model Lens source into that existing app
 - you already know the SQL warehouse, control-plane catalog, and control-plane schema
 
-If you want Databricks to create a new app for Model Lens automatically, use [Deploy To A Workspace](/Users/volo.vragov/Desktop/work/model-lens/docs/DEPLOY_TO_WORKSPACE.md) instead.
+If you want Databricks to create a new app for Model Lens automatically, use [Deploy To A Workspace](./DEPLOY_TO_WORKSPACE.md) instead.
 
 If your customer workspace already has an app, an approved SQL warehouse, and either an existing shared refresh job or a platform team that can reset one for you, use the concise runbook first:
 
-- [Constrained Workspace Runbook](/Users/volo.vragov/Desktop/work/model-lens/docs/CONSTRAINED_WORKSPACE_RUNBOOK.md)
+- [Constrained Workspace Runbook](./CONSTRAINED_WORKSPACE_RUNBOOK.md)
+- [Customer Manual Redeploy Guide](./CUSTOMER_MANUAL_REDEPLOY.md)
 
 ## The Two Existing-App Tracks
 
@@ -58,7 +59,7 @@ This track lets you:
 
 - bind the bundle app resource to the existing app
 - let the bundle continue managing the refresh workflow
-- keep the repo root [app.yaml](/Users/volo.vragov/Desktop/work/model-lens/app.yaml) environment-neutral in git, then deploy app source with a literal `SQL_WAREHOUSE_ID` for that workspace
+- keep the repo root [app.yaml](../app.yaml) environment-neutral in git, then deploy app source with a literal `SQL_WAREHOUSE_ID` for that workspace
 
 ### Track B: Existing App Without App-Resource Management
 
@@ -79,7 +80,7 @@ Instead, Model Lens now ships a helper script that:
 
 That script is:
 
-- [prepare_existing_app_source.py](/Users/volo.vragov/Desktop/work/model-lens/scripts/prepare_existing_app_source.py)
+- [prepare_existing_app_source.py](../scripts/prepare_existing_app_source.py)
 
 Track B is the recommended path when the app already exists and the operator cannot manage app resources.
 
@@ -163,7 +164,7 @@ Expected result:
 From the repo root:
 
 ```bash
-cd /Users/volo.vragov/Desktop/work/model-lens
+cd <repo-root>
 python3 -m pytest
 python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
 ```
@@ -228,7 +229,7 @@ Use this when the operator cannot manage the app's `sql_warehouse` resource.
 Generate a ready-to-import source tree and a refresh job payload:
 
 ```bash
-python3 /Users/volo.vragov/Desktop/work/model-lens/scripts/prepare_existing_app_source.py \
+python3 scripts/prepare_existing_app_source.py \
   --app-name <existing-app-name> \
   --sql-warehouse-id <sql-warehouse-id> \
   --control-plane-catalog <control-plane-catalog> \
@@ -481,7 +482,7 @@ Expected result:
 9. Once the job is confirmed healthy, rerun the helper so the app uses the numeric job ID:
 
 ```bash
-python3 /Users/volo.vragov/Desktop/work/model-lens/scripts/prepare_existing_app_source.py \
+python3 scripts/prepare_existing_app_source.py \
   --app-name <existing-app-name> \
   --sql-warehouse-id <sql-warehouse-id> \
   --control-plane-catalog <control-plane-catalog> \
@@ -549,7 +550,7 @@ If you prefer creating the job in the Databricks UI instead of `jobs create --js
 Once you know the job ID, regenerate the prepared source tree so the app uses `REFRESH_JOB_ID` explicitly instead of name lookup:
 
 ```bash
-python3 /Users/volo.vragov/Desktop/work/model-lens/scripts/prepare_existing_app_source.py \
+python3 scripts/prepare_existing_app_source.py \
   --app-name <existing-app-name> \
   --sql-warehouse-id <sql-warehouse-id> \
   --control-plane-catalog <control-plane-catalog> \
@@ -762,7 +763,7 @@ If you want the shortest robust path for the exact constrained-user case:
 
 1. keep the existing app
 2. build the wheel locally
-3. run [prepare_existing_app_source.py](/Users/volo.vragov/Desktop/work/model-lens/scripts/prepare_existing_app_source.py) with:
+3. run [prepare_existing_app_source.py](../scripts/prepare_existing_app_source.py) with:
    - `--app-name`
    - `--sql-warehouse-id`
    - `--control-plane-catalog`

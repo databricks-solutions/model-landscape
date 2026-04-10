@@ -410,8 +410,8 @@ def test_get_performance_summary_keeps_zero_delta_rows_visible() -> None:
 
     performance = backend.get_performance_summary("fraud_model_demo", metric_name="f1")
 
-    assert performance["timeline"]
-    assert len(performance["timeline"]) == 2
+    assert performance["timeline"] == []
+    assert "daily labeled facts are populated" in performance["timeline_unavailable_reason"]
     assert len(performance["latest_bins"]) == 2
     assert len(performance["all_bins"]) == 4
     assert set(performance["contributors"]["feature"]) == {"amount", "velocity_7d"}
@@ -425,7 +425,8 @@ def test_get_performance_summary_supports_alternate_metric_names() -> None:
     precision = backend.get_performance_summary("fraud_model_demo", metric_name="precision")
     rmse = backend.get_performance_summary("fraud_model_demo", metric_name="rmse")
 
-    assert precision["timeline"][0]["precision"] == 0.813
+    assert precision["timeline"] == []
+    assert "daily labeled facts are populated" in precision["timeline_unavailable_reason"]
     assert rmse["timeline"][0]["rmse"] == 0.813
 
 
@@ -494,6 +495,84 @@ def test_get_performance_summary_prefers_daily_label_metrics_and_keeps_null_gaps
         {"period": "2026-01-20", "precision": None},
         {"period": "2026-01-21", "precision": 0.75},
     ]
+
+
+def test_get_latest_window_metrics_aggregates_latest_daily_label_facts() -> None:
+    config = MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.model_lens_demo.inference_logs",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=("amount",),
+        ),
+        baseline=BaselinePolicy(n_days=7),
+        model_id_value="fraud_model_v1",
+    )
+
+    class _SnapshotWarehouse:
+        def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
+            if "FROM comparison_windows" in sql:
+                return pd.DataFrame(
+                    [
+                        {
+                            "baseline_start": "2026-01-07",
+                            "baseline_end": "2026-01-13",
+                            "window_start": "2026-01-14",
+                            "window_end": "2026-01-21",
+                        }
+                    ]
+                )
+            raise AssertionError(f"Unexpected query: {sql}")
+
+    repository = SimpleNamespace(
+        _warehouse=_SnapshotWarehouse(),
+        table_names=SimpleNamespace(comparison_windows="comparison_windows"),
+        list_monitor_configs=lambda status="active": [config],
+        get_monitor_summary=lambda: pd.DataFrame(),
+        get_daily_label_metric_rows=lambda model_id, start_date=None, end_date=None: [
+            {
+                "model_key": model_id,
+                "profile_date": "2026-01-20",
+                "tp": 3,
+                "fp": 1,
+                "fn": 2,
+                "tn": 4,
+                "precision": 0.75,
+                "recall": 0.6,
+                "f1": 0.6667,
+                "accuracy": 0.7,
+            },
+            {
+                "model_key": model_id,
+                "profile_date": "2026-01-21",
+                "tp": 1,
+                "fp": 0,
+                "fn": 1,
+                "tn": 8,
+                "precision": 1.0,
+                "recall": 0.5,
+                "f1": 0.6667,
+                "accuracy": 0.9,
+            },
+        ],
+    )
+    backend = DashboardBackend(repository=repository)
+
+    snapshot = backend.get_latest_window_metrics("fraud_model_demo")
+
+    assert snapshot["supported"] is True
+    assert snapshot["window_start"] == "2026-01-14"
+    assert snapshot["window_end"] == "2026-01-21"
+    assert snapshot["metrics"] == {
+        "precision": 0.8,
+        "recall": 0.5714,
+        "f1": 0.6667,
+        "accuracy": 0.8,
+    }
 
 
 def test_get_quality_stats_and_history_support_class_filters_from_daily_profiles() -> None:

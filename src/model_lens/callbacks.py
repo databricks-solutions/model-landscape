@@ -125,13 +125,25 @@ def _parse_custom_edges(value: object) -> list[float] | None:
     return edges
 
 
-def _trim_percentile_value(toggle: str | None, raw_value: object) -> float | None:
-    if str(toggle or "off").strip().lower() != "on":
+def _normalize_outlier_mode(value: object) -> str:
+    normalized = str(value or "off").strip().lower()
+    if normalized in {"percentile_clip", "iqr_fence"}:
+        return normalized
+    return "off"
+
+
+def _outlier_control_value(mode: object, raw_value: object) -> float | None:
+    normalized_mode = _normalize_outlier_mode(mode)
+    if normalized_mode == "off":
         return None
     numeric = pd.to_numeric(pd.Series([raw_value]), errors="coerce").iloc[0]
-    if pd.isna(numeric):
-        return 1.0
-    return max(0.0, min(49.0, float(numeric)))
+    if normalized_mode == "percentile_clip":
+        if pd.isna(numeric):
+            return 1.0
+        return max(0.0, min(49.0, float(numeric)))
+    if pd.isna(numeric) or float(numeric) <= 0:
+        return 1.5
+    return float(numeric)
 
 
 def _analysis_filter_summary(
@@ -385,7 +397,7 @@ def _render_refresh_diagnostics(diagnostics: dict | None) -> html.Div:
     state = str(payload.get("state") or "no_runs").strip() or "no_runs"
     recent_runs = payload.get("recent_runs") or []
     if state == "no_runs":
-        return html.Div("No refresh runs yet.", className="text-muted")
+        return html.Div("No refresh runs yet. No compute footprint data yet.", className="text-muted")
 
     recommendations = [str(item).strip() for item in summary.get("recommendations") or [] if str(item).strip()]
     recommendation_block = (
@@ -440,6 +452,15 @@ def _render_refresh_diagnostics(diagnostics: dict | None) -> html.Div:
                     f"{float(summary.get('success_rate_pct') or 0.0):.1f}%",
                     f"{int(summary.get('successful_run_count') or 0)}/{int(summary.get('recent_run_count') or 0)} recent runs",
                     "success" if float(summary.get("success_rate_pct") or 0.0) >= 80.0 else "warning",
+                ),
+                md=3,
+            ),
+            dbc.Col(
+                make_metric_card(
+                    "Compute Footprint",
+                    str(summary.get("compute_footprint") or "No compute footprint data yet"),
+                    "Advisory from median duration and scanned rows",
+                    "warning" if str(summary.get("compute_footprint_category") or "") in {"elevated", "high"} else "secondary",
                 ),
                 md=3,
             ),
@@ -2373,10 +2394,24 @@ def register_callbacks(app) -> None:
         Input("drift-date-range", "end_date"),
         Input("drift-class-basis-select", "value"),
         Input("drift-class-value-select", "value"),
+        Input("drift-threshold-toggle", "value"),
         Input("reload-token", "data"),
         Input("session-config-store", "data"),
     )
-    def render_drift(pathname, model_id, metric, granularity, top_n, start_date, end_date, class_basis, class_value, _, session_data):
+    def render_drift(
+        pathname,
+        model_id,
+        metric,
+        granularity,
+        top_n,
+        start_date,
+        end_date,
+        class_basis,
+        class_value,
+        show_thresholds,
+        _,
+        session_data,
+    ):
         if pathname != "/drift":
             return no_update, no_update, no_update, no_update
         if not model_id:
@@ -2447,7 +2482,14 @@ def register_callbacks(app) -> None:
         title_suffix = f" ({filter_summary})" if filter_summary else ""
         heatmap_title = f"{(granularity or 'daily').title()} Feature Drift Heatmap{title_suffix}"
         return (
-            make_chart_card(charts.build_drift_heatmap(filtered_drift, metric=metric or "psi", title=heatmap_title)),
+            make_chart_card(
+                charts.build_drift_heatmap(
+                    filtered_drift,
+                    metric=metric or "psi",
+                    title=heatmap_title,
+                    show_thresholds=bool(show_thresholds),
+                )
+            ),
             html.Div(notes) if notes else html.Div(),
             make_chart_card(
                 charts.build_drift_timeline(
@@ -2463,6 +2505,7 @@ def register_callbacks(app) -> None:
                     metric=metric or "psi",
                     top_n=normalized_top_n,
                     title=f"Top {normalized_top_n} Drifting Features (Historical Max){title_suffix}",
+                    show_thresholds=bool(show_thresholds),
                 )
             ),
         )
@@ -2512,14 +2555,38 @@ def register_callbacks(app) -> None:
     @app.callback(
         Output("deepdive-bin-count-input", "disabled"),
         Output("deepdive-custom-edges-input", "disabled"),
-        Output("deepdive-trim-percentile-input", "disabled"),
+        Output("deepdive-outlier-value-input", "disabled"),
+        Output("deepdive-outlier-value-label", "children"),
+        Output("deepdive-outlier-value-help", "children"),
         Input("deepdive-binning-mode-select", "value"),
-        Input("deepdive-trim-toggle", "value"),
+        Input("deepdive-outlier-mode-select", "value"),
     )
-    def sync_deepdive_controls(binning_mode, trim_toggle):
+    def sync_deepdive_controls(binning_mode, outlier_mode):
         normalized_mode = str(binning_mode or "auto").strip().lower()
-        trim_enabled = str(trim_toggle or "off").strip().lower() == "on"
-        return normalized_mode != "fixed", normalized_mode != "custom", not trim_enabled
+        normalized_outlier_mode = _normalize_outlier_mode(outlier_mode)
+        if normalized_outlier_mode == "percentile_clip":
+            return (
+                normalized_mode != "fixed",
+                normalized_mode != "custom",
+                False,
+                "Trim Percentile P",
+                "Percentile Clip keeps values between P and 100-P.",
+            )
+        if normalized_outlier_mode == "iqr_fence":
+            return (
+                normalized_mode != "fixed",
+                normalized_mode != "custom",
+                False,
+                "IQR Multiplier K",
+                "IQR Fence keeps values inside Q1 - K*IQR and Q3 + K*IQR.",
+            )
+        return (
+            normalized_mode != "fixed",
+            normalized_mode != "custom",
+            True,
+            "Outlier Parameter",
+            "Percentile Clip uses P / 100-P clipping. IQR Fence uses Q1 - K*IQR to Q3 + K*IQR.",
+        )
 
     @app.callback(
         Output("deepdive-distribution-container", "children"),
@@ -2532,8 +2599,8 @@ def register_callbacks(app) -> None:
         Input("deepdive-binning-mode-select", "value"),
         Input("deepdive-bin-count-input", "value"),
         Input("deepdive-custom-edges-input", "value"),
-        Input("deepdive-trim-toggle", "value"),
-        Input("deepdive-trim-percentile-input", "value"),
+        Input("deepdive-outlier-mode-select", "value"),
+        Input("deepdive-outlier-value-input", "value"),
         Input("reload-token", "data"),
         Input("session-config-store", "data"),
     )
@@ -2545,8 +2612,8 @@ def register_callbacks(app) -> None:
         binning_mode,
         bin_count,
         custom_edges_text,
-        trim_toggle,
-        trim_percentile_raw,
+        outlier_mode,
+        outlier_value_raw,
         _,
         session_data,
     ):
@@ -2559,29 +2626,42 @@ def register_callbacks(app) -> None:
             backend = _make_backend(session_data)
             normalized_mode = str(binning_mode or "auto").strip().lower()
             custom_edges = _parse_custom_edges(custom_edges_text) if normalized_mode == "custom" else None
-            trim_percentile = _trim_percentile_value(trim_toggle, trim_percentile_raw)
+            normalized_outlier_mode = _normalize_outlier_mode(outlier_mode)
+            outlier_value = _outlier_control_value(normalized_outlier_mode, outlier_value_raw)
             details = backend.get_feature_distribution_details(
                 model_id,
                 feature,
-                require_exact_samples=(normalized_mode == "custom" or trim_percentile is not None),
+                require_exact_samples=(normalized_mode == "custom" or normalized_outlier_mode != "off"),
             )
             baseline = details["baseline"]
             current = details["current"]
-            distribution = make_chart_card(
-                charts.build_feature_distribution(
-                    baseline,
-                    current,
-                    feature,
-                    binning_mode=normalized_mode,
-                    n_bins=_normalize_top_n(bin_count, default=40, minimum=2, maximum=200),
-                    custom_edges=custom_edges,
-                    trim_percentile=trim_percentile,
+            if str(details.get("distribution_source") or "") == "unavailable_requested_raw":
+                distribution = make_empty_state(
+                    "Requested exact distribution controls need a bounded source-window read, but that path is unavailable for this monitor right now.",
+                    icon="fas fa-chart-area",
                 )
-            )
+            else:
+                distribution = make_chart_card(
+                    charts.build_feature_distribution(
+                        baseline,
+                        current,
+                        feature,
+                        binning_mode=normalized_mode,
+                        n_bins=_normalize_top_n(bin_count, default=40, minimum=2, maximum=200),
+                        custom_edges=custom_edges,
+                        outlier_mode=normalized_outlier_mode,
+                        outlier_value=outlier_value,
+                    )
+                )
             dimension_chart = html.Div()
             if dimension:
                 breakdown = backend.get_dimension_breakdown(model_id, feature, dimension)
                 dimension_chart = make_chart_card(charts.build_dimension_breakdown(breakdown, feature, dimension))
+            outlier_text = "Off"
+            if normalized_outlier_mode == "percentile_clip":
+                outlier_text = f"Percentile Clip (P={outlier_value:.1f})"
+            elif normalized_outlier_mode == "iqr_fence":
+                outlier_text = f"IQR Fence (K={outlier_value:.2f})"
             context_children = html.Div(
                 [
                     html.Div(str(details.get("window_label") or "Latest comparison window unavailable."), className="mb-1"),
@@ -2597,7 +2677,7 @@ def register_callbacks(app) -> None:
                             if normalized_mode == "fixed"
                             else ""
                         )
-                        + (" | Percentile clipping enabled" if trim_percentile is not None else ""),
+                        + f" | Outlier Mode: {outlier_text}",
                         className="mt-1",
                     ),
                 ]
@@ -2617,10 +2697,11 @@ def register_callbacks(app) -> None:
         Input("quality-date-range", "end_date"),
         Input("quality-class-basis-select", "value"),
         Input("quality-class-value-select", "value"),
+        Input("quality-threshold-toggle", "value"),
         Input("reload-token", "data"),
         Input("session-config-store", "data"),
     )
-    def render_quality(pathname, model_id, start_date, end_date, class_basis, class_value, _, session_data):
+    def render_quality(pathname, model_id, start_date, end_date, class_basis, class_value, show_thresholds, _, session_data):
         if pathname != "/quality":
             return no_update, no_update, no_update, no_update
         if not model_id:
@@ -2682,7 +2763,7 @@ def register_callbacks(app) -> None:
             ),
             dbc.Col(make_metric_card("From", quality["min_date"] or "—", "Earliest data"), md=3),
             dbc.Col(make_metric_card("To", quality["max_date"] or "—", "Latest data"), md=3),
-            dbc.Col(make_metric_card("Prediction Mean", _format_metric_value(quality["prediction_mean"]), "Latest snapshot"), md=3),
+            dbc.Col(make_metric_card("Prediction Average", _format_metric_value(quality["prediction_mean"]), "Latest snapshot"), md=3),
             dbc.Col(make_metric_card("Prediction Std", _format_metric_value(quality["prediction_std"]), "Latest snapshot"), md=3),
         ]
         volume_children_items: list[object] = []
@@ -2692,7 +2773,13 @@ def register_callbacks(app) -> None:
             volume_children_items.append(_status_alert(f"Active filters: {filter_summary}", "secondary"))
         volume_children_items.append(
             html.Small(
-                "Comparison windows aggregate the latest persisted current range for each baseline/current pairing.",
+                "Daily Monitoring Rows shows daily row volume in persisted monitoring history. Rows Per Comparison Window shows the row volume in each baseline/current comparison window.",
+                className="text-muted d-block mb-2",
+            )
+        )
+        volume_children_items.append(
+            html.Small(
+                "A comparison window is the persisted current window paired with its matching baseline window for one refresh cycle.",
                 className="text-muted d-block mb-2",
             )
         )
@@ -2708,15 +2795,16 @@ def register_callbacks(app) -> None:
         volume_children = html.Div(volume_children_items)
         null_children = html.Div(
             [
-                make_chart_card(charts.build_null_rate_chart(quality["null_rates"])),
+                make_chart_card(charts.build_null_rate_chart(quality["null_rates"], show_thresholds=bool(show_thresholds))),
                 make_chart_card(charts.build_null_rate_timeline(null_rate_history), class_name="mb-0"),
             ]
         )
+        latest_window_metrics = backend.get_latest_window_metrics(model_id)
         prediction_children = html.Div(
             [
                 make_chart_card(charts.build_prediction_quality_timeline(quality_history)),
                 make_chart_card(
-                    charts.build_class_mix_chart(backend.get_latest_class_mix(model_id)),
+                    charts.build_latest_window_metric_snapshot(latest_window_metrics),
                     class_name="mb-0",
                 ),
             ]
@@ -2819,6 +2907,9 @@ def register_callbacks(app) -> None:
                 className="text-muted d-block mb-2",
             )
         ]
+        timeline_unavailable_reason = str(performance.get("timeline_unavailable_reason") or "").strip()
+        if timeline_unavailable_reason:
+            alert_children.append(_status_alert(timeline_unavailable_reason, "warning"))
         if not degradation_detected:
             alert_children.append(
                 _status_alert(
@@ -2881,6 +2972,13 @@ def register_callbacks(app) -> None:
         history_message = _comparison_history_message(len(performance["timeline"]), "daily")
         if history_message:
             note_parts.append(html.Small(history_message, className="text-muted d-block"))
+        if any(row.get(resolved_metric) is None for row in performance["timeline"]):
+            note_parts.append(
+                html.Small(
+                    "Chart gaps mean the selected metric was undefined on those days, not zero.",
+                    className="text-muted d-block",
+                )
+            )
         return (
             alert,
             kpi_cards,
@@ -3333,7 +3431,7 @@ def register_callbacks(app) -> None:
                 ),
                 schedule_card,
                 dbc.Alert(
-                    "The shared refresh workflow checks due monitors hourly by default. The cadence settings above decide whether this monitor actually runs drift/quality or performance work when that shared job wakes up.",
+                    "The shared refresh workflow wakes up hourly by default. The cadence settings above decide whether this monitor is actually due for drift/quality work, while performance cadence is evaluated independently when labels are present.",
                     color="secondary",
                     className="py-2 mb-3",
                 ),

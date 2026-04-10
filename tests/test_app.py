@@ -778,7 +778,7 @@ def test_render_drift_callback_reports_when_only_one_window_exists(monkeypatch) 
     callback = app.callback_map[RENDER_DRIFT_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn("/drift", "fraud_model_demo", "psi", "weekly", 10, None, None, "all", "all", 0, {})
+    result = fn("/drift", "fraud_model_demo", "psi", "weekly", 10, None, None, "all", "all", False, 0, {})
 
     assert "Only one weekly comparison window is available" in str(result[1])
     assert "Categorical features are stored" in str(result[1])
@@ -816,12 +816,15 @@ def test_render_drift_callback_respects_top_n_selection(monkeypatch) -> None:
     callback = app.callback_map[RENDER_DRIFT_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result_top_5 = fn("/drift", "fraud_model_demo", "psi", "daily", 5, None, None, "all", "all", 0, {})
-    result_top_6 = fn("/drift", "fraud_model_demo", "psi", "daily", 6, None, None, "all", "all", 0, {})
+    result_top_5 = fn("/drift", "fraud_model_demo", "psi", "daily", 5, None, None, "all", "all", False, 0, {})
+    result_top_6 = fn("/drift", "fraud_model_demo", "psi", "daily", 6, None, None, "all", "all", False, 0, {})
+    result_thresholds = fn("/drift", "fraud_model_demo", "psi", "daily", 5, None, None, "all", "all", True, 0, {})
 
     heatmap_5 = result_top_5[0].children.children.figure
     top_5_figure = result_top_5[3].children.children.figure
     top_6_figure = result_top_6[3].children.children.figure
+    threshold_heatmap = result_thresholds[0].children.children.figure
+    threshold_bar = result_thresholds[3].children.children.figure
 
     assert "highest historical PSI" in str(result_top_5[1])
     assert heatmap_5.layout.title.text == "Daily Feature Drift Heatmap"
@@ -831,6 +834,8 @@ def test_render_drift_callback_respects_top_n_selection(monkeypatch) -> None:
     assert "device_score" in top_5_figure.data[0].y
     assert top_6_figure.layout.title.text == "Top 6 Drifting Features (Historical Max)"
     assert len(top_6_figure.data[0].y) == 6
+    assert heatmap_5.data[0].colorscale != threshold_heatmap.data[0].colorscale
+    assert top_5_figure.data[0].marker.color != threshold_bar.data[0].marker.color
 
 
 def test_render_performance_callback_surfaces_zero_delta_state(monkeypatch) -> None:
@@ -862,6 +867,7 @@ def test_render_performance_callback_surfaces_zero_delta_state(monkeypatch) -> N
                 "all_bins": latest_bins,
                 "has_significant_degradation": False,
                 "worst_weighted_delta": 0.0,
+                "timeline_unavailable_reason": "",
             }
 
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
@@ -905,6 +911,7 @@ def test_render_performance_callback_handles_partial_window_note_and_missing_met
                 "all_bins": latest_bins,
                 "has_significant_degradation": False,
                 "worst_weighted_delta": 0.0,
+                "timeline_unavailable_reason": "PRECISION over time is unavailable until daily labeled facts are populated for this monitor.",
             }
 
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
@@ -914,6 +921,7 @@ def test_render_performance_callback_handles_partial_window_note_and_missing_met
 
     result = fn("/performance", "fraud_model_demo", "precision", 0, {}, None)
 
+    assert "unavailable until daily labeled facts are populated" in str(result[0]).lower()
     assert "Latest comparison window end: 2026-01-21" in str(result[6])
     assert "No PRECISION values are available yet" in str(result[2])
 
@@ -960,12 +968,17 @@ def test_render_quality_callback_surfaces_history_and_latest_snapshot(monkeypatc
                 ]
             )
 
-        def get_latest_class_mix(self, model_id):
+        def get_latest_window_metrics(self, model_id):
             return {
-                "Actual Positive": 42,
-                "Actual Negative": 58,
-                "Predicted Positive": 40,
-                "Predicted Negative": 60,
+                "supported": True,
+                "metrics": {
+                    "precision": 0.75,
+                    "recall": 0.6,
+                    "f1": 0.6667,
+                    "accuracy": 0.7,
+                },
+                "window_start": "2026-01-14",
+                "window_end": "2026-01-21",
             }
 
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
@@ -973,13 +986,19 @@ def test_render_quality_callback_surfaces_history_and_latest_snapshot(monkeypatc
     callback = app.callback_map[RENDER_QUALITY_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn("/quality", "fraud_model_demo", None, None, "all", "all", 0, {})
+    result = fn("/quality", "fraud_model_demo", None, None, "all", "all", False, 0, {})
+    result_with_guides = fn("/quality", "fraud_model_demo", None, None, "all", "all", True, 0, {})
 
     assert "Monitoring Rows" in str(result[0])
     assert "Rows Per Comparison Window" in str(result[1])
+    assert "Daily Monitoring Rows shows daily row volume in persisted monitoring history" in str(result[1])
     assert "Null Rate Trends" in str(result[2])
-    class_mix_figure = result[3].children[1].children.children.figure
-    assert class_mix_figure.layout.title.text == "Latest Window Class Mix"
+    null_rate_figure = result[2].children[0].children.children.figure
+    null_rate_guided = result_with_guides[2].children[0].children.children.figure
+    snapshot_figure = result[3].children[1].children.children.figure
+    assert snapshot_figure.layout.title.text == "Latest Window Performance Snapshot"
+    assert len(null_rate_figure.layout.shapes or ()) == 0
+    assert len(null_rate_guided.layout.shapes or ()) == 1
 
 
 def test_render_quality_callback_uses_na_for_missing_prediction_mean_and_shows_std(monkeypatch) -> None:
@@ -1004,20 +1023,21 @@ def test_render_quality_callback_uses_na_for_missing_prediction_mean_and_shows_s
         def get_null_rate_history(self, model_id, **kwargs):
             return pd.DataFrame()
 
-        def get_latest_class_mix(self, model_id):
-            return {}
+        def get_latest_window_metrics(self, model_id):
+            return {"supported": False, "metrics": {}, "message": "No labeled snapshot is available for this monitor."}
 
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
     app = create_app()
     callback = app.callback_map[RENDER_QUALITY_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn("/quality", "fraud_model_demo", None, None, "all", "all", 0, {})
+    result = fn("/quality", "fraud_model_demo", None, None, "all", "all", False, 0, {})
 
     rendered = str(result[0])
-    assert "Prediction Mean" in rendered
+    assert "Prediction Average" in rendered
     assert "N/A" in rendered
     assert "Prediction Std" in rendered
+    assert "No labeled snapshot is available for this monitor." in str(result[3])
 
 
 def test_scan_source_table_failure_clears_prior_scan_data(monkeypatch) -> None:
@@ -1098,6 +1118,37 @@ def test_render_feature_deep_dive_reports_distribution_context(monkeypatch) -> N
     assert "amount by region" in str(dimension).lower()
     assert "approximate histogram reconstruction" in str(context)
     assert "Baseline: 2026-01-01 to 2026-01-07" in str(context)
+    assert "Outlier Mode: Off" in str(context)
+
+
+def test_render_feature_deep_dive_iqr_mode_requests_exact_samples(monkeypatch) -> None:
+    class _FakeBackend:
+        def __init__(self) -> None:
+            self.calls: list[bool] = []
+
+        def get_feature_distribution_details(self, model_id, feature, require_exact_samples=False):
+            self.calls.append(bool(require_exact_samples))
+            return {
+                "baseline": pd.Series([1.0, 2.0, 50.0], dtype=float),
+                "current": pd.Series([3.0, 4.0, 60.0], dtype=float),
+                "distribution_source": "bounded_window_read",
+                "approximate": False,
+                "window_label": "Baseline: 2026-01-01 to 2026-01-07 | Current: 2026-01-08 to 2026-01-14",
+            }
+
+        def get_dimension_breakdown(self, model_id, feature, dimension):
+            return pd.DataFrame()
+
+    backend = _FakeBackend()
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: backend)
+    app = create_app()
+    fn = _find_callback_by_input_and_output(app, "deepdive-feature-select", "deepdive-distribution-container")
+
+    distribution, _, context = fn("/features", "fraud_model_demo", "amount", "", "fixed", 20, "", "iqr_fence", 1.5, 0, {})
+
+    assert backend.calls == [True]
+    assert "Distribution: amount" in str(distribution)
+    assert "Outlier Mode: IQR Fence (K=1.50)" in str(context)
 
 
 def test_render_feature_deep_dive_handles_backend_errors(monkeypatch) -> None:

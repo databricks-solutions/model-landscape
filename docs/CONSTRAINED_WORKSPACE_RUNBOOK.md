@@ -37,7 +37,7 @@ Optional:
 1. Build the wheel locally:
 
 ```bash
-cd /Users/volo.vragov/Desktop/work/model-lens
+cd <repo-root>
 python3 -m pytest
 python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
 ```
@@ -45,7 +45,7 @@ python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
 2. Generate a deployable source tree with literal workspace values:
 
 ```bash
-python3 /Users/volo.vragov/Desktop/work/model-lens/scripts/prepare_existing_app_source.py \
+python3 scripts/prepare_existing_app_source.py \
   --app-name <existing-app-name> \
   --sql-warehouse-id <sql-warehouse-id> \
   --control-plane-catalog <control-plane-catalog> \
@@ -104,7 +104,7 @@ databricks jobs create --json @/tmp/model-lens-existing-app/refresh-job.json
 5. Once the job ID is known, regenerate the source tree so the app points at that exact job ID:
 
 ```bash
-python3 /Users/volo.vragov/Desktop/work/model-lens/scripts/prepare_existing_app_source.py \
+python3 scripts/prepare_existing_app_source.py \
   --app-name <existing-app-name> \
   --sql-warehouse-id <sql-warehouse-id> \
   --control-plane-catalog <control-plane-catalog> \
@@ -211,5 +211,6 @@ Reset the job from the generated `refresh-job.json` or mirror that payload in th
 
 ## Use This Together With
 
-- [Manual Setup With An Existing Databricks App](/Users/volo.vragov/Desktop/work/model-lens/docs/MANUAL_EXISTING_APP_SETUP.md)
-- [Workspace Smoke Test](/Users/volo.vragov/Desktop/work/model-lens/docs/WORKSPACE_SMOKE_TEST.md)
+- [Manual Setup With An Existing Databricks App](./MANUAL_EXISTING_APP_SETUP.md)
+- [Customer Manual Redeploy Guide](./CUSTOMER_MANUAL_REDEPLOY.md)
+- [Workspace Smoke Test](./WORKSPACE_SMOKE_TEST.md)

@@ -8,6 +8,9 @@ Use this guide when your Databricks workspace already has:
 
 This guide does **not** use `ai_dev_kit`.
 
+Keep customer-specific values out of this shared file.
+If you need a workspace-specific copy for one customer, generate it outside the repo or in a private system that is not committed back into git.
+
 ## What This Guide Covers
 
 This path keeps the existing app identity and deploys Model Lens into that existing app by:

@@ -8,6 +8,7 @@ def test_build_refresh_diagnostics_reports_no_runs_cleanly() -> None:
 
     assert diagnostics["state"] == "no_runs"
     assert diagnostics["summary"]["dominant_bottleneck"] == "No Runs Yet"
+    assert diagnostics["summary"]["compute_footprint"] == "No compute footprint data yet"
     assert diagnostics["summary"]["recommendations"] == ["Run the first refresh to start collecting diagnostics."]
 
 
@@ -22,6 +23,7 @@ def test_build_refresh_diagnostics_classifies_source_scan_bound_runs() -> None:
             "derivation_ms": 80_000,
             "persistence_ms": 50_000,
             "total_duration_ms": 440_000,
+            "rows_scanned": 2_000_000,
         },
         {
             "status": "completed",
@@ -32,6 +34,7 @@ def test_build_refresh_diagnostics_classifies_source_scan_bound_runs() -> None:
             "derivation_ms": 70_000,
             "persistence_ms": 50_000,
             "total_duration_ms": 440_000,
+            "rows_scanned": 2_500_000,
         },
         {
             "status": "completed",
@@ -42,6 +45,7 @@ def test_build_refresh_diagnostics_classifies_source_scan_bound_runs() -> None:
             "derivation_ms": 85_000,
             "persistence_ms": 50_000,
             "total_duration_ms": 440_000,
+            "rows_scanned": 1_800_000,
         },
     ]
 
@@ -49,6 +53,7 @@ def test_build_refresh_diagnostics_classifies_source_scan_bound_runs() -> None:
 
     assert diagnostics["state"] == "ready"
     assert diagnostics["summary"]["dominant_bottleneck"] == "Source Scan Bound"
+    assert diagnostics["summary"]["compute_footprint"] == "Low"
     assert "Source scans dominate" in diagnostics["summary"]["recommendations"][0]
     assert diagnostics["recent_runs"][0]["bottleneck_category"] == "source_scan_bound"
 
@@ -80,6 +85,48 @@ def test_build_refresh_diagnostics_detects_degrading_trend() -> None:
     diagnostics = build_refresh_diagnostics(runs)
 
     assert diagnostics["summary"]["trend"] == "Degrading"
+
+
+def test_build_refresh_diagnostics_flags_elevated_compute_footprint() -> None:
+    runs = [
+        {
+            "status": "completed",
+            "scope": "drift_quality",
+            "started_at": "2026-01-21T10:00:00",
+            "source_metadata_ms": 200_000,
+            "daily_profiles_ms": 200_000,
+            "derivation_ms": 200_000,
+            "persistence_ms": 100_000,
+            "total_duration_ms": 700_000,
+            "rows_scanned": 6_500_000,
+        },
+        {
+            "status": "completed",
+            "scope": "drift_quality",
+            "started_at": "2026-01-20T10:00:00",
+            "source_metadata_ms": 180_000,
+            "daily_profiles_ms": 180_000,
+            "derivation_ms": 180_000,
+            "persistence_ms": 80_000,
+            "total_duration_ms": 620_000,
+            "rows_scanned": 5_100_000,
+        },
+        {
+            "status": "completed",
+            "scope": "drift_quality",
+            "started_at": "2026-01-19T10:00:00",
+            "source_metadata_ms": 170_000,
+            "daily_profiles_ms": 170_000,
+            "derivation_ms": 170_000,
+            "persistence_ms": 80_000,
+            "total_duration_ms": 590_000,
+            "rows_scanned": 4_900_000,
+        },
+    ]
+
+    diagnostics = build_refresh_diagnostics(runs)
+
+    assert diagnostics["summary"]["compute_footprint"] == "Elevated"
 
 
 def test_build_refresh_diagnostics_flags_failure_heavy_history() -> None:

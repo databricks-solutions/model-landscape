@@ -57,6 +57,28 @@ def _apply_percentile_trim(values: np.ndarray, percentile: float | None) -> np.n
     return values[(values >= lower) & (values <= upper)]
 
 
+def _apply_iqr_fence(values: np.ndarray, multiplier: float | None) -> np.ndarray:
+    if multiplier is None or multiplier <= 0 or values.size == 0:
+        return values
+    q1 = np.nanpercentile(values, 25.0)
+    q3 = np.nanpercentile(values, 75.0)
+    iqr = q3 - q1
+    if not np.isfinite(iqr) or iqr <= 0:
+        return values
+    lower = q1 - (multiplier * iqr)
+    upper = q3 + (multiplier * iqr)
+    return values[(values >= lower) & (values <= upper)]
+
+
+def _apply_outlier_filter(values: np.ndarray, mode: str = "off", value: float | None = None) -> np.ndarray:
+    normalized_mode = str(mode or "off").strip().lower()
+    if normalized_mode == "percentile_clip":
+        return _apply_percentile_trim(values, value)
+    if normalized_mode == "iqr_fence":
+        return _apply_iqr_fence(values, value)
+    return values
+
+
 def _heatmap_colorscale(metric: str, *, zmax: float) -> list[list[float | str]]:
     warning, critical = get_thresholds(metric)
     safe_max = max(float(zmax), float(critical) * 1.5, 1e-9)
@@ -72,7 +94,31 @@ def _heatmap_colorscale(metric: str, *, zmax: float) -> list[list[float | str]]:
     ]
 
 
-def build_drift_heatmap(df: pd.DataFrame, metric: str = "psi", title: str = "Feature Drift Over Time"):
+def _neutral_heatmap_colorscale() -> list[list[float | str]]:
+    return [
+        [0.0, "#0f1b2d"],
+        [0.35, "#1f4e79"],
+        [0.7, COLORS["blue"]],
+        [1.0, COLORS["cyan"]],
+    ]
+
+
+def _ranked_bar_colors(count: int) -> list[str]:
+    palette = px.colors.sequential.Tealgrn
+    if count <= 0:
+        return []
+    if count <= len(palette):
+        return palette[:count]
+    return [palette[index % len(palette)] for index in range(count)]
+
+
+def build_drift_heatmap(
+    df: pd.DataFrame,
+    metric: str = "psi",
+    title: str = "Feature Drift Over Time",
+    *,
+    show_thresholds: bool = False,
+):
     if df.empty:
         fig = go.Figure()
         fig.add_annotation(text="No drift data available", showarrow=False)
@@ -81,7 +127,12 @@ def build_drift_heatmap(df: pd.DataFrame, metric: str = "psi", title: str = "Fea
     pivot = df.pivot_table(index="feature", columns="period", values=metric, aggfunc="max").sort_index()
     values = pd.to_numeric(pd.Series(pivot.values.ravel()), errors="coerce").dropna()
     _, critical = get_thresholds(metric)
-    zmax = max(values.max(), critical * 1.5) if not values.empty else critical * 1.5
+    if show_thresholds:
+        zmax = max(values.max(), critical * 1.5) if not values.empty else critical * 1.5
+        colorscale = _heatmap_colorscale(metric, zmax=zmax)
+    else:
+        zmax = max(float(values.max()), 1e-9) if not values.empty else 1.0
+        colorscale = _neutral_heatmap_colorscale()
     tickformat = _metric_tickformat(metric, values)
     fig = go.Figure(
         data=go.Heatmap(
@@ -90,7 +141,7 @@ def build_drift_heatmap(df: pd.DataFrame, metric: str = "psi", title: str = "Fea
             y=pivot.index,
             zmin=0,
             zmax=zmax,
-            colorscale=_heatmap_colorscale(metric, zmax=zmax),
+            colorscale=colorscale,
             colorbar=dict(title=metric.upper(), tickfont=dict(color=COLORS["text"]), tickformat=tickformat),
             hovertemplate="<b>%{y}</b><br>Period: %{x}<br>" + f"{metric.upper()}: %{{z:{tickformat}}}<extra></extra>",
         )
@@ -159,7 +210,14 @@ def build_drift_timeline(df: pd.DataFrame, features: list[str], metric: str = "p
     )
 
 
-def build_top_drifters_bar(df: pd.DataFrame, metric: str = "psi", top_n: int = 10, title: str | None = None):
+def build_top_drifters_bar(
+    df: pd.DataFrame,
+    metric: str = "psi",
+    top_n: int = 10,
+    title: str | None = None,
+    *,
+    show_thresholds: bool = False,
+):
     if df.empty:
         fig = go.Figure()
         fig.add_annotation(text="No drift data available", showarrow=False)
@@ -172,7 +230,7 @@ def build_top_drifters_bar(df: pd.DataFrame, metric: str = "psi", top_n: int = 1
         .max()
         .nlargest(top_n, metric)
     )
-    colors = [_metric_color(value, metric) for value in latest[metric]]
+    colors = [_metric_color(value, metric) for value in latest[metric]] if show_thresholds else _ranked_bar_colors(len(latest))
     tickformat = _metric_tickformat(metric, latest[metric] if metric in latest.columns else pd.Series(dtype=float))
     fig = go.Figure(
         go.Bar(
@@ -200,12 +258,13 @@ def build_feature_distribution(
     binning_mode: str = "auto",
     n_bins: int = 40,
     custom_edges: list[float] | None = None,
-    trim_percentile: float | None = None,
+    outlier_mode: str = "off",
+    outlier_value: float | None = None,
 ):
     ref_clean = _numeric_array(reference)
     cur_clean = _numeric_array(current)
-    ref_clean = _apply_percentile_trim(ref_clean, trim_percentile)
-    cur_clean = _apply_percentile_trim(cur_clean, trim_percentile)
+    ref_clean = _apply_outlier_filter(ref_clean, outlier_mode, outlier_value)
+    cur_clean = _apply_outlier_filter(cur_clean, outlier_mode, outlier_value)
     if len(ref_clean) == 0 and len(cur_clean) == 0:
         fig = go.Figure()
         fig.add_annotation(text="No data available", showarrow=False)
@@ -295,7 +354,7 @@ def build_quality_window_timeline(history_df: pd.DataFrame):
     return _apply_layout(fig, title="Rows Per Comparison Window", xaxis_title="Window End", yaxis_title="Rows", height=300)
 
 
-def build_null_rate_chart(null_rates: dict[str, float]):
+def build_null_rate_chart(null_rates: dict[str, float], *, show_thresholds: bool = False):
     if not null_rates:
         fig = go.Figure()
         fig.add_annotation(text="No null rate data", showarrow=False)
@@ -315,7 +374,7 @@ def build_null_rate_chart(null_rates: dict[str, float]):
             hovertemplate="<b>%{y}</b><br>Null Rate: %{x:.2f}%<extra></extra>",
         )
     )
-    if rates:
+    if rates and show_thresholds:
         _, critical = get_thresholds("null_rate")
         fig.add_vline(x=critical, line_dash="dash", line_color=COLORS["high"])
     return _apply_layout(
@@ -365,7 +424,7 @@ def build_prediction_quality_timeline(history_df: pd.DataFrame):
     if history_df.empty:
         fig = go.Figure()
         fig.add_annotation(text="No prediction-history data available", showarrow=False)
-        return _apply_layout(fig, title="Prediction Mean Over Time")
+        return _apply_layout(fig, title="Prediction Average Over Time")
 
     frame = history_df.sort_values("period").copy()
     frame["prediction_mean"] = pd.to_numeric(frame["prediction_mean"], errors="coerce")
@@ -404,7 +463,7 @@ def build_prediction_quality_timeline(history_df: pd.DataFrame):
             mode="markers" if len(frame) < 2 else "lines+markers",
             line=dict(color=COLORS["accent"], width=3),
             marker=dict(size=10 if len(frame) < 2 else 7),
-            name="prediction mean",
+            name="prediction average",
         )
     )
     if len(frame) < 2:
@@ -418,7 +477,7 @@ def build_prediction_quality_timeline(history_df: pd.DataFrame):
             showarrow=False,
             font=dict(size=12, color=COLORS["muted"]),
         )
-    return _apply_layout(fig, title="Prediction Mean Over Time", xaxis_title="Window End", yaxis_title="Prediction Mean", height=320)
+    return _apply_layout(fig, title="Prediction Average Over Time", xaxis_title="Window End", yaxis_title="Prediction Average", height=320)
 
 
 def build_multi_model_summary(model_drift_data: list[dict], metric: str = "psi"):
@@ -659,19 +718,38 @@ def build_bin_detail(bin_df: pd.DataFrame, feature_name: str, metric_name: str =
         legend=dict(bgcolor="rgba(0,0,0,0.5)"),
         height=400,
     )
-def build_class_mix_chart(class_mix: dict[str, int]):
-    if not class_mix:
+def build_latest_window_metric_snapshot(snapshot: dict[str, object] | None):
+    payload = snapshot or {}
+    metrics = payload.get("metrics") or {}
+    title = "Latest Window Performance Snapshot"
+    if not payload.get("supported", True):
         fig = go.Figure()
-        fig.add_annotation(text="No class mix is available yet", showarrow=False)
-        return _apply_layout(fig, title="Latest Window Class Mix", height=300)
-    frame = pd.DataFrame(
-        [{"label": label, "count": int(count)} for label, count in class_mix.items()]
-    )
+        fig.add_annotation(
+            text=str(payload.get("message") or "This monitor does not support latest-window performance metrics."),
+            showarrow=False,
+        )
+        return _apply_layout(fig, title=title, height=300)
+    if not metrics:
+        fig = go.Figure()
+        fig.add_annotation(
+            text=str(payload.get("message") or "Latest-window performance metrics are unavailable until labeled daily facts exist."),
+            showarrow=False,
+        )
+        return _apply_layout(fig, title=title, height=300)
+    labels = ["Precision", "Recall", "F1", "Accuracy"]
+    values = [metrics.get(label.lower()) for label in labels]
+    bar_values = [float(value) if value is not None else 0.0 for value in values]
+    colors = [COLORS["accent"] if value is not None else COLORS["muted"] for value in values]
+    text = [f"{float(value):.4f}" if value is not None else "N/A" for value in values]
     fig = go.Figure(
         go.Bar(
-            x=frame["label"],
-            y=frame["count"],
-            marker_color=[COLORS["blue"], COLORS["accent"], COLORS["highlight"], COLORS["cyan"]][: len(frame)],
+            x=labels,
+            y=bar_values,
+            marker_color=colors,
+            text=text,
+            textposition="outside",
+            hovertemplate="<b>%{x}</b><br>Value: %{text}<extra></extra>",
         )
     )
-    return _apply_layout(fig, title="Latest Window Class Mix", xaxis_title="", yaxis_title="Rows", height=300)
+    fig.update_yaxes(range=[0, 1.05], tickformat=".0%")
+    return _apply_layout(fig, title=title, xaxis_title="", yaxis_title="Metric Value", height=300)

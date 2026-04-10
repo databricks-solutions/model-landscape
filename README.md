@@ -15,15 +15,15 @@ It is built for teams that want an in-house alternative to external observabilit
 - let operators archive a monitor from the `Monitor Settings` page without losing history, restore an archived monitor later, or permanently delete the monitor and its stored history when cleanup is required
 - show recent incident lifecycle events in `Monitor Settings` so operators can inspect openings, escalations, and recoveries without leaving the current monitor context
 - show an `Incidents` page with cross-monitor open incidents and recent lifecycle history, so operators can answer “what is broken right now?” without filtering one monitor at a time
-- show `Refresh Diagnostics` in `Monitor Settings`, translating recent `refresh_runs` stage telemetry into bottleneck labels, trend hints, and sizing guidance during scale validation
+- show `Refresh Diagnostics` in `Monitor Settings`, translating recent `refresh_runs` stage telemetry into bottleneck labels, trend hints, compute-footprint advisory labels, and sizing guidance during scale validation
 - keep `Monitor Settings` aligned with the sidebar-selected monitor by default, clear old action banners when the selected monitor/page changes, and show only the lifecycle actions that apply to the current monitor state
 - organize `Monitor Settings` into `Contract`, `Settings`, and `Admin` tabs so read-only contract details, editable cadence/metric settings, and lifecycle/runtime actions are easier to navigate during demos and operator reviews
 - backfill drift, quality, and performance window history on the first refresh so timelines are populated immediately
 - support inclusive date-range filters on Drift and Data Quality, plus `actual` / `predicted` positive/negative filters for binary classification monitors after the next refresh populates class-aware daily facts
-- rank Drift heatmaps, timelines, and top-feature charts from the same historical-max feature subset and automatically switch to scientific notation for very small drift values
-- drive the Performance timeline from raw persisted daily label metrics so undefined daily precision/recall/F1 render as gaps instead of looking like smoothed window aggregates
-- give Feature Deep Dive explicit binning controls (`Auto`, fixed bin count, or custom edges) plus optional percentile clipping, while refusing to fall back to an unbounded raw-table read when exact samples are unavailable
-- replace the old prediction-distribution tile on Data Quality with a latest-window class-mix chart for binary classification monitors
+- rank Drift heatmaps, timelines, and top-feature charts from the same historical-max feature subset, hide threshold guides by default, and automatically switch to scientific notation for very small drift values
+- drive the Performance timeline from raw persisted daily label metrics so undefined daily precision/recall/F1 render as gaps instead of looking like smoothed window aggregates, and show an explicit unavailable state instead of falling back to weighted bin history
+- give Feature Deep Dive explicit binning controls (`Auto`, fixed bin count, or custom edges) plus optional percentile clipping or IQR fences, while refusing to fall back to an unbounded raw-table read when exact samples are unavailable
+- replace the old prediction-distribution tile on Data Quality with a latest-window performance snapshot (`Precision`, `Recall`, `F1`, `Accuracy`) for binary classification monitors
 - keep giant inference tables off the app memory hot path by using Spark-backed exact source reads for refresh computation and only bounded pandas reads for small UI drilldowns
 - read Overview in bulk for large tenants by querying historical max drift summaries plus the latest quality snapshot across all active monitors instead of replaying full per-monitor history queries on page load
 - keep monitors with no persisted drift history in an explicit `Computing/Pending` state on Overview instead of showing them as healthy-zero rows
@@ -295,8 +295,8 @@ databricks workspace delete /Workspace/Users/<your-email>/.bundle/model-lens --r
 
 If you already have a Databricks App and want to keep its existing app compute and app service principal, use the dedicated manual walkthrough:
 
-- [Manual Setup With An Existing Databricks App](/Users/volo.vragov/Desktop/work/model-lens/docs/MANUAL_EXISTING_APP_SETUP.md)
-- [Constrained Workspace Runbook](/Users/volo.vragov/Desktop/work/model-lens/docs/CONSTRAINED_WORKSPACE_RUNBOOK.md)
+- [Manual Setup With An Existing Databricks App](docs/MANUAL_EXISTING_APP_SETUP.md)
+- [Constrained Workspace Runbook](docs/CONSTRAINED_WORKSPACE_RUNBOOK.md)
 
 Important:
 
@@ -316,10 +316,10 @@ If you override `app_name`, replace the app name in every `databricks apps ...` 
 Keep the checked-in `app.yaml` template environment-neutral. Set `REFRESH_JOB_ID` in the deployed app source for each workspace, but do not commit a real workspace job ID back into the repo template.
 For Git-based app deployments, also replace the blank `SQL_WAREHOUSE_ID`, `CONTROL_PLANE_CATALOG`, and `CONTROL_PLANE_SCHEMA` values in the deployed `app.yaml` with the same literal workspace values you pass to the bundle or manual job creation path. Git deploys do not get the bundle-managed `sql_warehouse` binding automatically, and the shared refresh job reads its namespace from bundle variables, not from the app UI session.
 
-If you are reusing an existing Databricks App instead of letting the bundle create one, stop here and use [Manual Setup With An Existing Databricks App](/Users/volo.vragov/Desktop/work/model-lens/docs/MANUAL_EXISTING_APP_SETUP.md). That guide now covers both:
+If you are reusing an existing Databricks App instead of letting the bundle create one, stop here and use [Manual Setup With An Existing Databricks App](docs/MANUAL_EXISTING_APP_SETUP.md). That guide now covers both:
 
 - the bind-first bundle path when the operator can manage app resources
-- the no-app-resource path that uses [prepare_existing_app_source.py](/Users/volo.vragov/Desktop/work/model-lens/scripts/prepare_existing_app_source.py) to generate a deployable source tree with a literal `SQL_WAREHOUSE_ID`
+- the no-app-resource path that uses [prepare_existing_app_source.py](scripts/prepare_existing_app_source.py) to generate a deployable source tree with a literal `SQL_WAREHOUSE_ID`
 - a detailed refresh-job creation sequence, including `jobs create`, `jobs reset`, `jobs run-now`, and how to switch the app from name-based lookup to `REFRESH_JOB_ID`
 - the constrained-workspace runbook for the common "existing app + existing warehouse + existing shared refresh job" customer setup
 
@@ -328,7 +328,7 @@ The quick deploy below is for bundle-managed app creation only.
 Warehouse-only:
 
 ```bash
-cd /Users/volo.vragov/Desktop/work/model-lens
+cd <repo-root>
 python3 -m pytest
 python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
 
@@ -456,11 +456,12 @@ After deploy:
 
 ## Full Docs
 
-- [Deployment Guide](/Users/volo.vragov/Desktop/work/model-lens/docs/DEPLOY_TO_WORKSPACE.md)
-- [Architecture](/Users/volo.vragov/Desktop/work/model-lens/docs/ARCHITECTURE.md)
-- [Historical Backfill Plan](/Users/volo.vragov/Desktop/work/model-lens/docs/HISTORICAL_BACKFILL_PLAN.md)
-- [Workspace Smoke Test](/Users/volo.vragov/Desktop/work/model-lens/docs/WORKSPACE_SMOKE_TEST.md)
-- [Scratch Dataset](/Users/volo.vragov/Desktop/work/model-lens/examples/scratch_dataset.sql)
+- [Deployment Guide](docs/DEPLOY_TO_WORKSPACE.md)
+- [Customer Manual Redeploy Guide](docs/CUSTOMER_MANUAL_REDEPLOY.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Historical Backfill Plan](docs/HISTORICAL_BACKFILL_PLAN.md)
+- [Workspace Smoke Test](docs/WORKSPACE_SMOKE_TEST.md)
+- [Scratch Dataset](examples/scratch_dataset.sql)
 
 ## Local Commands
 

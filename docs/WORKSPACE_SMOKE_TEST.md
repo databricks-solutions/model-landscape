@@ -87,7 +87,7 @@ If you override `app_name`, replace the app name in every `databricks apps ...` 
 Run this from the repo root:
 
 ```bash
-cd /Users/volo.vragov/Desktop/work/model-lens
+cd <repo-root>
 python3 -m pytest
 python3 scripts/model_lens_setup.py --help
 python3 scripts/model_lens_refresh.py --help
@@ -119,7 +119,7 @@ For large-tenant rollout, treat those local skipped tests as insufficient proof 
 
 ## Step 2: Create Scratch Data
 
-Open a Databricks SQL editor and run [`examples/scratch_dataset.sql`](/Users/volo.vragov/Desktop/work/model-lens/examples/scratch_dataset.sql).
+Open a Databricks SQL editor and run [`examples/scratch_dataset.sql`](../examples/scratch_dataset.sql).
 
 Before running it:
 
@@ -183,8 +183,8 @@ Expected result:
 - the app service principal shown in `databricks apps get model-lens -o json` still has `CAN_USE` on the SQL warehouse
 - the same app identity has `CAN MANAGE RUN` on the refresh workflow
 
-If you are reusing an existing app and cannot manage its SQL warehouse app resource, do not use this smoke-test deploy path. Use the generated manual existing-app path in [Manual Setup With An Existing Databricks App](/Users/volo.vragov/Desktop/work/model-lens/docs/MANUAL_EXISTING_APP_SETUP.md) instead.
-If the customer workspace must also reuse an existing shared refresh job and an existing approved SQL warehouse, use [Constrained Workspace Runbook](/Users/volo.vragov/Desktop/work/model-lens/docs/CONSTRAINED_WORKSPACE_RUNBOOK.md) as the primary test path instead of this bundle-created-app path.
+If you are reusing an existing app and cannot manage its SQL warehouse app resource, do not use this smoke-test deploy path. Use the generated manual existing-app path in [Manual Setup With An Existing Databricks App](./MANUAL_EXISTING_APP_SETUP.md) instead.
+If the customer workspace must also reuse an existing shared refresh job and an existing approved SQL warehouse, use [Constrained Workspace Runbook](./CONSTRAINED_WORKSPACE_RUNBOOK.md) as the primary test path instead of this bundle-created-app path.
 
 ## Step 4: Open The App
 
@@ -367,10 +367,10 @@ Expected result:
 - Drift should expose `Start Date`, `End Date`, `Class Basis`, and `Class Value` controls; for binary classification monitors, selecting a class filter after at least one new refresh should change the heatmap/top-feature set without rescanning the raw source table
 - Data Quality should expose the same date-range and binary-class controls; after at least one new refresh, class-filtered quality history should render instead of silently falling back to the unfiltered monitor-wide history
 - if you apply a class filter before the workspace has run a refresh on the new build, the page should explain that filtered history is unavailable until the next refresh populates the class-aware daily facts
-- Drift chart titles should include the active granularity and any active filters, and very small drift values should switch to scientific notation instead of collapsing into unreadable `0.0000` labels
+- Drift chart titles should include the active granularity and any active filters, threshold guides should stay hidden until you enable `Show Threshold Guides`, and very small drift values should switch to scientific notation instead of collapsing into unreadable `0.0000` labels
 - Performance should now plot raw daily metrics from persisted `daily_label_metrics`; if a day has undefined `precision`, `recall`, or `f1`, the timeline should show a gap rather than a forced zero
-- Feature Deep Dive should now show `Binning Mode`, optional custom edges, and percentile clipping controls; when custom edges or clipping require exact samples, the page should either use a bounded raw-window read or explain that exact-sample detail is unavailable
-- Data Quality's lower-right chart should now be `Latest Window Class Mix` for binary classification monitors instead of the old prediction-distribution chart
+- Feature Deep Dive should now show `Binning Mode`, optional custom edges, and both `Percentile Clip` / `IQR Fence` outlier controls; when those exact-sample modes require raw values, the page should either use a bounded raw-window read or explain that exact-sample detail is unavailable
+- Data Quality's lower-right chart should now be `Latest Window Performance Snapshot` for binary classification monitors instead of the old prediction-distribution chart
 - with the scratch dataset and `Baseline Days = 7`, you should have 8 daily comparison windows immediately
 - for very large real-world tables, the first run should use one exact bounded Spark source-range load per monitor scope, persist daily facts and affected derived windows through Spark/Delta writes, and reserve the configured sampling caps for UI/detail fallbacks rather than core refresh correctness
 - for multi-monitor tenants, the shared job should still avoid two scopes for the same model in one scheduler pass; the Spark refresh repository now defaults to serial monitor execution inside the driver unless you deliberately override the worker cap for that workspace
@@ -379,7 +379,7 @@ Expected result:
 - `performance_bin_specs` should be created for numeric performance features so later repair runs reuse the same bucket edges
 - if labels come from the inference table itself, performance repair should track an opaque label-freshness signature instead of only the max event timestamp
 - if the repository falls back to an unbounded raw current-window load, rows later in the `window_end` day should still appear in prediction and dimension detail views
-- the remaining historical hardening work is tracked in [Historical Backfill Plan](/Users/volo.vragov/Desktop/work/model-lens/docs/HISTORICAL_BACKFILL_PLAN.md)
+- the remaining historical hardening work is tracked in [Historical Backfill Plan](./HISTORICAL_BACKFILL_PLAN.md)
 
 ## Step 7: Verify Persisted State In SQL
 
@@ -596,7 +596,7 @@ Back in the app, verify:
 
 - the overview page shows a `Fraud Model Demo` card
 - the selected monitor can be opened on the drift, quality, and performance pages
-- the quality page shows `Rows Per Comparison Window`, `Null Rate Trends`, and `Prediction Mean Over Time`
+- the quality page shows `Rows Per Comparison Window`, `Null Rate Trends`, and `Prediction Average Over Time`
 - the performance page still shows KPI cards, feature options, and charts even when recent performance deltas are near zero; in that case the page should show an informational stability message instead of appearing blank
 - open incidents still show on the overview/current inbox surfaces, while deeper incident lifecycle history is now persisted in the warehouse
 - `total_rows`, `latest_data_date`, and `last_refresh_at` are populated in app readback

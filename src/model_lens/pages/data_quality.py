@@ -57,6 +57,21 @@ def layout():
                         ],
                         md=3,
                     ),
+                    dbc.Col(
+                        [
+                            dbc.Label("Threshold Guides", className="text-muted"),
+                            dbc.Switch(
+                                id="quality-threshold-toggle",
+                                value=False,
+                                label="Show Threshold Guides",
+                            ),
+                            html.Small(
+                                "Guide visibility is optional here, but thresholds still drive status and incident semantics.",
+                                className="text-muted d-block mt-1",
+                            ),
+                        ],
+                        md=2,
+                    ),
                 ],
                 className="mb-4",
             ),

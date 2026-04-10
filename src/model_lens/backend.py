@@ -118,6 +118,33 @@ def _safe_series_min(series: pd.Series) -> float:
     return float(numeric.min())
 
 
+def _aggregated_classification_metrics(frame: pd.DataFrame) -> dict[str, float | None]:
+    if frame is None or frame.empty:
+        return {
+            "precision": None,
+            "recall": None,
+            "f1": None,
+            "accuracy": None,
+        }
+    tp = int(pd.to_numeric(frame.get("tp", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
+    fp = int(pd.to_numeric(frame.get("fp", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
+    fn = int(pd.to_numeric(frame.get("fn", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
+    tn = int(pd.to_numeric(frame.get("tn", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
+    precision = (tp / (tp + fp)) if (tp + fp) > 0 else None
+    recall = (tp / (tp + fn)) if (tp + fn) > 0 else None
+    f1 = None
+    if precision is not None and recall is not None and (precision + recall) > 0:
+        f1 = (2.0 * precision * recall) / (precision + recall)
+    accuracy_denominator = tp + fp + fn + tn
+    accuracy = ((tp + tn) / accuracy_denominator) if accuracy_denominator > 0 else None
+    return {
+        "precision": round(float(precision), 4) if precision is not None else None,
+        "recall": round(float(recall), 4) if recall is not None else None,
+        "f1": round(float(f1), 4) if f1 is not None else None,
+        "accuracy": round(float(accuracy), 4) if accuracy is not None else None,
+    }
+
+
 def _null_rate_dict(value: object) -> dict[str, float]:
     parsed = _safe_json_dict(value)
     rates: dict[str, float] = {}
@@ -1144,20 +1171,41 @@ class DashboardBackend:
                 frame[column] = pd.to_numeric(frame[column], errors="coerce")
         return frame.sort_values("profile_date_ts").reset_index(drop=True)
 
-    def get_latest_class_mix(self, model_id: str) -> dict[str, int]:
+    def get_latest_window_metrics(self, model_id: str) -> dict[str, object]:
+        config = self.get_monitor_config(model_id, status=None)
+        if not supports_binary_class_filters(config):
+            return {
+                "supported": False,
+                "metrics": {},
+                "message": "Latest-window performance snapshot is available only for binary classification monitors with labels.",
+            }
         bounds = self._latest_window_bounds(model_id)
+        if not bounds or not bounds.get("window_start") or not bounds.get("window_end"):
+            return {
+                "supported": True,
+                "metrics": {},
+                "message": "No comparison window is available yet for a latest-window performance snapshot.",
+                "window_start": (bounds or {}).get("window_start") or "",
+                "window_end": (bounds or {}).get("window_end") or "",
+            }
         frame = self.get_daily_label_metrics(
             model_id,
-            start_date=(bounds or {}).get("window_start") or None,
-            end_date=(bounds or {}).get("window_end") or None,
+            start_date=bounds.get("window_start") or None,
+            end_date=bounds.get("window_end") or None,
         )
         if frame.empty:
-            return {}
+            return {
+                "supported": True,
+                "metrics": {},
+                "message": "Latest-window performance metrics are unavailable until labeled daily facts are populated.",
+                "window_start": bounds.get("window_start") or "",
+                "window_end": bounds.get("window_end") or "",
+            }
         return {
-            "Actual Positive": int(frame.get("actual_positive_count", pd.Series(dtype=float)).fillna(0).sum()),
-            "Actual Negative": int(frame.get("actual_negative_count", pd.Series(dtype=float)).fillna(0).sum()),
-            "Predicted Positive": int(frame.get("predicted_positive_count", pd.Series(dtype=float)).fillna(0).sum()),
-            "Predicted Negative": int(frame.get("predicted_negative_count", pd.Series(dtype=float)).fillna(0).sum()),
+            "supported": True,
+            "metrics": _aggregated_classification_metrics(frame),
+            "window_start": bounds.get("window_start") or "",
+            "window_end": bounds.get("window_end") or "",
         }
 
     def get_performance_rows(self, model_id: str, metric_name: str = "f1") -> pd.DataFrame:
@@ -1193,12 +1241,20 @@ class DashboardBackend:
                 "latest_bins": pd.DataFrame(),
                 "all_bins": pd.DataFrame(),
                 "has_significant_degradation": False,
+                "timeline_unavailable_reason": "",
             }
+        config = self.get_monitor_config(model_id, status=None)
+        classification_metric_names = {"precision", "recall", "f1", "accuracy"}
+        uses_daily_classification_timeline = bool(
+            supports_binary_class_filters(config)
+            and str(metric_name or "").strip().lower() in classification_metric_names
+        )
         frame = frame.copy()
         frame["window_end"] = pd.to_datetime(frame["window_end"], errors="coerce")
         dated = frame[frame["window_end"].notna()].copy()
         label_metrics = self.get_daily_label_metrics(model_id)
-        if not label_metrics.empty and metric_name in label_metrics.columns:
+        timeline_unavailable_reason = ""
+        if uses_daily_classification_timeline and not label_metrics.empty and metric_name in label_metrics.columns:
             timeline = [
                 {
                     "period": str(row["profile_date_ts"].date()),
@@ -1207,6 +1263,11 @@ class DashboardBackend:
                 for _, row in label_metrics.iterrows()
                 if pd.notna(row.get("profile_date_ts"))
             ]
+        elif uses_daily_classification_timeline:
+            timeline = []
+            timeline_unavailable_reason = (
+                f"{metric_name.upper()} over time is unavailable until daily labeled facts are populated for this monitor."
+            )
         else:
             timeline = (
                 [
@@ -1243,6 +1304,7 @@ class DashboardBackend:
             "worst_weighted_delta": _safe_series_min(
                 contributors["weighted_delta"] if "weighted_delta" in contributors.columns else pd.Series(dtype=float)
             ),
+            "timeline_unavailable_reason": timeline_unavailable_reason,
         }
 
     def get_reference_data(self, model_id: str) -> dict:

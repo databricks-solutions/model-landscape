@@ -65,9 +65,10 @@ Responsibilities:
 - let operators restore archived monitors from `Monitor Settings` without going back to manual SQL
 - show recent incident lifecycle rows in `Monitor Settings` from persisted `incident_history`, so warehouse history is visible in-app even without a dedicated incident-timeline page
 - show a dedicated `Incidents` page that reads cross-monitor open incidents from `incidents` and recent lifecycle rows from `incident_history`
-- show `Refresh Diagnostics` in `Monitor Settings`, interpreting recent `refresh_runs` telemetry into bottleneck categories and trend guidance
+- show `Refresh Diagnostics` in `Monitor Settings`, interpreting recent `refresh_runs` telemetry into bottleneck categories, trend guidance, and an advisory compute-footprint label
 - split `Monitor Settings` into `Contract`, `Settings`, and `Admin` tabs so the contract view, editable cadence/metric controls, and lifecycle/runtime actions are separated without changing the underlying route or data model
 - rank Overview severity and Drift top-feature callouts from historical max drift across persisted comparison windows instead of only the latest window
+- keep Drift threshold guides optional in the page UI while leaving the shared thresholds active for status and incident semantics
 - keep Overview cards/counts honest by treating monitors without persisted drift rows as `Computing/Pending` rather than healthy-zero snapshots
 - wrap the heavier analysis panes in loading indicators so page navigation does not look blank while warehouse queries are in flight
 - trigger the initial refresh workflow asynchronously during monitor activation
@@ -267,7 +268,7 @@ Current limitation:
 - the next scale step is reducing the remaining per-feature histogram/top-N distribution work on very wide monitors and pushing more final packaging/persistence behind DataFrame-native paths; the current shipping implementation already batches daily feature stats and uses Spark for the heavy source-range layer, but it still rebuilds that daily layer from a bounded source-range load on each affected run
 - readback still centers on the stable window/history tables; only selected paths such as feature distributions and quality-history fallback currently read the daily-profile layer directly
 - local `pytest` coverage is necessary but not sufficient for the Spark path, because the Spark-specific tests still skip automatically without a working local JVM; real Databricks execution remains the release gate for very large tenants
-- the remaining incident readback/productization work is tracked in [Historical Backfill Plan](/Users/volo.vragov/Desktop/work/model-lens/docs/HISTORICAL_BACKFILL_PLAN.md)
+- the remaining incident readback/productization work is tracked in [Historical Backfill Plan](./HISTORICAL_BACKFILL_PLAN.md)
 
 ### Readback Flow
 
@@ -330,7 +331,7 @@ The product now follows this split:
 - `last_label_watermark` is intentionally an opaque freshness signature now, not a raw timestamp contract. External labels still use the latest label-order timestamp when available; labels stored in the inference table use a `max_labeled_timestamp|label_count` signature over the repair horizon so late backfills on older rows are still detected.
 - On Databricks CLI `v0.260.0`, the app resource can bind a SQL warehouse but not an app-level `database` or `job` resource. Model Lens therefore treats Lakebase app reads as session/app-env configuration instead of Terraform-managed app resource wiring.
 - Existing-app deployments have two supported wiring modes:
-  - bundle-managed app resource mode, where [resources/app.yml](/Users/volo.vragov/Desktop/work/model-lens/resources/app.yml) still grants the app `CAN_USE` on the SQL warehouse while the deployed app source carries a literal `SQL_WAREHOUSE_ID`
-  - manual existing-app mode, where [prepare_existing_app_source.py](/Users/volo.vragov/Desktop/work/model-lens/scripts/prepare_existing_app_source.py) generates an alternate `app.yaml` with a literal `SQL_WAREHOUSE_ID` so constrained operators do not need permission to manage app resources
+  - bundle-managed app resource mode, where [resources/app.yml](../resources/app.yml) still grants the app `CAN_USE` on the SQL warehouse while the deployed app source carries a literal `SQL_WAREHOUSE_ID`
+  - manual existing-app mode, where [prepare_existing_app_source.py](../scripts/prepare_existing_app_source.py) generates an alternate `app.yaml` with a literal `SQL_WAREHOUSE_ID` so constrained operators do not need permission to manage app resources
 - `databricks bundle deploy` creates the app resource, but `databricks apps deploy ... --source-code-path ...` is still required to deploy the app source onto compute.
 - `MAX_PARALLEL_REFRESH_WORKERS` is still the global cap for monitor-level concurrency inside the shared job, but the Spark refresh repository now clamps itself to serial monitor execution by default so one Spark driver session is not shared across multiple active monitor threads unless an operator explicitly opts into that tradeoff.

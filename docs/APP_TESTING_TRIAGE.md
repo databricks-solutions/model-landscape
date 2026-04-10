@@ -15,11 +15,11 @@ This file records the implementation status of the highest-confidence items from
 ## Fixed In The Client-Feedback Follow-Up
 
 - Drift now supports inclusive date-range filters and binary-class filters backed by persisted class-aware daily facts, so filtered views do not depend on raw-table rescans.
-- Data Quality now supports the same date-range and binary-class filters, returns an explicit unavailable state before the next refresh populates those class-aware daily facts, and replaces the old prediction-distribution tile with `Latest Window Class Mix`.
-- Drift visuals now rank from one historical-max feature subset across heatmap/timeline/top-drifter views, remove misleading warning/critical guide lines, and automatically switch to scientific notation for very small values.
-- Feature Deep Dive now exposes binning controls and percentile clipping, keeps `Average` as the user-facing label, removes the old `Null %` dimension overlay, and only uses bounded exact-sample reads when the requested controls require them.
-- Performance timelines now prefer raw persisted `daily_label_metrics`, so undefined daily precision / recall / F1 render as gaps instead of looking like smoothed window aggregates.
-- Monitor Settings now explains that the shared refresh workflow checks due monitors hourly by default, while recent `refresh_runs` duration and scanned-row telemetry are the practical proxy for compute footprint.
+- Data Quality now supports the same date-range and binary-class filters, returns an explicit unavailable state before the next refresh populates those class-aware daily facts, and replaces the old prediction-distribution tile with `Latest Window Performance Snapshot`.
+- Drift visuals now rank from one historical-max feature subset across heatmap/timeline/top-drifter views, hide threshold guides by default behind an explicit toggle, and automatically switch to scientific notation for very small values.
+- Feature Deep Dive now exposes binning controls plus both percentile clipping and IQR-fence outlier modes, keeps `Average` as the user-facing label, removes the old `Null %` dimension overlay, and only uses bounded exact-sample reads when the requested controls require them.
+- Performance timelines now use raw persisted `daily_label_metrics` as the canonical source for labeled classification metrics, so undefined daily precision / recall / F1 render as gaps instead of looking like smoothed window aggregates.
+- Monitor Settings now explains that the shared refresh workflow wakes up hourly by default, while recent `refresh_runs` duration and scanned-row telemetry are the practical proxy for compute footprint.
 
 ## Already Fixed Or Stale
 

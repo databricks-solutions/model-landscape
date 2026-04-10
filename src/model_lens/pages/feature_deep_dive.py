@@ -78,12 +78,13 @@ def layout():
                     ),
                     dbc.Col(
                         [
-                            dbc.Label("Outlier Trim", className="text-muted"),
+                            dbc.Label("Outlier Mode", className="text-muted"),
                             dbc.Select(
-                                id="deepdive-trim-toggle",
+                                id="deepdive-outlier-mode-select",
                                 options=[
                                     {"label": "Off", "value": "off"},
-                                    {"label": "On", "value": "on"},
+                                    {"label": "Percentile Clip", "value": "percentile_clip"},
+                                    {"label": "IQR Fence", "value": "iqr_fence"},
                                 ],
                                 value="off",
                                 style=DROPDOWN_STYLE,
@@ -98,9 +99,13 @@ def layout():
                 [
                     dbc.Col(
                         [
-                            dbc.Label("Trim Percentile P", className="text-muted"),
-                            dbc.Input(id="deepdive-trim-percentile-input", type="number", min=0, max=49, step=0.5, value=1.0),
-                            html.Small("Applies percentile clipping at P / 100-P when trim is on.", className="text-muted"),
+                            dbc.Label("Outlier Parameter", id="deepdive-outlier-value-label", className="text-muted"),
+                            dbc.Input(id="deepdive-outlier-value-input", type="number", min=0, step=0.1, value=1.0, disabled=True),
+                            html.Small(
+                                "Percentile Clip uses P / 100-P clipping. IQR Fence uses Q1 - K*IQR to Q3 + K*IQR.",
+                                id="deepdive-outlier-value-help",
+                                className="text-muted",
+                            ),
                         ],
                         md=3,
                     ),

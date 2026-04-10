@@ -29,6 +29,13 @@ _TREND_LABELS = {
     "not_enough_history": "Not Enough History",
 }
 
+_COMPUTE_FOOTPRINT_LABELS = {
+    "no_data": "No compute footprint data yet",
+    "low": "Low",
+    "elevated": "Elevated",
+    "high": "High",
+}
+
 
 def _safe_int(value: object) -> int:
     try:
@@ -133,6 +140,18 @@ def _trend_label(successful_timed_runs: list[dict[str, Any]]) -> str:
     return "stable"
 
 
+def _compute_footprint(successful_timed_runs: list[dict[str, Any]]) -> tuple[str, str]:
+    if not successful_timed_runs:
+        return "no_data", _COMPUTE_FOOTPRINT_LABELS["no_data"]
+    median_duration_ms = int(median(int(run["total_duration_ms"]) for run in successful_timed_runs))
+    max_rows_scanned = max(_safe_int(run.get("rows_scanned")) for run in successful_timed_runs)
+    if median_duration_ms >= 1_800_000 or max_rows_scanned >= 20_000_000:
+        return "high", _COMPUTE_FOOTPRINT_LABELS["high"]
+    if median_duration_ms >= 600_000 or max_rows_scanned >= 5_000_000:
+        return "elevated", _COMPUTE_FOOTPRINT_LABELS["elevated"]
+    return "low", _COMPUTE_FOOTPRINT_LABELS["low"]
+
+
 def build_refresh_diagnostics(runs: list[dict[str, Any]] | None) -> dict[str, Any]:
     recent_runs = list(runs or [])
     if not recent_runs:
@@ -145,6 +164,8 @@ def build_refresh_diagnostics(runs: list[dict[str, Any]] | None) -> dict[str, An
                 "median_duration_ms": 0,
                 "dominant_bottleneck": _BOTTLENECK_LABELS["no_runs"],
                 "trend": _TREND_LABELS["not_enough_history"],
+                "compute_footprint": _COMPUTE_FOOTPRINT_LABELS["no_data"],
+                "compute_footprint_category": "no_data",
                 "recommendations": _recommendations_for_category("no_runs"),
             },
             "recent_runs": [],
@@ -173,6 +194,7 @@ def build_refresh_diagnostics(runs: list[dict[str, Any]] | None) -> dict[str, An
                 "daily_profiles_pct": float(stage_breakdown["daily_profiles_ms"]["share_pct"]),
                 "derivation_pct": float(stage_breakdown["derivation_ms"]["share_pct"]),
                 "persistence_pct": float(stage_breakdown["persistence_ms"]["share_pct"]),
+                "rows_scanned": _safe_int(run.get("rows_scanned")),
             }
         )
 
@@ -198,6 +220,7 @@ def build_refresh_diagnostics(runs: list[dict[str, Any]] | None) -> dict[str, An
         state = "insufficient_data"
     if not successful_timed_runs and diagnosed_runs:
         state = "failure_heavy"
+    compute_footprint_category, compute_footprint_label = _compute_footprint(successful_timed_runs)
     recommendations = list(_recommendations_for_category(dominant_category))
     if success_rate_pct < 60.0 and diagnosed_runs:
         recommendations.insert(0, "Recent failures limit timing guidance. Review recent error messages first.")
@@ -209,6 +232,8 @@ def build_refresh_diagnostics(runs: list[dict[str, Any]] | None) -> dict[str, An
         "dominant_bottleneck": _BOTTLENECK_LABELS[dominant_category],
         "dominant_bottleneck_category": dominant_category,
         "trend": _TREND_LABELS[_trend_label(successful_timed_runs)],
+        "compute_footprint": compute_footprint_label,
+        "compute_footprint_category": compute_footprint_category,
         "recommendations": recommendations,
     }
     return {
