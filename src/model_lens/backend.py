@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
 from dataclasses import dataclass
 from datetime import timezone
 
@@ -15,7 +16,15 @@ from model_lens.services.monitor_discovery import MonitorDiscoveryService
 from model_lens.services.onboarding import baseline_label
 from model_lens.services.refresh_diagnostics import build_refresh_diagnostics
 from model_lens.services.refresh_engine import derive_refresh_result_from_daily_profiles, split_baseline_current
-from model_lens.services.thresholds import get_thresholds
+from model_lens.services.refresh_jobs import resolve_shared_workflow_schedule_status
+from model_lens.services.thresholds import get_thresholds, merged_thresholds
+
+
+logger = logging.getLogger(__name__)
+
+_MAX_DASHBOARD_WINDOW_HISTORY = 400
+_MAX_DASHBOARD_PERFORMANCE_WINDOWS = 180
+_MAX_DASHBOARD_DAILY_PROFILE_DAYS = 400
 
 
 def _safe_json_dict(value: object) -> dict:
@@ -353,6 +362,12 @@ class DashboardBackend:
     def _warehouse(self):
         return self.repository._warehouse
 
+    def _published_generation_id(self, model_id: str) -> str | None:
+        getter = getattr(self.repository, "get_latest_published_generation_id", None)
+        if callable(getter):
+            return getter(model_id)
+        return None
+
     def list_models(self) -> list[dict]:
         configs = self.repository.list_monitor_configs(status="active")
         if not configs:
@@ -448,6 +463,10 @@ class DashboardBackend:
             return []
         filters = ["model_key = %s"]
         params: list[object] = [model_id]
+        generation_id = self._published_generation_id(model_id)
+        if generation_id:
+            filters.append("source_run_id = %s")
+            params.append(generation_id)
         if start_date:
             filters.append("window_end >= CAST(%s AS DATE)")
             params.append(start_date)
@@ -456,9 +475,21 @@ class DashboardBackend:
             params.append(end_date)
         frame = self._warehouse.query_params(
             f"""
+            WITH filtered_windows AS (
+                SELECT window_id, model_key, window_grain, window_start, window_end, baseline_start, baseline_end, baseline_kind
+                FROM {comparison_windows}
+                WHERE {' AND '.join(filters)}
+            ),
+            recent_window_ends AS (
+                SELECT window_end
+                FROM filtered_windows
+                GROUP BY window_end
+                ORDER BY window_end DESC
+                LIMIT {_MAX_DASHBOARD_WINDOW_HISTORY}
+            )
             SELECT window_id, model_key, window_grain, window_start, window_end, baseline_start, baseline_end, baseline_kind
-            FROM {comparison_windows}
-            WHERE {' AND '.join(filters)}
+            FROM filtered_windows
+            WHERE window_end IN (SELECT window_end FROM recent_window_ends)
             ORDER BY window_end, window_start
             """,
             tuple(params),
@@ -525,6 +556,10 @@ class DashboardBackend:
             return _drift_results_from_frame(pd.DataFrame(derived.drift_rows), granularity=granularity)
         filters = ["model_key = %s"]
         params: list[object] = [model_id]
+        generation_id = self._published_generation_id(model_id)
+        if generation_id:
+            filters.append("source_run_id = %s")
+            params.append(generation_id)
         if start_date:
             filters.append("window_end >= CAST(%s AS DATE)")
             params.append(start_date)
@@ -533,6 +568,34 @@ class DashboardBackend:
             params.append(end_date)
         frame = self._warehouse.query_params(
             f"""
+            WITH filtered_metrics AS (
+                SELECT
+                    feature_name,
+                    metric_name,
+                    metric_value,
+                    window_start,
+                    window_end,
+                    baseline_start,
+                    baseline_end,
+                    ref_mean,
+                    cur_mean,
+                    ref_std,
+                    cur_std,
+                    ref_null_pct,
+                    cur_null_pct,
+                    ref_count,
+                    cur_count,
+                    computed_at
+                FROM {self.repository.table_names.drift_metrics}
+                WHERE {' AND '.join(filters)}
+            ),
+            recent_windows AS (
+                SELECT window_end
+                FROM filtered_metrics
+                GROUP BY window_end
+                ORDER BY window_end DESC
+                LIMIT {_MAX_DASHBOARD_WINDOW_HISTORY}
+            )
             SELECT
                 feature_name,
                 metric_name,
@@ -550,8 +613,8 @@ class DashboardBackend:
                 ref_count,
                 cur_count,
                 computed_at
-            FROM {self.repository.table_names.drift_metrics}
-            WHERE {' AND '.join(filters)}
+            FROM filtered_metrics
+            WHERE window_end IN (SELECT window_end FROM recent_windows)
             ORDER BY window_end, feature_name, metric_name
             """,
             tuple(params),
@@ -618,15 +681,21 @@ class DashboardBackend:
                     class_value=class_value,
                 ),
             )
+        generation_id = self._published_generation_id(model_id)
+        filters = ["model_key = %s"]
+        params: list[object] = [model_id]
+        if generation_id:
+            filters.append("source_run_id = %s")
+            params.append(generation_id)
         frame = self._warehouse.query_params(
             f"""
             SELECT *
             FROM {self.repository.table_names.quality_metrics}
-            WHERE model_key = %s
+            WHERE {' AND '.join(filters)}
             ORDER BY computed_at DESC
             LIMIT 1
             """,
-            (model_id,),
+            tuple(params),
         )
         if frame.empty:
             return {}
@@ -664,27 +733,50 @@ class DashboardBackend:
                     )
                 )
             )
+        generation_id = self._published_generation_id(model_id)
+        filters = ["model_key = %s"]
+        params: list[object] = [model_id]
+        if generation_id:
+            filters.append("source_run_id = %s")
+            params.append(generation_id)
         frame = self._warehouse.query_params(
             f"""
+            WITH recent_history AS (
+                SELECT *
+                FROM {self.repository.table_names.quality_history}
+                WHERE {' AND '.join(filters)}
+                ORDER BY window_end DESC
+                LIMIT {_MAX_DASHBOARD_WINDOW_HISTORY}
+            )
             SELECT *
-            FROM {self.repository.table_names.quality_history}
-            WHERE model_key = %s
+            FROM recent_history
             ORDER BY window_end
             """,
-            (model_id,),
+            tuple(params),
         )
         if frame.empty:
             daily_quality_profiles = getattr(self.repository.table_names, "daily_quality_profiles", "")
             if not daily_quality_profiles:
                 return pd.DataFrame()
+            daily_filters = ["model_key = %s"]
+            daily_params: list[object] = [model_id]
+            if generation_id:
+                daily_filters.append("source_run_id = %s")
+                daily_params.append(generation_id)
             daily_frame = self._warehouse.query_params(
                 f"""
+                WITH recent_profiles AS (
+                    SELECT *
+                    FROM {daily_quality_profiles}
+                    WHERE {' AND '.join(daily_filters)}
+                    ORDER BY profile_date DESC
+                    LIMIT {_MAX_DASHBOARD_DAILY_PROFILE_DAYS}
+                )
                 SELECT *
-                FROM {daily_quality_profiles}
-                WHERE model_key = %s
+                FROM recent_profiles
                 ORDER BY profile_date
                 """,
-                (model_id,),
+                tuple(daily_params),
             )
             return _quality_history_from_daily_profiles(daily_frame)
         working = frame.copy()
@@ -746,20 +838,58 @@ class DashboardBackend:
         if not model_ids:
             return {}
         placeholders = _sql_placeholders(len(model_ids))
-        frame = self._warehouse.query_params(
-            f"""
-            SELECT model_key, total_rows, min_date, max_date, prediction_mean, prediction_std, daily_volume, null_rates, computed_at
-            FROM (
-                SELECT
-                    *,
-                    ROW_NUMBER() OVER (PARTITION BY model_key ORDER BY computed_at DESC) AS row_num
-                FROM {self.repository.table_names.quality_metrics}
-                WHERE model_key IN ({placeholders})
-            ) latest_quality
-            WHERE row_num = 1
-            """,
-            tuple(model_ids),
-        )
+        refresh_runs_table = getattr(self.repository.table_names, "refresh_runs", "")
+        if not refresh_runs_table:
+            frame = self._warehouse.query_params(
+                f"""
+                SELECT model_key, total_rows, min_date, max_date, prediction_mean, prediction_std, daily_volume, null_rates, computed_at
+                FROM (
+                    SELECT
+                        *,
+                        ROW_NUMBER() OVER (PARTITION BY model_key ORDER BY computed_at DESC) AS row_num
+                    FROM {self.repository.table_names.quality_metrics}
+                    WHERE model_key IN ({placeholders})
+                ) latest_quality
+                WHERE row_num = 1
+                """,
+                tuple(model_ids),
+            )
+        else:
+            frame = self._warehouse.query_params(
+                f"""
+                WITH latest_published AS (
+                    SELECT model_key, generation_id
+                    FROM (
+                        SELECT
+                            model_key,
+                            generation_id,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY model_key
+                                ORDER BY published_at DESC, completed_at DESC, started_at DESC
+                            ) AS row_num
+                        FROM {refresh_runs_table}
+                        WHERE generation_id IS NOT NULL
+                          AND generation_id <> ''
+                          AND published_at IS NOT NULL
+                          AND model_key IN ({placeholders})
+                    ) ranked_generations
+                    WHERE row_num = 1
+                )
+                SELECT model_key, total_rows, min_date, max_date, prediction_mean, prediction_std, daily_volume, null_rates, computed_at
+                FROM (
+                    SELECT
+                        quality.*,
+                        ROW_NUMBER() OVER (PARTITION BY model_key ORDER BY computed_at DESC) AS row_num
+                    FROM {self.repository.table_names.quality_metrics} quality
+                    LEFT JOIN latest_published published
+                        ON quality.model_key = published.model_key
+                    WHERE quality.model_key IN ({placeholders})
+                      AND (published.generation_id IS NULL OR quality.source_run_id = published.generation_id)
+                ) latest_quality
+                WHERE row_num = 1
+                """,
+                tuple(model_ids) + tuple(model_ids),
+            )
         if frame.empty:
             return {}
         quality_map: dict[str, dict[str, object]] = {}
@@ -781,32 +911,78 @@ class DashboardBackend:
             }
         return quality_map
 
-    def _historical_drift_summary_map(self, model_ids: list[str], metric: str) -> dict[str, dict[str, object]]:
+    def _historical_drift_summary_map(
+        self,
+        model_ids: list[str],
+        metric: str,
+        threshold_map: dict[str, dict[str, dict[str, float]]] | None = None,
+    ) -> dict[str, dict[str, object]]:
         if not model_ids:
             return {}
         placeholders = _sql_placeholders(len(model_ids))
-        frame = self._warehouse.query_params(
-            f"""
-            WITH feature_metric_history AS (
-                SELECT
-                    model_key,
-                    feature_name,
-                    metric_name,
-                    MAX(metric_value) AS metric_value
-                FROM {self.repository.table_names.drift_metrics}
-                WHERE model_key IN ({placeholders})
-                GROUP BY model_key, feature_name, metric_name
+        refresh_runs_table = getattr(self.repository.table_names, "refresh_runs", "")
+        if not refresh_runs_table:
+            frame = self._warehouse.query_params(
+                f"""
+                WITH feature_metric_history AS (
+                    SELECT
+                        model_key,
+                        feature_name,
+                        metric_name,
+                        MAX(metric_value) AS metric_value
+                    FROM {self.repository.table_names.drift_metrics}
+                    WHERE model_key IN ({placeholders})
+                    GROUP BY model_key, feature_name, metric_name
+                )
+                SELECT model_key, feature_name, metric_name, metric_value
+                FROM feature_metric_history
+                ORDER BY model_key, feature_name, metric_name
+                """,
+                tuple(model_ids),
             )
-            SELECT model_key, feature_name, metric_name, metric_value
-            FROM feature_metric_history
-            ORDER BY model_key, feature_name, metric_name
-            """,
-            tuple(model_ids),
-        )
+        else:
+            frame = self._warehouse.query_params(
+                f"""
+                WITH latest_published AS (
+                    SELECT model_key, generation_id
+                    FROM (
+                        SELECT
+                            model_key,
+                            generation_id,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY model_key
+                                ORDER BY published_at DESC, completed_at DESC, started_at DESC
+                            ) AS row_num
+                        FROM {refresh_runs_table}
+                        WHERE generation_id IS NOT NULL
+                          AND generation_id <> ''
+                          AND published_at IS NOT NULL
+                          AND model_key IN ({placeholders})
+                    ) ranked_generations
+                    WHERE row_num = 1
+                ),
+                feature_metric_history AS (
+                    SELECT
+                        drift.model_key,
+                        drift.feature_name,
+                        drift.metric_name,
+                        MAX(drift.metric_value) AS metric_value
+                    FROM {self.repository.table_names.drift_metrics} drift
+                    LEFT JOIN latest_published published
+                        ON drift.model_key = published.model_key
+                    WHERE drift.model_key IN ({placeholders})
+                      AND (published.generation_id IS NULL OR drift.source_run_id = published.generation_id)
+                    GROUP BY drift.model_key, drift.feature_name, drift.metric_name
+                )
+                SELECT model_key, feature_name, metric_name, metric_value
+                FROM feature_metric_history
+                ORDER BY model_key, feature_name, metric_name
+                """,
+                tuple(model_ids) + tuple(model_ids),
+            )
         if frame.empty:
             return {}
         working = frame.copy()
-        warning_threshold, _ = get_thresholds(metric)
         pivoted = (
             working.pivot_table(
                 index=["model_key", "feature_name"],
@@ -818,6 +994,10 @@ class DashboardBackend:
         )
         drift_map: dict[str, dict[str, object]] = {}
         for model_key, group in pivoted.groupby("model_key", sort=False):
+            warning_threshold, critical_threshold = get_thresholds(
+                metric,
+                (threshold_map or {}).get(str(model_key)),
+            )
             metric_series = (
                 pd.to_numeric(group[metric], errors="coerce").fillna(0.0)
                 if metric in group.columns
@@ -839,6 +1019,8 @@ class DashboardBackend:
                 "drifting_features": int((metric_series >= warning_threshold).sum()) if not metric_series.empty else 0,
                 "total_features": int(len(group.index)),
                 "top_drifter": top_drifter,
+                "threshold_warning": float(warning_threshold),
+                "threshold_critical": float(critical_threshold),
             }
         return drift_map
 
@@ -846,7 +1028,15 @@ class DashboardBackend:
         models = self.list_models()
         model_ids = [str(model["id"]) for model in models if str(model.get("id") or "").strip()]
         quality_map = self._latest_quality_map(model_ids)
-        drift_map = self._historical_drift_summary_map(model_ids, metric)
+        active_configs = {
+            config.model_key: config
+            for config in self.repository.list_monitor_configs(status="active")
+        }
+        threshold_map = {
+            model_id: merged_thresholds(getattr(active_configs.get(model_id), "threshold_overrides", None))
+            for model_id in model_ids
+        }
+        drift_map = self._historical_drift_summary_map(model_ids, metric, threshold_map=threshold_map)
         rows: list[dict] = []
         for model in models:
             drift = drift_map.get(model["id"], {})
@@ -869,6 +1059,9 @@ class DashboardBackend:
                     "computing": computing,
                     "freshness_status": model["freshness_status"],
                     "last_run_status": model["last_run_status"],
+                    "threshold_warning": float(drift.get("threshold_warning") or get_thresholds(metric, threshold_map.get(model["id"]))[0]),
+                    "threshold_critical": float(drift.get("threshold_critical") or get_thresholds(metric, threshold_map.get(model["id"]))[1]),
+                    "thresholds": threshold_map.get(model["id"], merged_thresholds()),
                 }
             )
         return rows
@@ -955,6 +1148,11 @@ class DashboardBackend:
         def _supported(name: str) -> bool:
             return accepts_var_kwargs or name in parameter_names
 
+        # Feature Deep Dive raw fallbacks are only safe when the repository can
+        # enforce an absolute cap on returned rows for the selected window.
+        if not (_supported("start_date") and _supported("end_date") and _supported("max_total_rows")):
+            return pd.DataFrame()
+
         kwargs = {
             "start_date": start_date,
             "end_date": end_date,
@@ -969,19 +1167,41 @@ class DashboardBackend:
             return pd.DataFrame()
         return loader(config, **accepted_kwargs)
 
+    def _supports_safe_bounded_monitor_frame_load(self) -> bool:
+        loader = getattr(self.repository, "load_monitor_frame", None)
+        if loader is None:
+            return False
+        signature = inspect.signature(loader)
+        parameter_names = set(signature.parameters)
+        accepts_var_kwargs = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in signature.parameters.values()
+        )
+
+        def _supported(name: str) -> bool:
+            return accepts_var_kwargs or name in parameter_names
+
+        return _supported("start_date") and _supported("end_date") and _supported("max_total_rows")
+
     def _latest_window_bounds(self, model_id: str) -> dict[str, str] | None:
         comparison_windows = getattr(self.repository.table_names, "comparison_windows", "")
         if not comparison_windows:
             return None
+        filters = ["model_key = %s"]
+        params: list[object] = [model_id]
+        generation_id = self._published_generation_id(model_id)
+        if generation_id:
+            filters.append("source_run_id = %s")
+            params.append(generation_id)
         frame = self._warehouse.query_params(
             f"""
             SELECT baseline_start, baseline_end, window_start, window_end
             FROM {comparison_windows}
-            WHERE model_key = %s
+            WHERE {' AND '.join(filters)}
             ORDER BY window_end DESC, created_at DESC
             LIMIT 1
             """,
-            (model_id,),
+            tuple(params),
         )
         if frame.empty:
             return None
@@ -1020,16 +1240,24 @@ class DashboardBackend:
             )
             if value
         )
+        filters = [
+            "model_key = %s",
+            "feature_name = %s",
+            "profile_date BETWEEN CAST(%s AS DATE) AND CAST(%s AS DATE)",
+        ]
+        params: list[object] = [model_id, feature, min_profile_date, max_profile_date]
+        generation_id = self._published_generation_id(model_id)
+        if generation_id:
+            filters.append("source_run_id = %s")
+            params.append(generation_id)
         frame = self._warehouse.query_params(
             f"""
             SELECT profile_date, distribution_json
             FROM {daily_feature_profiles}
-            WHERE model_key = %s
-              AND feature_name = %s
-              AND profile_date BETWEEN CAST(%s AS DATE) AND CAST(%s AS DATE)
+            WHERE {' AND '.join(filters)}
             ORDER BY profile_date
             """,
-            (model_id, feature, min_profile_date, max_profile_date),
+            tuple(params),
         )
         if frame.empty:
             return pd.Series(dtype=float), pd.Series(dtype=float), False
@@ -1073,6 +1301,8 @@ class DashboardBackend:
         baseline_samples, current_samples, used_histogram_approximation = self._feature_samples_from_daily_profiles(model_id, feature)
         bounds = self._latest_window_bounds(model_id)
         window_label = "Latest comparison window unavailable."
+        config = self.get_monitor_config(model_id)
+        raw_fallback_supported = self._supports_safe_bounded_monitor_frame_load()
         if bounds:
             window_label = (
                 f"Baseline: {bounds['baseline_start'] or '—'} to {bounds['baseline_end'] or '—'} | "
@@ -1086,12 +1316,18 @@ class DashboardBackend:
                 "approximate": bool(used_histogram_approximation),
                 "window_label": window_label,
             }
-        config, baseline, current = self._load_baseline_current(model_id, feature_columns=(feature,))
+        baseline, current = pd.DataFrame(), pd.DataFrame()
+        if config:
+            config, baseline, current = self._load_baseline_current(model_id, feature_columns=(feature,))
         if not config or feature not in baseline.columns or feature not in current.columns:
             return {
                 "baseline": pd.Series(dtype=float),
                 "current": pd.Series(dtype=float),
-                "distribution_source": "unavailable_requested_raw" if require_exact_samples else "unavailable",
+                "distribution_source": (
+                    "unavailable_requested_raw"
+                    if require_exact_samples
+                    else ("unavailable_unsafe_bounded_read" if not raw_fallback_supported else "unavailable")
+                ),
                 "approximate": False,
                 "window_label": window_label,
             }
@@ -1209,14 +1445,32 @@ class DashboardBackend:
         }
 
     def get_performance_rows(self, model_id: str, metric_name: str = "f1") -> pd.DataFrame:
+        filters = ["model_key = %s", "metric_name = %s"]
+        params: list[object] = [model_id, metric_name]
+        generation_id = self._published_generation_id(model_id)
+        if generation_id:
+            filters.append("source_run_id = %s")
+            params.append(generation_id)
         frame = self._warehouse.query_params(
             f"""
+            WITH filtered_metrics AS (
+                SELECT *
+                FROM {self.repository.table_names.performance_metrics}
+                WHERE {' AND '.join(filters)}
+            ),
+            recent_windows AS (
+                SELECT window_end
+                FROM filtered_metrics
+                GROUP BY window_end
+                ORDER BY window_end DESC
+                LIMIT {_MAX_DASHBOARD_PERFORMANCE_WINDOWS}
+            )
             SELECT *
-            FROM {self.repository.table_names.performance_metrics}
-            WHERE model_key = %s AND metric_name = %s
+            FROM filtered_metrics
+            WHERE window_end IN (SELECT window_end FROM recent_windows)
             ORDER BY window_end, feature_name, bin_label
             """,
-            (model_id, metric_name),
+            tuple(params),
         )
         if frame.empty:
             return pd.DataFrame()
@@ -1317,6 +1571,45 @@ class DashboardBackend:
             if hasattr(self.repository, "get_recent_refresh_runs")
             else []
         )
+        try:
+            shared_schedule = resolve_shared_workflow_schedule_status()
+            shared_schedule_payload = {
+                "configured": shared_schedule.configured,
+                "resolved": shared_schedule.resolved,
+                "job_id": shared_schedule.job_id,
+                "job_name": shared_schedule.job_name,
+                "scheduler_mode": shared_schedule.scheduler_mode,
+                "current_expression": shared_schedule.current_expression,
+                "current_interval_hours": shared_schedule.current_interval_hours,
+                "current_label": shared_schedule.current_label,
+                "timezone_id": shared_schedule.timezone_id,
+                "paused": shared_schedule.paused,
+                "editable": shared_schedule.editable,
+                "supported": shared_schedule.supported,
+                "checked_at": shared_schedule.checked_at,
+                "management_available": shared_schedule.management_available,
+                "blocking_issues": list(shared_schedule.blocking_issues),
+                "warnings": list(shared_schedule.warnings),
+            }
+        except Exception as error:
+            shared_schedule_payload = {
+                "configured": False,
+                "resolved": False,
+                "job_id": None,
+                "job_name": "",
+                "scheduler_mode": "missing",
+                "current_expression": "",
+                "current_interval_hours": None,
+                "current_label": "Unavailable",
+                "timezone_id": "UTC",
+                "paused": False,
+                "editable": False,
+                "supported": False,
+                "checked_at": "",
+                "management_available": None,
+                "blocking_issues": [],
+                "warnings": [str(error)],
+            }
         return {
             "config": config,
             "status": config.status if config else "",
@@ -1341,6 +1634,7 @@ class DashboardBackend:
                 "use_lakebase_read_model": settings.use_lakebase_read_model,
                 "lakebase_database_name": settings.lakebase_database_name,
                 "genie_space_id": settings.genie_space_id,
+                "shared_schedule": shared_schedule_payload,
             },
         }
 

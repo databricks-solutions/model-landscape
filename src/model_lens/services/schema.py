@@ -15,6 +15,7 @@ def monitor_config_migration_columns() -> dict[str, str]:
         "drift_cadence_preset": "STRING",
         "performance_cadence_preset": "STRING",
         "schedule_enabled": "BOOLEAN",
+        "threshold_overrides": "STRING",
         "mlflow_experiment_name": "STRING",
         "mlflow_experiment_id": "STRING",
         "mlflow_run_id": "STRING",
@@ -31,6 +32,8 @@ def refresh_run_migration_columns() -> dict[str, str]:
         "range_end": "DATE",
         "rows_scanned": "BIGINT",
         "label_rows_scanned": "BIGINT",
+        "generation_id": "STRING",
+        "published_at": "TIMESTAMP",
     }
 
 
@@ -52,12 +55,44 @@ def daily_performance_profile_migration_columns() -> dict[str, str]:
 def drift_metric_migration_columns() -> dict[str, str]:
     return {
         "window_id": "STRING",
+        "source_run_id": "STRING",
     }
 
 
 def performance_metric_migration_columns() -> dict[str, str]:
     return {
         "window_id": "STRING",
+        "source_run_id": "STRING",
+    }
+
+
+def quality_metric_migration_columns() -> dict[str, str]:
+    return {
+        "source_run_id": "STRING",
+    }
+
+
+def quality_history_migration_columns() -> dict[str, str]:
+    return {
+        "source_run_id": "STRING",
+    }
+
+
+def performance_bin_spec_migration_columns() -> dict[str, str]:
+    return {
+        "source_run_id": "STRING",
+    }
+
+
+def incident_migration_columns() -> dict[str, str]:
+    return {
+        "source_run_id": "STRING",
+    }
+
+
+def incident_history_migration_columns() -> dict[str, str]:
+    return {
+        "source_run_id": "STRING",
     }
 
 
@@ -94,6 +129,7 @@ def ddl(table_names: TableNames) -> dict[str, str]:
                 drift_cadence_preset STRING,
                 performance_cadence_preset STRING,
                 schedule_enabled BOOLEAN,
+                threshold_overrides STRING,
                 mlflow_experiment_name STRING,
                 mlflow_experiment_id STRING,
                 mlflow_run_id STRING,
@@ -124,7 +160,8 @@ def ddl(table_names: TableNames) -> dict[str, str]:
                 cur_null_pct DOUBLE,
                 ref_count BIGINT,
                 cur_count BIGINT,
-                computed_at TIMESTAMP
+                computed_at TIMESTAMP,
+                source_run_id STRING
             ) USING DELTA
         """.strip(),
         "quality_metrics": f"""
@@ -137,7 +174,8 @@ def ddl(table_names: TableNames) -> dict[str, str]:
                 prediction_std DOUBLE,
                 daily_volume STRING,
                 null_rates STRING,
-                computed_at TIMESTAMP
+                computed_at TIMESTAMP,
+                source_run_id STRING
             ) USING DELTA
         """.strip(),
         "quality_history": f"""
@@ -152,7 +190,8 @@ def ddl(table_names: TableNames) -> dict[str, str]:
                 prediction_mean DOUBLE,
                 prediction_std DOUBLE,
                 null_rates STRING,
-                computed_at TIMESTAMP
+                computed_at TIMESTAMP,
+                source_run_id STRING
             ) USING DELTA
         """.strip(),
         "daily_quality_profiles": f"""
@@ -235,7 +274,8 @@ def ddl(table_names: TableNames) -> dict[str, str]:
                 metric_name STRING,
                 window_start DATE,
                 window_end DATE,
-                computed_at TIMESTAMP
+                computed_at TIMESTAMP,
+                source_run_id STRING
             ) USING DELTA
         """.strip(),
         "daily_performance_profiles": f"""
@@ -277,7 +317,8 @@ def ddl(table_names: TableNames) -> dict[str, str]:
                 model_key STRING,
                 feature_name STRING,
                 edges_json STRING,
-                computed_at TIMESTAMP
+                computed_at TIMESTAMP,
+                source_run_id STRING
             ) USING DELTA
         """.strip(),
         "incidents": f"""
@@ -289,7 +330,8 @@ def ddl(table_names: TableNames) -> dict[str, str]:
                 status STRING,
                 metric_value DOUBLE,
                 window_end DATE,
-                observed_at TIMESTAMP
+                observed_at TIMESTAMP,
+                source_run_id STRING
             ) USING DELTA
         """.strip(),
         "incident_history": f"""
@@ -306,7 +348,8 @@ def ddl(table_names: TableNames) -> dict[str, str]:
                 window_end DATE,
                 baseline_start DATE,
                 baseline_end DATE,
-                observed_at TIMESTAMP
+                observed_at TIMESTAMP,
+                source_run_id STRING
             ) USING DELTA
         """.strip(),
         "refresh_runs": f"""
@@ -331,7 +374,9 @@ def ddl(table_names: TableNames) -> dict[str, str]:
                 incident_row_count BIGINT,
                 rows_scanned BIGINT,
                 label_rows_scanned BIGINT,
-                error_message STRING
+                error_message STRING,
+                generation_id STRING,
+                published_at TIMESTAMP
             ) USING DELTA
         """.strip(),
         "comparison_windows": f"""

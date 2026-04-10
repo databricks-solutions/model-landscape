@@ -365,12 +365,18 @@ Expected result:
 - after the workflow finishes, Drift and Performance should already show historical windows rather than a single snapshot
 - after the workflow finishes, Data Quality should show window-history charts instead of only the latest summary row
 - Drift should expose `Start Date`, `End Date`, `Class Basis`, and `Class Value` controls; for binary classification monitors, selecting a class filter after at least one new refresh should change the heatmap/top-feature set without rescanning the raw source table
+- changing Drift date/class/granularity/top-N controls alone should not query immediately; the expensive Drift refresh should happen only after you click `Apply Drift Filters`
 - Data Quality should expose the same date-range and binary-class controls; after at least one new refresh, class-filtered quality history should render instead of silently falling back to the unfiltered monitor-wide history
+- changing Data Quality date/class/threshold controls alone should not query immediately; the expensive quality refresh should happen only after you click `Apply Quality Filters`
 - if you apply a class filter before the workspace has run a refresh on the new build, the page should explain that filtered history is unavailable until the next refresh populates the class-aware daily facts
 - Drift chart titles should include the active granularity and any active filters, threshold guides should stay hidden until you enable `Show Threshold Guides`, and very small drift values should switch to scientific notation instead of collapsing into unreadable `0.0000` labels
+- `Monitor Settings -> Settings` should now expose per-monitor threshold overrides for `PSI`, `Jensen-Shannon Divergence`, `KL Divergence`, and `Null Rate (%)`; saving those values should change Overview/Drift/Data Quality severity semantics for future refreshes without rewriting historical incident history
 - Performance should now plot raw daily metrics from persisted `daily_label_metrics`; if a day has undefined `precision`, `recall`, or `f1`, the timeline should show a gap rather than a forced zero
-- Feature Deep Dive should now show `Binning Mode`, optional custom edges, and both `Percentile Clip` / `IQR Fence` outlier controls; when those exact-sample modes require raw values, the page should either use a bounded raw-window read or explain that exact-sample detail is unavailable
+- Feature Deep Dive should now show `Binning Mode`, optional custom edges, both `Percentile Clip` / `IQR Fence` outlier controls, and an `Apply Distribution Controls` button; feature/dimension changes rerender immediately, but heavier distribution-control changes should only apply after clicking that button
+- when those exact-sample modes require raw values, the page should either use a bounded raw-window read or explain that exact-sample detail is unavailable
 - Data Quality's lower-right chart should now be `Latest Window Performance Snapshot` for binary classification monitors instead of the old prediction-distribution chart
+- `Monitor Settings -> Admin -> Shared Workflow Schedule` should show the detected shared-job wake interval; if the app service principal has `CAN_MANAGE` on the shared job, the interval should be editable in-app, otherwise the card should stay read-only with explicit guidance
+- `Monitor Settings -> Settings -> Compute Guidance` should now explain the current shared wake interval, per-monitor cadence, and recent compute-footprint tier (`Low`, `Elevated`, `High`, or `No compute footprint data yet`)
 - with the scratch dataset and `Baseline Days = 7`, you should have 8 daily comparison windows immediately
 - for very large real-world tables, the first run should use one exact bounded Spark source-range load per monitor scope, persist daily facts and affected derived windows through Spark/Delta writes, and reserve the configured sampling caps for UI/detail fallbacks rather than core refresh correctness
 - for multi-monitor tenants, the shared job should still avoid two scopes for the same model in one scheduler pass; the Spark refresh repository now defaults to serial monitor execution inside the driver unless you deliberately override the worker cap for that workspace
@@ -549,6 +555,7 @@ Expected:
 - `range_start` / `range_end` are populated for scheduled shared-job runs
 - `rows_scanned` reflects the SQL-side bounded refresh range, not an unbounded app-side full-frame read
 - the row exists even for early skipped or failed monitor attempts, because the workflow now creates it before source-range discovery
+- if a later bootstrap/backfill run fails before completion, the previously published monitor generation should still remain visible in the app instead of disappearing mid-run
 - the resulting `comparison_windows`, `drift_metrics`, `quality_history`, and `performance_metrics` rows were derived from the daily profile layer built for that bounded range inside the same refresh run
 - on later incremental runs, those derived rows can also reuse already-persisted daily profile facts for the affected span instead of depending only on the current run’s bounded load
 

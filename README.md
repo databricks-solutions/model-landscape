@@ -21,8 +21,9 @@ It is built for teams that want an in-house alternative to external observabilit
 - backfill drift, quality, and performance window history on the first refresh so timelines are populated immediately
 - support inclusive date-range filters on Drift and Data Quality, plus `actual` / `predicted` positive/negative filters for binary classification monitors after the next refresh populates class-aware daily facts
 - rank Drift heatmaps, timelines, and top-feature charts from the same historical-max feature subset, hide threshold guides by default, and automatically switch to scientific notation for very small drift values
+- apply Drift and Data Quality filter changes explicitly through `Apply Drift Filters` / `Apply Quality Filters`, so changing several controls does not fan out into duplicate warehouse reads before the operator is ready
 - drive the Performance timeline from raw persisted daily label metrics so undefined daily precision/recall/F1 render as gaps instead of looking like smoothed window aggregates, and show an explicit unavailable state instead of falling back to weighted bin history
-- give Feature Deep Dive explicit binning controls (`Auto`, fixed bin count, or custom edges) plus optional percentile clipping or IQR fences, while refusing to fall back to an unbounded raw-table read when exact samples are unavailable
+- give Feature Deep Dive explicit binning controls (`Auto`, fixed bin count, or custom edges) plus optional percentile clipping or IQR fences, apply those heavier distribution-control changes on demand via an `Apply Distribution Controls` button, and refuse to fall back to an unbounded raw-table read when exact samples are unavailable
 - replace the old prediction-distribution tile on Data Quality with a latest-window performance snapshot (`Precision`, `Recall`, `F1`, `Accuracy`) for binary classification monitors
 - keep giant inference tables off the app memory hot path by using Spark-backed exact source reads for refresh computation and only bounded pandas reads for small UI drilldowns
 - read Overview in bulk for large tenants by querying historical max drift summaries plus the latest quality snapshot across all active monitors instead of replaying full per-monitor history queries on page load
@@ -52,6 +53,9 @@ Model Lens has three layers:
    - Databricks App for setup, onboarding, and investigation
 - one shared Spark-capable refresh workflow for all active monitors, scheduled hourly by default
 - per-monitor cadence presets for drift and performance repair, stored in the control plane
+- per-monitor threshold overrides for drift and null-rate severity, editable from `Monitor Settings`
+- optional in-app editing of the shared refresh wake interval when the app identity has `CAN_MANAGE` on the shared refresh job
+- explicit compute guidance in `Monitor Settings` based on recent duration and scanned-row telemetry
 - monitor-level concurrency only inside the shared workflow, capped by `MAX_PARALLEL_REFRESH_WORKERS`
 - bundle-built wheel packaging for the workflow runtime
 
@@ -135,11 +139,14 @@ Current protections:
 - feature deep-dive charts no longer reread the full source table when daily feature samples are available; they read sampled values from `daily_feature_profiles` first and only fall back to a bounded raw load when needed
 - feature deep-dive distribution reads no longer fall back to an unbounded full-table source scan; if the repository cannot serve a bounded window read, the page degrades to an explicit unavailable state instead
 - if a user asks Feature Deep Dive for custom edges or percentile clipping and only approximate histogram reconstruction is available, the app now attempts a bounded exact-window read; if that path is unavailable, the page says so explicitly instead of silently ignoring the requested control
+- Feature Deep Dive now applies binning/outlier control changes only when the operator clicks `Apply Distribution Controls`, which avoids a burst of repeated heavy callback executions on initial page load
 - when a feature/detail fallback still needs raw rows, the app now loads only the latest current comparison window for prediction and dimension views instead of rereading the full baseline+current span
 - raw current-window fallbacks now treat `window_end` as inclusive through the end of that calendar day, so same-day rows are not dropped when the lightweight repository path is used
 - Feature Deep Dive now labels whether the distribution came from persisted daily-profile samples / histogram reconstruction or from a bounded source-window read, together with the active baseline/current window dates
 - non-bootstrap refreshes now merge the current run’s daily profiles with already-persisted daily facts for the affected derivation span inside the Spark repository layer, so recomputed windows no longer depend on Python-side list merges of those daily rows
 - when the Spark repository is active, the workflow also persists `comparison_windows`, `drift_metrics`, `quality_history`, `performance_metrics`, `daily_*` facts, `performance_bin_specs`, `incidents`, and `incident_history` through Spark/Delta writes instead of row-batch warehouse inserts
+- full bootstrap replacement now writes a new refresh generation first and only switches reads to it after the run is marked published, so a mid-bootstrap crash no longer blanks the monitor by deleting the previously visible metrics up front
+- incremental append refreshes stay within the active published generation and only rewrite the affected windows/dates; they reduce query fan-out and preserve the current generation pointer, but they are still scoped in-place swaps rather than full copy-on-write publishes
 - before those strict Spark/Delta writes, the repository now backfills required metadata fields like `model_key`, `window_id`, and `computed_at` so bootstrap runs do not fail on nullability-only contract gaps
 - numeric drift now keeps finite PSI / JS / KL values even when the current distribution moves completely outside the reference-derived range, and those histogram calculations now run in Spark from persisted daily numeric histogram edges/counts instead of flattened sample arrays
 - incident open/recovered/escalated lifecycle rows for the Spark workflow are now also derived inside the Spark repository layer before persistence, so the shared refresh job no longer needs the old Python incident helper on the hot path
@@ -451,8 +458,9 @@ After deploy:
 13. Continue to `Activate`, then save the monitor.
 14. Confirm the app acknowledges that the monitor was saved. If `CAN MANAGE RUN` is configured, it should also say the shared refresh job was triggered for bootstrap; otherwise the shared hourly job can pick it up on its next run only if that workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`.
 15. If the monitor is still `pending bootstrap`, open `Monitor Settings` and use `Run First Refresh` after fixing job wiring or permissions. That retry path triggers the shared workflow again for the selected monitor only, using bootstrap scope.
-16. Open `Monitor Settings` after a few runs and review `Refresh Diagnostics`. It now classifies recent runs as source-scan, daily-profile, derivation, persistence, or mixed bottlenecks, then suggests the next tuning step from the recorded timings.
-16. Open the overview and analysis pages after the workflow finishes to confirm the new monitor appears and the initial refresh populated historical readback immediately.
+16. Open `Monitor Settings` after a few runs and review `Refresh Diagnostics` plus `Compute Guidance`. Model Lens now shows recent bottlenecks, compute-footprint tier (`Low`, `Elevated`, `High`), and the practical effect of the current shared wake interval plus per-monitor cadence.
+17. If the app identity has `CAN_MANAGE` on the shared refresh job, use `Monitor Settings -> Admin -> Shared Workflow Schedule` to change the shared wake interval without redeploying the app. If not, the same section stays read-only and tells you to update the job externally.
+18. Open the overview and analysis pages after the workflow finishes to confirm the new monitor appears and the initial refresh populated historical readback immediately.
 
 ## Full Docs
 

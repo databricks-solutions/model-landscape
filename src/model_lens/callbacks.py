@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
 from datetime import datetime, timezone
@@ -30,13 +31,15 @@ from model_lens.services.class_filters import normalize_class_filter, supports_b
 from model_lens.services.inference_contracts import build_inference_contract
 from model_lens.services.onboarding import baseline_label, build_default_baseline, build_fixed_baseline
 from model_lens.services.refresh_jobs import (
+    SCHEDULE_INTERVAL_OPTIONS,
     is_refresh_job_configuration_error,
     run_now_permission_guidance,
     trigger_refresh_job,
+    update_shared_workflow_schedule,
     validate_workspace_readiness,
     workspace_readiness_payload,
 )
-from model_lens.services.thresholds import get_thresholds
+from model_lens.services.thresholds import THRESHOLD_METRICS, get_thresholds, merged_thresholds
 from model_lens.ui import charts
 from model_lens.ui.components import (
     make_chart_card,
@@ -48,6 +51,21 @@ from model_lens.ui.components import (
 
 
 _NUMERIC_TYPE_TOKENS = ("tinyint", "smallint", "int", "bigint", "float", "double", "decimal", "numeric", "real")
+_THRESHOLD_LABELS = {
+    "psi": "PSI",
+    "js_divergence": "Jensen-Shannon Divergence",
+    "kl_divergence": "KL Divergence",
+    "null_rate": "Null Rate (%)",
+}
+_SCHEDULE_INTERVAL_LABELS = {
+    1: "Every 1 Hour",
+    3: "Every 3 Hours",
+    6: "Every 6 Hours",
+    12: "Every 12 Hours",
+    24: "Every 24 Hours",
+}
+
+logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
@@ -71,6 +89,25 @@ def _workspace_lakebase_instances() -> tuple[str, ...]:
 
 def _status_alert(message: str, color: str = "info") -> dbc.Alert:
     return dbc.Alert(message, color=color, className="py-2 mb-3")
+
+
+def _callback_error_message(context: str, error: Exception) -> str:
+    return f"Could not load {context}: {error}"
+
+
+def _callback_error_panel(
+    context: str,
+    error: Exception,
+    *,
+    icon: str = "fas fa-triangle-exclamation",
+) -> html.Div:
+    logger.exception("Dashboard callback failed for %s", context, exc_info=error)
+    return html.Div(
+        [
+            _status_alert(_callback_error_message(context, error), "danger"),
+            make_empty_state(f"{context.capitalize()} is unavailable right now.", icon=icon),
+        ]
+    )
 
 
 def _normalize_top_n(value: object, *, default: int = 10, minimum: int = 1, maximum: int = 50) -> int:
@@ -103,6 +140,118 @@ def _format_metric_value(value: float | None, *, decimals: int = 4) -> str:
     if value is None or pd.isna(value):
         return "N/A"
     return f"{float(value):.{decimals}f}"
+
+
+def _resolved_monitor_thresholds(config: MonitorConfig | None) -> dict[str, dict[str, float]]:
+    return merged_thresholds(getattr(config, "threshold_overrides", None))
+
+
+def _threshold_input_id(metric: str, level: str) -> str:
+    return f"reference-threshold-{metric}-{level}-input"
+
+
+def _coerce_threshold_input(metric: str, level: str, value: object) -> float:
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        raise ValueError(f"{_THRESHOLD_LABELS.get(metric, metric)} {level.title()} is required.")
+    numeric_value = float(numeric)
+    if numeric_value < 0:
+        raise ValueError(f"{_THRESHOLD_LABELS.get(metric, metric)} {level.title()} must be non-negative.")
+    return numeric_value
+
+
+def _collect_threshold_overrides_from_inputs(values: dict[str, tuple[object, object]]) -> dict[str, dict[str, float]]:
+    overrides: dict[str, dict[str, float]] = {}
+    for metric in THRESHOLD_METRICS:
+        warning_raw, critical_raw = values[metric]
+        warning_value = _coerce_threshold_input(metric, "warning", warning_raw)
+        critical_value = _coerce_threshold_input(metric, "critical", critical_raw)
+        if critical_value <= warning_value:
+            raise ValueError(f"{_THRESHOLD_LABELS.get(metric, metric)} Critical must be greater than Warning.")
+        default_warning, default_critical = get_thresholds(metric)
+        if warning_value != default_warning or critical_value != default_critical:
+            overrides[metric] = {"warning": warning_value, "critical": critical_value}
+    return overrides
+
+
+def _schedule_interval_options() -> list[dict[str, object]]:
+    return [{"label": _SCHEDULE_INTERVAL_LABELS[value], "value": value} for value in SCHEDULE_INTERVAL_OPTIONS]
+
+
+def _compute_guidance_block(
+    *,
+    config: MonitorConfig,
+    diagnostics: dict[str, object] | None,
+    shared_schedule: dict[str, object] | None,
+) -> html.Div:
+    payload = diagnostics or {}
+    summary = payload.get("summary") or {}
+    shared = shared_schedule or {}
+    interval_hours = int(shared.get("current_interval_hours") or 1) if str(shared.get("current_interval_hours") or "").strip() else None
+    footprint = str(summary.get("compute_footprint") or "No compute footprint data yet")
+    footprint_category = str(summary.get("compute_footprint_category") or "no_data")
+    median_duration = _format_duration_ms(summary.get("median_duration_ms"))
+    recent_runs = int(summary.get("recent_run_count") or 0)
+    alerts: list[object] = [
+        dbc.Alert(
+            (
+                f"Shared workflow wake interval: {shared.get('current_label') or 'Unavailable'}. "
+                f"This only decides how often the scheduler checks for due monitors. "
+                f"Per-monitor cadence still decides whether {config.display_name} actually runs."
+            ),
+            color="secondary",
+            className="py-2 mb-2",
+        )
+    ]
+    if interval_hours is not None and interval_hours <= 3:
+        alerts.append(
+            dbc.Alert(
+                f"A {interval_hours}-hour shared wake interval is aggressive. Large workspaces may see more queue pressure when many monitors are due together.",
+                color="warning",
+                className="py-2 mb-2",
+            )
+        )
+    if config.drift_cadence_preset == "hourly":
+        alerts.append(
+            dbc.Alert(
+                "This monitor checks drift and quality every hour when the shared workflow wakes up. Use hourly cadence only when low-latency detection is worth the additional Spark workload.",
+                color="warning",
+                className="py-2 mb-2",
+            )
+        )
+    if config.performance_cadence_preset == "6h_3d_repair":
+        alerts.append(
+            dbc.Alert(
+                "Performance repair is set to every 6 hours with a 3-day repair horizon. That is the heaviest labeled-monitor preset in the app.",
+                color="warning",
+                className="py-2 mb-2",
+            )
+        )
+    if footprint_category in {"elevated", "high"}:
+        alerts.append(
+            dbc.Alert(
+                f"Recent runs already show {footprint} compute footprint (median duration {median_duration}). Higher cadence will increase Spark time and queue contention on the shared workflow.",
+                color="danger" if footprint_category == "high" else "warning",
+                className="py-2 mb-2",
+            )
+        )
+    elif recent_runs > 0:
+        alerts.append(
+            dbc.Alert(
+                f"Recent runs indicate {footprint} compute footprint (median duration {median_duration}). Use this telemetry as the practical workload signal instead of estimating cost from rows alone.",
+                color="info",
+                className="py-2 mb-2",
+            )
+        )
+    else:
+        alerts.append(
+            dbc.Alert(
+                "No compute footprint data yet. After a few completed refresh runs, Model Lens will show duration and scanned-row guidance here.",
+                color="secondary",
+                className="py-2 mb-2",
+            )
+        )
+    return html.Div(alerts, className="mb-3")
 
 
 def _parse_custom_edges(value: object) -> list[float] | None:
@@ -172,6 +321,8 @@ def _feature_distribution_source_message(source: str) -> str:
         return "Distribution source: bounded source-window read."
     if source == "unavailable_requested_raw":
         return "Requested exact distribution controls need a bounded source-window read, but that path is unavailable for this monitor right now."
+    if source == "unavailable_unsafe_bounded_read":
+        return "Distribution source unavailable. This repository cannot enforce a hard cap on raw source-window reads, so Model Lens skips the fallback instead of loading an unsafe volume of rows."
     return "Distribution source unavailable. Refresh more history or check bounded source-read support."
 
 
@@ -1494,16 +1645,20 @@ def register_callbacks(app) -> None:
         State("global-model-select", "value"),
     )
     def populate_model_selector(_, search, __, session_data, current_value):
-        backend = _make_backend(session_data)
-        models = backend.list_models()
-        options = [{"label": model["name"], "value": model["id"]} for model in models]
-        if not options:
+        try:
+            backend = _make_backend(session_data)
+            models = backend.list_models()
+            options = [{"label": model["name"], "value": model["id"]} for model in models]
+            if not options:
+                return [], None
+            values = {option["value"] for option in options}
+            requested = _selected_model_from_search(search)
+            if requested in values:
+                return options, requested
+            return options, current_value if current_value in values else options[0]["value"]
+        except Exception as error:
+            logger.exception("Failed to populate global model selector", exc_info=error)
             return [], None
-        values = {option["value"] for option in options}
-        requested = _selected_model_from_search(search)
-        if requested in values:
-            return options, requested
-        return options, current_value if current_value in values else options[0]["value"]
 
     @app.callback(
         Output("reference-monitor-select", "options"),
@@ -1518,23 +1673,27 @@ def register_callbacks(app) -> None:
     def populate_reference_model_selector(pathname, status_filter, global_model_id, _, session_data, current_value):
         if pathname != "/reference":
             return no_update, no_update
-        backend = _make_backend(session_data)
-        models = backend.list_reference_models(status=status_filter or "active")
-        options = [
-            {
-                "label": f"{model['name']} ({'Archived' if model['status'] == 'inactive' else 'Active'})",
-                "value": model["id"],
-            }
-            for model in models
-        ]
-        if not options:
+        try:
+            backend = _make_backend(session_data)
+            models = backend.list_reference_models(status=status_filter or "active")
+            options = [
+                {
+                    "label": f"{model['name']} ({'Archived' if model['status'] == 'inactive' else 'Active'})",
+                    "value": model["id"],
+                }
+                for model in models
+            ]
+            if not options:
+                return [], None
+            values = {option["value"] for option in options}
+            if global_model_id in values:
+                return options, global_model_id
+            if current_value in values:
+                return options, current_value
+            return options, options[0]["value"]
+        except Exception as error:
+            logger.exception("Failed to populate reference model selector", exc_info=error)
             return [], None
-        values = {option["value"] for option in options}
-        if global_model_id in values:
-            return options, global_model_id
-        if current_value in values:
-            return options, current_value
-        return options, options[0]["value"]
 
     @app.callback(
         Output("reference-page-status", "children", allow_duplicate=True),
@@ -1558,32 +1717,36 @@ def register_callbacks(app) -> None:
         Input("session-config-store", "data"),
     )
     def update_sidebar(model_id, _, session_data):
-        backend = _make_backend(session_data)
-        if not model_id:
-            return "No active monitor selected.", html.Div(), _deployment_mode_prompt(session_data)
-        model = backend.get_model_map().get(model_id)
-        if not model:
-            return "Selected monitor no longer exists.", html.Div(), _deployment_mode_prompt(session_data)
-        badge = dbc.Badge(
-            [html.I(className="fas fa-exclamation-triangle me-1"), f"{model['open_incident_count']} open incidents"],
-            color="danger" if model["open_incident_count"] else "secondary",
-            className="mb-2",
-        )
-        status = html.Div(
-            [
-                html.Small(
-                    model["description"],
-                    title=model["description"],
-                    className="text-muted d-block model-lens-sidebar-description",
-                ),
-                html.Small(
-                    f"Features: {model['feature_count']} | Baseline: {model['baseline_label']}",
-                    className="text-muted d-block",
-                ),
-                html.Small(f"Monitoring rows: {model['total_rows']}", className="text-muted d-block"),
-            ]
-        )
-        return status, badge, _deployment_mode_prompt(session_data)
+        try:
+            backend = _make_backend(session_data)
+            if not model_id:
+                return "No active monitor selected.", html.Div(), _deployment_mode_prompt(session_data)
+            model = backend.get_model_map().get(model_id)
+            if not model:
+                return "Selected monitor no longer exists.", html.Div(), _deployment_mode_prompt(session_data)
+            badge = dbc.Badge(
+                [html.I(className="fas fa-exclamation-triangle me-1"), f"{model['open_incident_count']} open incidents"],
+                color="danger" if model["open_incident_count"] else "secondary",
+                className="mb-2",
+            )
+            status = html.Div(
+                [
+                    html.Small(
+                        model["description"],
+                        title=model["description"],
+                        className="text-muted d-block model-lens-sidebar-description",
+                    ),
+                    html.Small(
+                        f"Features: {model['feature_count']} | Baseline: {model['baseline_label']}",
+                        className="text-muted d-block",
+                    ),
+                    html.Small(f"Monitoring rows: {model['total_rows']}", className="text-muted d-block"),
+                ]
+            )
+            return status, badge, _deployment_mode_prompt(session_data)
+        except Exception as error:
+            logger.exception("Failed to update sidebar", exc_info=error)
+            return html.Div([_status_alert(_callback_error_message("sidebar status", error), "danger")]), html.Div(), _deployment_mode_prompt(session_data)
 
     @app.callback(
         Output("drift-model-banner", "children"),
@@ -1594,9 +1757,14 @@ def register_callbacks(app) -> None:
         Input("session-config-store", "data"),
     )
     def update_analysis_banners(model_id, session_data):
-        backend = _make_backend(session_data)
-        banner = _model_banner(model_id, backend)
-        return banner, banner, banner, banner
+        try:
+            backend = _make_backend(session_data)
+            banner = _model_banner(model_id, backend)
+            return banner, banner, banner, banner
+        except Exception as error:
+            logger.exception("Failed to update analysis banners", exc_info=error)
+            banner = _status_alert(_callback_error_message("analysis banners", error), "danger")
+            return banner, banner, banner, banner
 
     @app.callback(
         Output("scan-data", "data"),
@@ -2256,83 +2424,114 @@ def register_callbacks(app) -> None:
     def render_overview(pathname, _, session_data):
         if pathname != "/":
             return no_update
-        backend = _make_backend(session_data)
-        overview_data = backend.get_overview_rows(metric="psi")
-        if not overview_data:
-            return make_empty_state("No monitors onboarded yet. Go to Onboarding to add your first model.", icon="fas fa-plus-circle")
+        try:
+            backend = _make_backend(session_data)
+            overview_data = backend.get_overview_rows(metric="psi")
+            if not overview_data:
+                return make_empty_state("No monitors onboarded yet. Go to Onboarding to add your first model.", icon="fas fa-plus-circle")
 
-        psi_warning, psi_critical = get_thresholds("psi")
-        computing = sum(1 for row in overview_data if row["computing"])
-        healthy = sum(1 for row in overview_data if not row["computing"] and row["max_psi"] < psi_warning)
-        warning = sum(1 for row in overview_data if not row["computing"] and psi_warning <= row["max_psi"] < psi_critical)
-        critical = sum(1 for row in overview_data if not row["computing"] and row["max_psi"] >= psi_critical)
-        summary_row = dbc.Row(
-            [
-                dbc.Col(make_metric_card("Models Monitored", str(len(overview_data)), "Active in production"), md=6, lg=4, xl=2),
-                dbc.Col(make_metric_card("Healthy", str(healthy), f"PSI < {psi_warning}", "success"), md=6, lg=4, xl=2),
-                dbc.Col(make_metric_card("Warning", str(warning), f"{psi_warning} ≤ PSI < {psi_critical}", "warning"), md=6, lg=4, xl=2),
-                dbc.Col(make_metric_card("Critical", str(critical), f"PSI ≥ {psi_critical}", "danger"), md=6, lg=4, xl=2),
-                dbc.Col(make_metric_card("Computing/Pending", str(computing), "No drift history yet", "info"), md=6, lg=4, xl=2),
-            ],
-            className="mb-4 g-3",
-        )
-        sorted_data = sorted(overview_data, key=lambda item: (not item["computing"], item["max_psi"]), reverse=True)
-        model_cards = [
-            dbc.Col(
-                dcc.Link(
-                    make_model_status_card(
-                        model_name=row["model_name"],
-                        model_id=row["model_id"],
-                        description=row["description"],
-                        max_psi=row["max_psi"],
-                        avg_psi=row["avg_psi"],
-                        drifting_count=row["drifting_features"],
-                        total_features=row["total_features"],
-                        max_null_rate=row["max_null_rate"],
-                        has_labels=row["has_labels"],
-                        computing=row["computing"],
-                        freshness_status=row["freshness_status"],
-                        last_run_status=row["last_run_status"],
-                    ),
-                    href=f"/drift?model={row['model_id']}",
-                    style={"textDecoration": "none"},
-                ),
-                md=6,
-                lg=4,
-                className="mb-3",
+            computing = sum(1 for row in overview_data if row["computing"])
+            healthy = sum(
+                1
+                for row in overview_data
+                if not row["computing"] and row["max_psi"] < float(row.get("threshold_warning") or 0.0)
             )
-            for row in sorted_data
-        ]
-        summary_chart = charts.build_multi_model_summary(
-            [
-                {
-                    "model": row["model_name"],
-                    "max_psi": row["max_psi"],
-                    "avg_psi": row["avg_psi"],
-                    "drifting_features": row["drifting_features"],
-                    "computing": row["computing"],
-                }
-                for row in sorted_data
-            ],
-            metric="psi",
-        )
-        details = pd.DataFrame(
-            [
-                {
-                    "model": row["model_name"],
-                    "versions": ", ".join(row.get("versions", [])),
-                    "status": "Computing/Pending" if row["computing"] else ("Critical" if row["max_psi"] >= psi_critical else "Warning" if row["max_psi"] >= psi_warning else "Healthy"),
-                    "max_psi": "—" if row["computing"] else round(row["max_psi"], 4),
-                    "avg_psi": "—" if row["computing"] else round(row["avg_psi"], 4),
-                    "avg_js": "—" if row["computing"] else round(row["avg_js"], 4),
-                    "drifting_features": "Computing/Pending" if row["computing"] else f"{row['drifting_features']} / {row['total_features']}",
-                    "top_drifter": row["top_drifter"],
-                    "max_null_rate": round(row["max_null_rate"], 2),
-                }
+            warning = sum(
+                1
+                for row in overview_data
+                if (
+                    not row["computing"]
+                    and float(row.get("threshold_warning") or 0.0) <= row["max_psi"] < float(row.get("threshold_critical") or 0.0)
+                )
+            )
+            critical = sum(
+                1
+                for row in overview_data
+                if not row["computing"] and row["max_psi"] >= float(row.get("threshold_critical") or 0.0)
+            )
+            summary_row = dbc.Row(
+                [
+                    dbc.Col(make_metric_card("Models Monitored", str(len(overview_data)), "Active in production"), md=6, lg=4, xl=2),
+                    dbc.Col(make_metric_card("Healthy", str(healthy), "Below each monitor's warning threshold", "success"), md=6, lg=4, xl=2),
+                    dbc.Col(make_metric_card("Warning", str(warning), "Between each monitor's warning and critical thresholds", "warning"), md=6, lg=4, xl=2),
+                    dbc.Col(make_metric_card("Critical", str(critical), "At or above each monitor's critical threshold", "danger"), md=6, lg=4, xl=2),
+                    dbc.Col(make_metric_card("Computing/Pending", str(computing), "No drift history yet", "info"), md=6, lg=4, xl=2),
+                ],
+                className="mb-4 g-3",
+            )
+            sorted_data = sorted(overview_data, key=lambda item: (not item["computing"], item["max_psi"]), reverse=True)
+            model_cards = [
+                dbc.Col(
+                    dcc.Link(
+                        make_model_status_card(
+                            model_name=row["model_name"],
+                            model_id=row["model_id"],
+                            description=row["description"],
+                            max_psi=row["max_psi"],
+                            avg_psi=row["avg_psi"],
+                            drifting_count=row["drifting_features"],
+                            total_features=row["total_features"],
+                            max_null_rate=row["max_null_rate"],
+                            has_labels=row["has_labels"],
+                            thresholds=row.get("thresholds"),
+                            computing=row["computing"],
+                            freshness_status=row["freshness_status"],
+                            last_run_status=row["last_run_status"],
+                        ),
+                        href=f"/drift?model={row['model_id']}",
+                        style={"textDecoration": "none"},
+                    ),
+                    md=6,
+                    lg=4,
+                    className="mb-3",
+                )
                 for row in sorted_data
             ]
-        )
-        return html.Div([summary_row, dbc.Row(model_cards, className="mb-4"), make_chart_card(summary_chart), _render_frame(details, "No overview detail available.")])
+            summary_chart = charts.build_multi_model_summary(
+                [
+                    {
+                        "model": row["model_name"],
+                        "max_psi": row["max_psi"],
+                        "avg_psi": row["avg_psi"],
+                        "drifting_features": row["drifting_features"],
+                        "computing": row["computing"],
+                        "thresholds": row.get("thresholds"),
+                    }
+                    for row in sorted_data
+                ],
+                metric="psi",
+            )
+            details = pd.DataFrame(
+                [
+                    {
+                        "model": row["model_name"],
+                        "versions": ", ".join(row.get("versions", [])),
+                        "status": (
+                            "Computing/Pending"
+                            if row["computing"]
+                            else (
+                                "Critical"
+                                if row["max_psi"] >= float(row.get("threshold_critical") or 0.0)
+                                else (
+                                    "Warning"
+                                    if row["max_psi"] >= float(row.get("threshold_warning") or 0.0)
+                                    else "Healthy"
+                                )
+                            )
+                        ),
+                        "max_psi": "—" if row["computing"] else round(row["max_psi"], 4),
+                        "avg_psi": "—" if row["computing"] else round(row["avg_psi"], 4),
+                        "avg_js": "—" if row["computing"] else round(row["avg_js"], 4),
+                        "drifting_features": "Computing/Pending" if row["computing"] else f"{row['drifting_features']} / {row['total_features']}",
+                        "top_drifter": row["top_drifter"],
+                        "max_null_rate": round(row["max_null_rate"], 2),
+                    }
+                    for row in sorted_data
+                ]
+            )
+            return html.Div([summary_row, dbc.Row(model_cards, className="mb-4"), make_chart_card(summary_chart), _render_frame(details, "No overview detail available.")])
+        except Exception as error:
+            return _callback_error_panel("overview", error, icon="fas fa-plus-circle")
 
     @app.callback(
         Output("incidents-monitor-filter", "options"),
@@ -2348,14 +2547,18 @@ def register_callbacks(app) -> None:
     def populate_incident_filters(pathname, _, session_data, current_model_id, current_metric_name):
         if pathname != "/incidents":
             return no_update, no_update, no_update, no_update
-        backend = _make_backend(session_data)
-        incidents_data = backend.get_incidents_data(limit_history=100)
-        model_options, metric_options = _incident_options(incidents_data)
-        model_values = {option["value"] for option in model_options}
-        metric_values = {option["value"] for option in metric_options}
-        resolved_model = current_model_id if current_model_id in model_values else None
-        resolved_metric = current_metric_name if current_metric_name in metric_values else None
-        return model_options, resolved_model, metric_options, resolved_metric
+        try:
+            backend = _make_backend(session_data)
+            incidents_data = backend.get_incidents_data(limit_history=100)
+            model_options, metric_options = _incident_options(incidents_data)
+            model_values = {option["value"] for option in model_options}
+            metric_values = {option["value"] for option in metric_options}
+            resolved_model = current_model_id if current_model_id in model_values else None
+            resolved_metric = current_metric_name if current_metric_name in metric_values else None
+            return model_options, resolved_model, metric_options, resolved_metric
+        except Exception as error:
+            logger.exception("Failed to populate incident filters", exc_info=error)
+            return [], None, [], None
 
     @app.callback(
         Output("incidents-page-body", "children"),
@@ -2370,15 +2573,18 @@ def register_callbacks(app) -> None:
     def render_incidents_page(pathname, model_id, severity, status, metric_name, _, session_data):
         if pathname != "/incidents":
             return no_update
-        backend = _make_backend(session_data)
-        incidents_data = backend.get_incidents_data(limit_history=100)
-        return _render_incidents_page(
-            incidents_data,
-            model_id=model_id,
-            severity=severity,
-            status=status,
-            metric_name=metric_name,
-        )
+        try:
+            backend = _make_backend(session_data)
+            incidents_data = backend.get_incidents_data(limit_history=100)
+            return _render_incidents_page(
+                incidents_data,
+                model_id=model_id,
+                severity=severity,
+                status=status,
+                metric_name=metric_name,
+            )
+        except Exception as error:
+            return _callback_error_panel("incident history", error)
 
     @app.callback(
         Output("drift-heatmap-container", "children"),
@@ -2387,20 +2593,24 @@ def register_callbacks(app) -> None:
         Output("drift-top-drifters-container", "children"),
         Input("url", "pathname"),
         Input("global-model-select", "value"),
-        Input("drift-metric-select", "value"),
-        Input("drift-granularity-select", "value"),
-        Input("drift-top-n", "value"),
-        Input("drift-date-range", "start_date"),
-        Input("drift-date-range", "end_date"),
-        Input("drift-class-basis-select", "value"),
-        Input("drift-class-value-select", "value"),
-        Input("drift-threshold-toggle", "value"),
         Input("reload-token", "data"),
         Input("session-config-store", "data"),
+        Input("drift-apply-filters-btn", "n_clicks"),
+        State("drift-metric-select", "value"),
+        State("drift-granularity-select", "value"),
+        State("drift-top-n", "value"),
+        State("drift-date-range", "start_date"),
+        State("drift-date-range", "end_date"),
+        State("drift-class-basis-select", "value"),
+        State("drift-class-value-select", "value"),
+        State("drift-threshold-toggle", "value"),
     )
     def render_drift(
         pathname,
         model_id,
+        _,
+        session_data,
+        _apply_clicks,
         metric,
         granularity,
         top_n,
@@ -2409,106 +2619,112 @@ def register_callbacks(app) -> None:
         class_basis,
         class_value,
         show_thresholds,
-        _,
-        session_data,
     ):
         if pathname != "/drift":
             return no_update, no_update, no_update, no_update
-        if not model_id:
-            empty = make_empty_state("Select a model to inspect drift.", icon="fas fa-wave-square")
-            return empty, html.Div(), html.Div(), html.Div()
-        backend = _make_backend(session_data)
-        config = backend.get_monitor_config(model_id)
-        _, _, class_filter_active = normalize_class_filter(class_basis, class_value)
-        notes: list[object] = []
-        if class_filter_active and not supports_binary_class_filters(config):
-            empty = make_empty_state(
-                "Class filters are available only for binary classification monitors with labels.",
-                icon="fas fa-wave-square",
-            )
-            return empty, html.Div([_status_alert("Class filters are available only for binary classification monitors with labels.", "warning")]), html.Div(), html.Div()
-        drift = backend.get_drift_results(
-            model_id,
-            granularity=granularity or "daily",
-            start_date=start_date,
-            end_date=end_date,
-            class_basis=class_basis,
-            class_value=class_value,
-        )
-        if drift.empty:
-            if class_filter_active:
+        try:
+            if not model_id:
+                empty = make_empty_state("Select a model to inspect drift.", icon="fas fa-wave-square")
+                return empty, html.Div(), html.Div(), html.Div()
+            backend = _make_backend(session_data)
+            config = backend.get_monitor_config(model_id)
+            resolved_thresholds = _resolved_monitor_thresholds(config)
+            _, _, class_filter_active = normalize_class_filter(class_basis, class_value)
+            notes: list[object] = []
+            if class_filter_active and not supports_binary_class_filters(config):
                 empty = make_empty_state(
-                    "Filtered drift history is unavailable until the next refresh populates class-aware daily facts.",
+                    "Class filters are available only for binary classification monitors with labels.",
                     icon="fas fa-wave-square",
                 )
-            else:
-                empty = make_empty_state("No drift history available yet. Run a refresh to populate this page.", icon="fas fa-wave-square")
-            return empty, html.Div(), html.Div(), html.Div()
-        normalized_top_n = _normalize_top_n(top_n, default=10, minimum=5, maximum=50)
-        ranked_features = _historical_drift_feature_ranking(
-            drift,
-            metric=metric or "psi",
-            top_n=normalized_top_n,
-        )
-        period_count = int(drift["period"].nunique()) if "period" in drift.columns else 0
-        history_message = _comparison_history_message(period_count, granularity or "daily")
-        if history_message:
-            notes.append(_status_alert(history_message, "info"))
-        filter_summary = _analysis_filter_summary(
-            start_date=start_date,
-            end_date=end_date,
-            class_basis=class_basis,
-            class_value=class_value,
-        )
-        if filter_summary:
-            notes.append(_status_alert(f"Active filters: {filter_summary}", "secondary"))
-        notes.append(
-            _status_alert(
-                f"Top features are ranked by the highest historical {(metric or 'psi').upper()} across comparison windows.",
-                "secondary",
+                return empty, html.Div([_status_alert("Class filters are available only for binary classification monitors with labels.", "warning")]), html.Div(), html.Div()
+            drift = backend.get_drift_results(
+                model_id,
+                granularity=granularity or "daily",
+                start_date=start_date,
+                end_date=end_date,
+                class_basis=class_basis,
+                class_value=class_value,
             )
-        )
-        if config and config.contract.categorical_columns:
+            if drift.empty:
+                if class_filter_active:
+                    empty = make_empty_state(
+                        "Filtered drift history is unavailable until the next refresh populates class-aware daily facts.",
+                        icon="fas fa-wave-square",
+                    )
+                else:
+                    empty = make_empty_state("No drift history available yet. Run a refresh to populate this page.", icon="fas fa-wave-square")
+                return empty, html.Div(), html.Div(), html.Div()
+            normalized_top_n = _normalize_top_n(top_n, default=10, minimum=5, maximum=50)
+            ranked_features = _historical_drift_feature_ranking(
+                drift,
+                metric=metric or "psi",
+                top_n=normalized_top_n,
+            )
+            period_count = int(drift["period"].nunique()) if "period" in drift.columns else 0
+            history_message = _comparison_history_message(period_count, granularity or "daily")
+            if history_message:
+                notes.append(_status_alert(history_message, "info"))
+            filter_summary = _analysis_filter_summary(
+                start_date=start_date,
+                end_date=end_date,
+                class_basis=class_basis,
+                class_value=class_value,
+            )
+            if filter_summary:
+                notes.append(_status_alert(f"Active filters: {filter_summary}", "secondary"))
             notes.append(
                 _status_alert(
-                    "Categorical features are stored in the monitor contract, but the current drift engine renders only numeric feature drift on this page.",
+                    f"Top features are ranked by the highest historical {(metric or 'psi').upper()} across comparison windows.",
                     "secondary",
                 )
-        )
-        timeline_features = ranked_features["feature"].tolist() if "feature" in ranked_features.columns else []
-        if not timeline_features and "feature" in drift.columns:
-            timeline_features = drift["feature"].dropna().astype(str).drop_duplicates().tolist()[:8]
-        filtered_drift = drift[drift["feature"].isin(timeline_features)].copy() if timeline_features else drift
-        title_suffix = f" ({filter_summary})" if filter_summary else ""
-        heatmap_title = f"{(granularity or 'daily').title()} Feature Drift Heatmap{title_suffix}"
-        return (
-            make_chart_card(
-                charts.build_drift_heatmap(
-                    filtered_drift,
-                    metric=metric or "psi",
-                    title=heatmap_title,
-                    show_thresholds=bool(show_thresholds),
+            )
+            if config and config.contract.categorical_columns:
+                notes.append(
+                    _status_alert(
+                        "Categorical features are stored in the monitor contract, but the current drift engine renders only numeric feature drift on this page.",
+                        "secondary",
+                    )
                 )
-            ),
-            html.Div(notes) if notes else html.Div(),
-            make_chart_card(
-                charts.build_drift_timeline(
-                    filtered_drift,
-                    timeline_features,
-                    metric=metric or "psi",
-                    title=f"{(metric or 'psi').upper()} Over Time{title_suffix}",
-                )
-            ),
-            make_chart_card(
-                charts.build_top_drifters_bar(
-                    filtered_drift,
-                    metric=metric or "psi",
-                    top_n=normalized_top_n,
-                    title=f"Top {normalized_top_n} Drifting Features (Historical Max){title_suffix}",
-                    show_thresholds=bool(show_thresholds),
-                )
-            ),
-        )
+            timeline_features = ranked_features["feature"].tolist() if "feature" in ranked_features.columns else []
+            if not timeline_features and "feature" in drift.columns:
+                timeline_features = drift["feature"].dropna().astype(str).drop_duplicates().tolist()[:8]
+            filtered_drift = drift[drift["feature"].isin(timeline_features)].copy() if timeline_features else drift
+            title_suffix = f" ({filter_summary})" if filter_summary else ""
+            heatmap_title = f"{(granularity or 'daily').title()} Feature Drift Heatmap{title_suffix}"
+            return (
+                make_chart_card(
+                    charts.build_drift_heatmap(
+                        filtered_drift,
+                        metric=metric or "psi",
+                        title=heatmap_title,
+                        show_thresholds=bool(show_thresholds),
+                        thresholds=resolved_thresholds,
+                    )
+                ),
+                html.Div(notes) if notes else html.Div(),
+                make_chart_card(
+                    charts.build_drift_timeline(
+                        filtered_drift,
+                        timeline_features,
+                        metric=metric or "psi",
+                        title=f"{(metric or 'psi').upper()} Over Time{title_suffix}",
+                    )
+                ),
+                make_chart_card(
+                    charts.build_top_drifters_bar(
+                        filtered_drift,
+                        metric=metric or "psi",
+                        top_n=normalized_top_n,
+                        title=f"Top {normalized_top_n} Drifting Features (Historical Max){title_suffix}",
+                        show_thresholds=bool(show_thresholds),
+                        thresholds=resolved_thresholds,
+                    )
+                ),
+            )
+        except Exception as error:
+            logger.exception("Failed to render drift analysis", exc_info=error)
+            empty = make_empty_state("Drift analysis is unavailable right now.", icon="fas fa-wave-square")
+            return empty, html.Div([_status_alert(_callback_error_message("drift analysis", error), "danger")]), html.Div(), html.Div()
 
     @app.callback(
         Output("deepdive-feature-select", "options"),
@@ -2596,26 +2812,29 @@ def register_callbacks(app) -> None:
         Input("global-model-select", "value"),
         Input("deepdive-feature-select", "value"),
         Input("deepdive-dimension-select", "value"),
-        Input("deepdive-binning-mode-select", "value"),
-        Input("deepdive-bin-count-input", "value"),
-        Input("deepdive-custom-edges-input", "value"),
-        Input("deepdive-outlier-mode-select", "value"),
-        Input("deepdive-outlier-value-input", "value"),
         Input("reload-token", "data"),
         Input("session-config-store", "data"),
+        Input("deepdive-apply-controls-btn", "n_clicks"),
+        State("deepdive-binning-mode-select", "value"),
+        State("deepdive-bin-count-input", "value"),
+        State("deepdive-custom-edges-input", "value"),
+        State("deepdive-outlier-mode-select", "value"),
+        State("deepdive-outlier-value-input", "value"),
+        prevent_initial_call=True,
     )
     def render_feature_deep_dive(
         pathname,
         model_id,
         feature,
         dimension,
+        _reload_token,
+        session_data,
+        _apply_clicks,
         binning_mode,
         bin_count,
         custom_edges_text,
         outlier_mode,
         outlier_value_raw,
-        _,
-        session_data,
     ):
         if pathname != "/features":
             return no_update, no_update, no_update
@@ -2635,9 +2854,10 @@ def register_callbacks(app) -> None:
             )
             baseline = details["baseline"]
             current = details["current"]
-            if str(details.get("distribution_source") or "") == "unavailable_requested_raw":
+            distribution_source = str(details.get("distribution_source") or "")
+            if distribution_source in {"unavailable_requested_raw", "unavailable_unsafe_bounded_read"}:
                 distribution = make_empty_state(
-                    "Requested exact distribution controls need a bounded source-window read, but that path is unavailable for this monitor right now.",
+                    _feature_distribution_source_message(distribution_source),
                     icon="fas fa-chart-area",
                 )
             else:
@@ -2684,6 +2904,7 @@ def register_callbacks(app) -> None:
             )
             return distribution, dimension_chart, context_children
         except Exception as error:
+            logger.exception("Failed to render feature deep dive", exc_info=error)
             return make_empty_state(f"Could not load feature detail: {error}", icon="fas fa-triangle-exclamation"), html.Div(), "Feature detail is unavailable right now."
 
     @app.callback(
@@ -2693,128 +2914,151 @@ def register_callbacks(app) -> None:
         Output("quality-prediction-container", "children"),
         Input("url", "pathname"),
         Input("global-model-select", "value"),
-        Input("quality-date-range", "start_date"),
-        Input("quality-date-range", "end_date"),
-        Input("quality-class-basis-select", "value"),
-        Input("quality-class-value-select", "value"),
-        Input("quality-threshold-toggle", "value"),
         Input("reload-token", "data"),
         Input("session-config-store", "data"),
+        Input("quality-apply-filters-btn", "n_clicks"),
+        State("quality-date-range", "start_date"),
+        State("quality-date-range", "end_date"),
+        State("quality-class-basis-select", "value"),
+        State("quality-class-value-select", "value"),
+        State("quality-threshold-toggle", "value"),
     )
-    def render_quality(pathname, model_id, start_date, end_date, class_basis, class_value, show_thresholds, _, session_data):
+    def render_quality(
+        pathname,
+        model_id,
+        _,
+        session_data,
+        _apply_clicks,
+        start_date,
+        end_date,
+        class_basis,
+        class_value,
+        show_thresholds,
+    ):
         if pathname != "/quality":
             return no_update, no_update, no_update, no_update
-        if not model_id:
-            empty = make_empty_state("Select a model to inspect quality.", icon="fas fa-database")
-            return empty, html.Div(), html.Div(), html.Div()
-        backend = _make_backend(session_data)
-        config = backend.get_monitor_config(model_id)
-        _, _, class_filter_active = normalize_class_filter(class_basis, class_value)
-        if class_filter_active and not supports_binary_class_filters(config):
-            empty = make_empty_state(
-                "Class filters are available only for binary classification monitors with labels.",
-                icon="fas fa-database",
+        try:
+            if not model_id:
+                empty = make_empty_state("Select a model to inspect quality.", icon="fas fa-database")
+                return empty, html.Div(), html.Div(), html.Div()
+            backend = _make_backend(session_data)
+            config = backend.get_monitor_config(model_id)
+            resolved_thresholds = _resolved_monitor_thresholds(config)
+            _, _, class_filter_active = normalize_class_filter(class_basis, class_value)
+            if class_filter_active and not supports_binary_class_filters(config):
+                empty = make_empty_state(
+                    "Class filters are available only for binary classification monitors with labels.",
+                    icon="fas fa-database",
+                )
+                return empty, html.Div(), html.Div(), html.Div()
+            quality = backend.get_quality_stats(
+                model_id,
+                start_date=start_date,
+                end_date=end_date,
+                class_basis=class_basis,
+                class_value=class_value,
             )
-            return empty, html.Div(), html.Div(), html.Div()
-        quality = backend.get_quality_stats(
-            model_id,
-            start_date=start_date,
-            end_date=end_date,
-            class_basis=class_basis,
-            class_value=class_value,
-        )
-        if not quality:
-            empty_message = (
-                "Filtered quality history is unavailable until the next refresh populates class-aware daily facts."
-                if class_filter_active
-                else "No quality snapshot available yet. Run a refresh first."
+            if not quality:
+                empty_message = (
+                    "Filtered quality history is unavailable until the next refresh populates class-aware daily facts."
+                    if class_filter_active
+                    else "No quality snapshot available yet. Run a refresh first."
+                )
+                empty = make_empty_state(empty_message, icon="fas fa-database")
+                return empty, html.Div(), html.Div(), html.Div()
+            quality_history = backend.get_quality_history(
+                model_id,
+                start_date=start_date,
+                end_date=end_date,
+                class_basis=class_basis,
+                class_value=class_value,
             )
-            empty = make_empty_state(empty_message, icon="fas fa-database")
-            return empty, html.Div(), html.Div(), html.Div()
-        quality_history = backend.get_quality_history(
-            model_id,
-            start_date=start_date,
-            end_date=end_date,
-            class_basis=class_basis,
-            class_value=class_value,
-        )
-        null_rate_history = backend.get_null_rate_history(
-            model_id,
-            start_date=start_date,
-            end_date=end_date,
-            class_basis=class_basis,
-            class_value=class_value,
-        )
-        history_note = _comparison_history_message(len(quality_history), "daily")
-        filter_summary = _analysis_filter_summary(
-            start_date=start_date,
-            end_date=end_date,
-            class_basis=class_basis,
-            class_value=class_value,
-        )
-        kpis = [
-            dbc.Col(
-                make_metric_card(
-                    "Monitoring Rows",
-                    f"{quality['total_rows']:,}",
-                    "Rows covered by persisted monitoring history",
+            null_rate_history = backend.get_null_rate_history(
+                model_id,
+                start_date=start_date,
+                end_date=end_date,
+                class_basis=class_basis,
+                class_value=class_value,
+            )
+            history_note = _comparison_history_message(len(quality_history), "daily")
+            filter_summary = _analysis_filter_summary(
+                start_date=start_date,
+                end_date=end_date,
+                class_basis=class_basis,
+                class_value=class_value,
+            )
+            kpis = [
+                dbc.Col(
+                    make_metric_card(
+                        "Monitoring Rows",
+                        f"{quality['total_rows']:,}",
+                        "Rows covered by persisted monitoring history",
+                    ),
+                    md=3,
                 ),
-                md=3,
-            ),
-            dbc.Col(make_metric_card("From", quality["min_date"] or "—", "Earliest data"), md=3),
-            dbc.Col(make_metric_card("To", quality["max_date"] or "—", "Latest data"), md=3),
-            dbc.Col(make_metric_card("Prediction Average", _format_metric_value(quality["prediction_mean"]), "Latest snapshot"), md=3),
-            dbc.Col(make_metric_card("Prediction Std", _format_metric_value(quality["prediction_std"]), "Latest snapshot"), md=3),
-        ]
-        volume_children_items: list[object] = []
-        if history_note:
-            volume_children_items.append(_status_alert(history_note, "info"))
-        if filter_summary:
-            volume_children_items.append(_status_alert(f"Active filters: {filter_summary}", "secondary"))
-        volume_children_items.append(
-            html.Small(
-                "Daily Monitoring Rows shows daily row volume in persisted monitoring history. Rows Per Comparison Window shows the row volume in each baseline/current comparison window.",
-                className="text-muted d-block mb-2",
+                dbc.Col(make_metric_card("From", quality["min_date"] or "—", "Earliest data"), md=3),
+                dbc.Col(make_metric_card("To", quality["max_date"] or "—", "Latest data"), md=3),
+                dbc.Col(make_metric_card("Prediction Average", _format_metric_value(quality["prediction_mean"]), "Latest snapshot"), md=3),
+                dbc.Col(make_metric_card("Prediction Std", _format_metric_value(quality["prediction_std"]), "Latest snapshot"), md=3),
+            ]
+            volume_children_items: list[object] = []
+            if history_note:
+                volume_children_items.append(_status_alert(history_note, "info"))
+            if filter_summary:
+                volume_children_items.append(_status_alert(f"Active filters: {filter_summary}", "secondary"))
+            volume_children_items.append(
+                html.Small(
+                    "Daily Monitoring Rows shows daily row volume in persisted monitoring history. Rows Per Comparison Window shows the row volume in each baseline/current comparison window.",
+                    className="text-muted d-block mb-2",
+                )
             )
-        )
-        volume_children_items.append(
-            html.Small(
-                "A comparison window is the persisted current window paired with its matching baseline window for one refresh cycle.",
-                className="text-muted d-block mb-2",
+            volume_children_items.append(
+                html.Small(
+                    "A comparison window is the persisted current window paired with its matching baseline window for one refresh cycle.",
+                    className="text-muted d-block mb-2",
+                )
             )
-        )
-        volume_children_items.append(
-            dbc.Row(
+            volume_children_items.append(
+                dbc.Row(
+                    [
+                        dbc.Col(make_chart_card(charts.build_volume_timeline(quality["daily_volume"])), md=6),
+                        dbc.Col(make_chart_card(charts.build_quality_window_timeline(quality_history)), md=6),
+                    ],
+                    className="g-3",
+                )
+            )
+            volume_children = html.Div(volume_children_items)
+            null_children = html.Div(
                 [
-                    dbc.Col(make_chart_card(charts.build_volume_timeline(quality["daily_volume"])), md=6),
-                    dbc.Col(make_chart_card(charts.build_quality_window_timeline(quality_history)), md=6),
-                ],
-                className="g-3",
+                    make_chart_card(
+                        charts.build_null_rate_chart(
+                            quality["null_rates"],
+                            show_thresholds=bool(show_thresholds),
+                            thresholds=resolved_thresholds,
+                        )
+                    ),
+                    make_chart_card(charts.build_null_rate_timeline(null_rate_history), class_name="mb-0"),
+                ]
             )
-        )
-        volume_children = html.Div(volume_children_items)
-        null_children = html.Div(
-            [
-                make_chart_card(charts.build_null_rate_chart(quality["null_rates"], show_thresholds=bool(show_thresholds))),
-                make_chart_card(charts.build_null_rate_timeline(null_rate_history), class_name="mb-0"),
-            ]
-        )
-        latest_window_metrics = backend.get_latest_window_metrics(model_id)
-        prediction_children = html.Div(
-            [
-                make_chart_card(charts.build_prediction_quality_timeline(quality_history)),
-                make_chart_card(
-                    charts.build_latest_window_metric_snapshot(latest_window_metrics),
-                    class_name="mb-0",
-                ),
-            ]
-        )
-        return (
-            kpis,
-            volume_children,
-            null_children,
-            prediction_children,
-        )
+            latest_window_metrics = backend.get_latest_window_metrics(model_id)
+            prediction_children = html.Div(
+                [
+                    make_chart_card(charts.build_prediction_quality_timeline(quality_history)),
+                    make_chart_card(
+                        charts.build_latest_window_metric_snapshot(latest_window_metrics),
+                        class_name="mb-0",
+                    ),
+                ]
+            )
+            return (
+                kpis,
+                volume_children,
+                null_children,
+                prediction_children,
+            )
+        except Exception as error:
+            logger.exception("Failed to render data quality", exc_info=error)
+            return _callback_error_panel("data quality", error, icon="fas fa-database"), html.Div(), html.Div(), html.Div()
 
     @app.callback(
         Output("perf-metric-select", "options"),
@@ -2824,22 +3068,27 @@ def register_callbacks(app) -> None:
         State("perf-metric-select", "value"),
     )
     def sync_performance_metric_options(model_id, session_data, current_metric):
-        backend = _make_backend(session_data)
-        default_metric = _default_performance_metric(model_id, backend)
-        config = backend.get_monitor_config(model_id) if model_id else None
-        if config:
-            options = [
-                {
-                    "label": performance_metric_label(metric_name),
-                    "value": metric_name,
-                }
-                for metric_name in _configured_performance_metric_names(config)
-            ]
-        else:
+        try:
+            backend = _make_backend(session_data)
+            default_metric = _default_performance_metric(model_id, backend)
+            config = backend.get_monitor_config(model_id) if model_id else None
+            if config:
+                options = [
+                    {
+                        "label": performance_metric_label(metric_name),
+                        "value": metric_name,
+                    }
+                    for metric_name in _configured_performance_metric_names(config)
+                ]
+            else:
+                options = performance_metric_options("classification")
+            valid_values = {option["value"] for option in options}
+            value = current_metric if current_metric in valid_values else default_metric
+            return options, value
+        except Exception as error:
+            logger.exception("Failed to sync performance metric options", exc_info=error)
             options = performance_metric_options("classification")
-        valid_values = {option["value"] for option in options}
-        value = current_metric if current_metric in valid_values else default_metric
-        return options, value
+            return options, current_metric if current_metric in {option["value"] for option in options} else "f1"
 
     @app.callback(
         Output("perf-labels-alert", "children"),
@@ -2859,141 +3108,144 @@ def register_callbacks(app) -> None:
     def render_performance(pathname, model_id, metric_name, _, session_data, current_feature):
         if pathname != "/performance":
             return (no_update,) * 7
-        if not model_id:
-            empty = make_empty_state("Select a model to inspect performance.", icon="fas fa-tachometer-alt")
-            return empty, html.Div(), html.Div(), html.Div(), [], None, html.Div()
-        backend = _make_backend(session_data)
-        config = backend.get_monitor_config(model_id)
-        if not config or not config.contract.label_col:
-            return (
-                _status_alert("This monitor does not have labels configured, so performance degradation analysis is unavailable.", "warning"),
-                html.Div(),
-                html.Div(),
-                html.Div(),
-                [],
-                None,
-                html.Div(),
-            )
-        resolved_metric = metric_name or _default_performance_metric(model_id, backend)
-        performance = backend.get_performance_summary(model_id, metric_name=resolved_metric)
-        latest_bins = performance["latest_bins"]
-        all_bins = performance.get("all_bins", pd.DataFrame())
-        if all_bins.empty:
-            return (
-                _status_alert("No performance metrics available yet. Run a refresh after labels arrive.", "warning"),
-                html.Div(),
-                html.Div(),
-                html.Div(),
-                [],
-                None,
-                html.Div(),
-            )
-        contributors = performance["contributors"]
-        feature_frame = latest_bins if not latest_bins.empty else all_bins
-        features = sorted(
-            {
-                str(value)
-                for value in feature_frame.get("feature", pd.Series(dtype=str)).dropna().tolist()
-                if str(value).strip()
-            }
-        )
-        feature_options = _option_list(features)
-        feature_values = {option["value"] for option in feature_options}
-        selected_feature = current_feature if current_feature in feature_values else (feature_options[0]["value"] if feature_options else None)
-        degradation_detected = bool(performance.get("has_significant_degradation"))
-        alert_children: list[object] = [
-            html.Small(
-                f"Viewing metric: {performance_metric_label(resolved_metric)}",
-                className="text-muted d-block mb-2",
-            )
-        ]
-        timeline_unavailable_reason = str(performance.get("timeline_unavailable_reason") or "").strip()
-        if timeline_unavailable_reason:
-            alert_children.append(_status_alert(timeline_unavailable_reason, "warning"))
-        if not degradation_detected:
-            alert_children.append(
-                _status_alert(
-                    "Performance metrics are populated, but no significant degradation is detected in the latest window.",
-                    "info",
+        try:
+            if not model_id:
+                empty = make_empty_state("Select a model to inspect performance.", icon="fas fa-tachometer-alt")
+                return empty, html.Div(), html.Div(), html.Div(), [], None, html.Div()
+            backend = _make_backend(session_data)
+            config = backend.get_monitor_config(model_id)
+            if not config or not config.contract.label_col:
+                return (
+                    _status_alert("This monitor does not have labels configured, so performance degradation analysis is unavailable.", "warning"),
+                    html.Div(),
+                    html.Div(),
+                    html.Div(),
+                    [],
+                    None,
+                    html.Div(),
                 )
-            )
-        alert = html.Div(alert_children)
-        latest_bin_table = pd.DataFrame()
-        if not feature_frame.empty:
-            latest_bin_table = feature_frame[
-                [
-                    column
-                    for column in (
-                        "feature",
-                        "bin_label",
-                        "baseline_metric",
-                        "current_metric",
-                        "delta",
-                        "current_volume_pct",
-                        "degradation_contribution",
-                    )
-                    if column in feature_frame.columns
-                ]
-            ].rename(
-                columns={
-                    "bin_label": "bin",
-                    "baseline_metric": "baseline",
-                    "current_metric": "current",
-                    "current_volume_pct": "volume_pct",
-                    "degradation_contribution": "impact",
+            resolved_metric = metric_name or _default_performance_metric(model_id, backend)
+            performance = backend.get_performance_summary(model_id, metric_name=resolved_metric)
+            latest_bins = performance["latest_bins"]
+            all_bins = performance.get("all_bins", pd.DataFrame())
+            if all_bins.empty:
+                return (
+                    _status_alert("No performance metrics available yet. Run a refresh after labels arrive.", "warning"),
+                    html.Div(),
+                    html.Div(),
+                    html.Div(),
+                    [],
+                    None,
+                    html.Div(),
+                )
+            contributors = performance["contributors"]
+            feature_frame = latest_bins if not latest_bins.empty else all_bins
+            features = sorted(
+                {
+                    str(value)
+                    for value in feature_frame.get("feature", pd.Series(dtype=str)).dropna().tolist()
+                    if str(value).strip()
                 }
             )
-        kpi_cards = [
-            dbc.Col(make_metric_card("Tracked Features", str(len(feature_options)), "With labeled performance bins"), md=4),
-            dbc.Col(
-                make_metric_card(
-                    "Worst Weighted Delta",
-                    f"{float(performance.get('worst_weighted_delta', 0.0)):.4f}",
-                    "Most degraded feature" if degradation_detected else "Stable latest window",
+            feature_options = _option_list(features)
+            feature_values = {option["value"] for option in feature_options}
+            selected_feature = current_feature if current_feature in feature_values else (feature_options[0]["value"] if feature_options else None)
+            degradation_detected = bool(performance.get("has_significant_degradation"))
+            alert_children: list[object] = [
+                html.Small(
+                    f"Viewing metric: {performance_metric_label(resolved_metric)}",
+                    className="text-muted d-block mb-2",
+                )
+            ]
+            timeline_unavailable_reason = str(performance.get("timeline_unavailable_reason") or "").strip()
+            if timeline_unavailable_reason:
+                alert_children.append(_status_alert(timeline_unavailable_reason, "warning"))
+            if not degradation_detected:
+                alert_children.append(
+                    _status_alert(
+                        "Performance metrics are populated, but no significant degradation is detected in the latest window.",
+                        "info",
+                    )
+                )
+            alert = html.Div(alert_children)
+            latest_bin_table = pd.DataFrame()
+            if not feature_frame.empty:
+                latest_bin_table = feature_frame[
+                    [
+                        column
+                        for column in (
+                            "feature",
+                            "bin_label",
+                            "baseline_metric",
+                            "current_metric",
+                            "delta",
+                            "current_volume_pct",
+                            "degradation_contribution",
+                        )
+                        if column in feature_frame.columns
+                    ]
+                ].rename(
+                    columns={
+                        "bin_label": "bin",
+                        "baseline_metric": "baseline",
+                        "current_metric": "current",
+                        "current_volume_pct": "volume_pct",
+                        "degradation_contribution": "impact",
+                    }
+                )
+            kpi_cards = [
+                dbc.Col(make_metric_card("Tracked Features", str(len(feature_options)), "With labeled performance bins"), md=4),
+                dbc.Col(
+                    make_metric_card(
+                        "Worst Weighted Delta",
+                        f"{float(performance.get('worst_weighted_delta', 0.0)):.4f}",
+                        "Most degraded feature" if degradation_detected else "Stable latest window",
+                    ),
+                    md=4,
                 ),
-                md=4,
-            ),
-            dbc.Col(make_metric_card("Windows", str(len(performance["timeline"])), "Historical performance snapshots"), md=4),
-        ]
-        note_source = latest_bins if not latest_bins.empty else all_bins
-        note = note_source[[column for column in ("window_start", "window_end") if column in note_source.columns]].drop_duplicates().astype(str)
-        note_parts: list[object] = []
-        if not note.empty:
-            if {"window_start", "window_end"}.issubset(note.columns):
-                note_text = f"Latest comparison window: {note.iloc[0]['window_start']} to {note.iloc[0]['window_end']}"
-            elif "window_end" in note.columns:
-                note_text = f"Latest comparison window end: {note.iloc[0]['window_end']}"
-            elif "window_start" in note.columns:
-                note_text = f"Latest comparison window start: {note.iloc[0]['window_start']}"
-            else:
-                note_text = ""
+                dbc.Col(make_metric_card("Windows", str(len(performance["timeline"])), "Historical performance snapshots"), md=4),
+            ]
+            note_source = latest_bins if not latest_bins.empty else all_bins
+            note = note_source[[column for column in ("window_start", "window_end") if column in note_source.columns]].drop_duplicates().astype(str)
+            note_row = note.to_dict("records")[0] if not note.empty else {}
+            note_parts: list[object] = []
+            note_text = ""
+            if "window_start" in note_row and "window_end" in note_row:
+                note_text = f"Latest comparison window: {note_row['window_start']} to {note_row['window_end']}"
+            elif "window_end" in note_row:
+                note_text = f"Latest comparison window end: {note_row['window_end']}"
+            elif "window_start" in note_row:
+                note_text = f"Latest comparison window start: {note_row['window_start']}"
             if note_text:
                 note_parts.append(html.Small(note_text, className="text-muted d-block"))
-        history_message = _comparison_history_message(len(performance["timeline"]), "daily")
-        if history_message:
-            note_parts.append(html.Small(history_message, className="text-muted d-block"))
-        if any(row.get(resolved_metric) is None for row in performance["timeline"]):
-            note_parts.append(
-                html.Small(
-                    "Chart gaps mean the selected metric was undefined on those days, not zero.",
-                    className="text-muted d-block",
+            history_message = _comparison_history_message(len(performance["timeline"]), "daily")
+            if history_message:
+                note_parts.append(html.Small(history_message, className="text-muted d-block"))
+            if any(row.get(resolved_metric) is None for row in performance["timeline"]):
+                note_parts.append(
+                    html.Small(
+                        "Chart gaps mean the selected metric was undefined on those days, not zero.",
+                        className="text-muted d-block",
+                    )
                 )
+            return (
+                alert,
+                kpi_cards,
+                make_chart_card(charts.build_performance_timeline(performance["timeline"], metric_name=resolved_metric)),
+                html.Div(
+                    [
+                        make_chart_card(charts.build_feature_bin_impact(feature_frame, contributors)),
+                        html.H6("Latest Bin Metrics", className="text-light mt-3 mb-2"),
+                        _render_frame(latest_bin_table, "No bin-level performance data available."),
+                    ]
+                ),
+                feature_options,
+                selected_feature,
+                html.Div(note_parts),
             )
-        return (
-            alert,
-            kpi_cards,
-            make_chart_card(charts.build_performance_timeline(performance["timeline"], metric_name=resolved_metric)),
-            html.Div(
-                [
-                    make_chart_card(charts.build_feature_bin_impact(feature_frame, contributors)),
-                    html.H6("Latest Bin Metrics", className="text-light mt-3 mb-2"),
-                    _render_frame(latest_bin_table, "No bin-level performance data available."),
-                ]
-            ),
-            feature_options,
-            selected_feature,
-            html.Div(note_parts),
-        )
+        except Exception as error:
+            logger.exception("Failed to render performance analysis", exc_info=error)
+            return _status_alert(_callback_error_message("performance analysis", error), "danger"), html.Div(), html.Div(), html.Div(), [], None, html.Div()
 
     @app.callback(
         Output("perf-bin-detail-container", "children"),
@@ -3009,12 +3261,15 @@ def register_callbacks(app) -> None:
             return no_update
         if not model_id or not feature:
             return html.Div()
-        backend = _make_backend(session_data)
-        resolved_metric = metric_name or _default_performance_metric(model_id, backend)
-        performance = backend.get_performance_summary(model_id, metric_name=resolved_metric)
-        latest_bins = performance["latest_bins"] if not performance["latest_bins"].empty else performance.get("all_bins", pd.DataFrame())
-        feature_bins = latest_bins[latest_bins["feature"] == feature]
-        return make_chart_card(charts.build_bin_detail(feature_bins, feature, metric_name=resolved_metric))
+        try:
+            backend = _make_backend(session_data)
+            resolved_metric = metric_name or _default_performance_metric(model_id, backend)
+            performance = backend.get_performance_summary(model_id, metric_name=resolved_metric)
+            latest_bins = performance["latest_bins"] if not performance["latest_bins"].empty else performance.get("all_bins", pd.DataFrame())
+            feature_bins = latest_bins[latest_bins["feature"] == feature]
+            return make_chart_card(charts.build_bin_detail(feature_bins, feature, metric_name=resolved_metric))
+        except Exception as error:
+            return _callback_error_panel("bin-level performance detail", error)
 
     @app.callback(
         Output("reference-page-body", "children"),
@@ -3027,14 +3282,17 @@ def register_callbacks(app) -> None:
     def render_reference(pathname, global_model_id, reference_model_id, _, session_data):
         if pathname != "/reference":
             return no_update
-        backend = _make_backend(session_data)
-        model_id = _resolve_reference_model_id(global_model_id, reference_model_id)
-        if not model_id:
-            return make_empty_state("Select a model to inspect the contract and runtime state.", icon="fas fa-book")
-        data = backend.get_reference_data(model_id)
-        config = data["config"]
-        if not config:
-            return make_empty_state("Selected model is no longer available.", icon="fas fa-book")
+        try:
+            backend = _make_backend(session_data)
+            model_id = _resolve_reference_model_id(global_model_id, reference_model_id)
+            if not model_id:
+                return make_empty_state("Select a model to inspect the contract and runtime state.", icon="fas fa-book")
+            data = backend.get_reference_data(model_id)
+            config = data["config"]
+            if not config:
+                return make_empty_state("Selected model is no longer available.", icon="fas fa-book")
+        except Exception as error:
+            return _callback_error_panel("monitor settings", error, icon="fas fa-book")
         config_status = getattr(config, "status", "active")
         cadence_labels = {
             "hourly": "Hourly",
@@ -3163,8 +3421,11 @@ def register_callbacks(app) -> None:
             [
                 {"field": field, "value": _format_runtime_setting_value(field, value)}
                 for field, value in data["settings"].items()
+                if field != "shared_schedule"
             ]
         )
+        shared_schedule = (data["settings"] or {}).get("shared_schedule") or {}
+        resolved_thresholds = _resolved_monitor_thresholds(config)
         configured_refresh_job_id = str(data["settings"].get("refresh_job_id") or "").strip()
         configured_refresh_job_name = str(data["settings"].get("refresh_job_name") or "").strip()
         configured_bootstrap_job_id = str(data["settings"].get("bootstrap_refresh_job_id") or "").strip()
@@ -3257,6 +3518,54 @@ def register_callbacks(app) -> None:
             if config_status == "active"
             else None
         )
+        threshold_controls = dbc.Row(
+            [
+                dbc.Col(
+                    dbc.Card(
+                        dbc.CardBody(
+                            [
+                                html.H6(_THRESHOLD_LABELS[metric], className="text-light mb-3"),
+                                dbc.Row(
+                                    [
+                                        dbc.Col(
+                                            [
+                                                dbc.Label("Warning", className="text-muted"),
+                                                dbc.Input(
+                                                    id=_threshold_input_id(metric, "warning"),
+                                                    type="number",
+                                                    min=0,
+                                                    step=0.01 if metric == "null_rate" else 0.001,
+                                                    value=get_thresholds(metric, resolved_thresholds)[0],
+                                                ),
+                                            ],
+                                            md=6,
+                                        ),
+                                        dbc.Col(
+                                            [
+                                                dbc.Label("Critical", className="text-muted"),
+                                                dbc.Input(
+                                                    id=_threshold_input_id(metric, "critical"),
+                                                    type="number",
+                                                    min=0,
+                                                    step=0.01 if metric == "null_rate" else 0.001,
+                                                    value=get_thresholds(metric, resolved_thresholds)[1],
+                                                ),
+                                            ],
+                                            md=6,
+                                        ),
+                                    ],
+                                    className="g-2",
+                                ),
+                            ]
+                        ),
+                        className="h-100",
+                    ),
+                    md=6,
+                )
+                for metric in THRESHOLD_METRICS
+            ],
+            className="g-3 mt-1",
+        )
         schedule_card = dbc.Card(
             dbc.CardBody(
                 [
@@ -3306,6 +3615,13 @@ def register_callbacks(app) -> None:
                         ],
                         className="g-3",
                     ),
+                    dbc.Alert(
+                        "Threshold overrides apply immediately to Overview severity, Drift/Data Quality threshold guides, and future incident generation. Historical incident history is preserved as recorded.",
+                        color="secondary",
+                        className="py-2 mt-3 mb-0",
+                    ),
+                    html.H6("Thresholds", className="text-light mt-4 mb-3"),
+                    threshold_controls,
                     html.H6("Performance Metrics", className="text-light mt-4 mb-3"),
                     dbc.Row(
                         [
@@ -3363,6 +3679,104 @@ def register_callbacks(app) -> None:
                         if show_bootstrap_retry
                         else html.Div()
                     ),
+                ]
+            ),
+            className="mb-4",
+        )
+        shared_schedule_value = (
+            int(shared_schedule.get("current_interval_hours"))
+            if shared_schedule.get("current_interval_hours") in SCHEDULE_INTERVAL_OPTIONS
+            else 1
+        )
+        shared_schedule_editable = bool(shared_schedule.get("editable"))
+        shared_schedule_alerts: list[object] = []
+        for issue in shared_schedule.get("blocking_issues") or []:
+            shared_schedule_alerts.append(_status_alert(str(issue), "warning"))
+        for warning_text in shared_schedule.get("warnings") or []:
+            shared_schedule_alerts.append(_status_alert(str(warning_text), "secondary"))
+        if not shared_schedule_editable:
+            if shared_schedule.get("management_available") is False:
+                shared_schedule_alerts.append(
+                    _status_alert(
+                        "This app identity can read the shared workflow schedule but cannot edit it. Grant CAN_MANAGE on the shared refresh job to enable in-app changes.",
+                        "warning",
+                    )
+                )
+            elif not shared_schedule.get("supported"):
+                shared_schedule_alerts.append(
+                    _status_alert(
+                        "The shared refresh job is using a custom or unsupported scheduler mode. Update it externally if you need a different wake interval.",
+                        "secondary",
+                    )
+                )
+            else:
+                shared_schedule_alerts.append(
+                    _status_alert(
+                        "The app could not confirm schedule-edit permission. You can still update the shared refresh job externally if needed.",
+                        "secondary",
+                    )
+                )
+        shared_schedule_card = dbc.Card(
+            dbc.CardBody(
+                [
+                    html.H6("Shared Workflow Schedule", className="text-light mb-3"),
+                    html.P(
+                        "This is the shared refresh job wake-up interval. It controls how often the scheduler checks for due monitors. Per-monitor cadence still decides whether this monitor actually runs.",
+                        className="text-muted mb-3",
+                    ),
+                    dbc.Row(
+                        [
+                            dbc.Col(
+                                [
+                                    dbc.Label("Current Detected Schedule"),
+                                    html.Div(
+                                        shared_schedule.get("current_label") or "Unavailable",
+                                        className="text-light fw-semibold",
+                                    ),
+                                    html.Small(
+                                        (
+                                            f"Timezone: {shared_schedule.get('timezone_id') or 'UTC'}"
+                                            + (" | Paused" if shared_schedule.get("paused") else "")
+                                            + (
+                                                f" | Last checked: {shared_schedule.get('checked_at')}"
+                                                if shared_schedule.get("checked_at")
+                                                else ""
+                                            )
+                                        ),
+                                        className="text-muted d-block mt-1",
+                                    ),
+                                ],
+                                md=5,
+                            ),
+                            dbc.Col(
+                                [
+                                    dbc.Label("Wake Interval"),
+                                    dbc.Select(
+                                        id="reference-shared-schedule-select",
+                                        options=_schedule_interval_options(),
+                                        value=shared_schedule_value,
+                                        disabled=not shared_schedule_editable,
+                                    ),
+                                ],
+                                md=4,
+                            ),
+                            dbc.Col(
+                                [
+                                    dbc.Label("Apply"),
+                                    dbc.Button(
+                                        "Save Shared Schedule",
+                                        id="reference-save-shared-schedule-btn",
+                                        color="secondary",
+                                        disabled=not shared_schedule_editable,
+                                        className="w-100",
+                                    ),
+                                ],
+                                md=3,
+                            ),
+                        ],
+                        className="g-3",
+                    ),
+                    html.Div(shared_schedule_alerts, className="mt-3") if shared_schedule_alerts else html.Div(),
                 ]
             ),
             className="mb-4",
@@ -3431,9 +3845,15 @@ def register_callbacks(app) -> None:
                 ),
                 schedule_card,
                 dbc.Alert(
-                    "The shared refresh workflow wakes up hourly by default. The cadence settings above decide whether this monitor is actually due for drift/quality work, while performance cadence is evaluated independently when labels are present.",
+                    "The shared refresh workflow wakes up on the schedule shown in Admin. The cadence settings above decide whether this monitor is actually due for drift/quality work, while performance cadence is evaluated independently when labels are present.",
                     color="secondary",
                     className="py-2 mb-3",
+                ),
+                html.H6("Compute Guidance", className="text-light mb-2"),
+                _compute_guidance_block(
+                    config=config,
+                    diagnostics=refresh_diagnostics,
+                    shared_schedule=shared_schedule,
                 ),
                 html.H6("Runtime State", className="text-light mb-2"),
                 _render_frame(runtime_frame, "No runtime state yet."),
@@ -3456,6 +3876,7 @@ def register_callbacks(app) -> None:
                     className="text-muted mb-3",
                 ),
                 lifecycle_card,
+                shared_schedule_card,
                 html.H6("Recent Incident History", className="text-light mb-2"),
                 _render_frame(recent_incident_history_frame, "No incident history recorded yet."),
                 html.Hr(),
@@ -3509,17 +3930,21 @@ def register_callbacks(app) -> None:
         model_id = _resolve_reference_model_id(global_model_id, reference_model_id)
         if not model_id:
             return [], [], [], None
-        backend = _make_backend(session_data)
-        config = _get_monitor_config_for_reference(backend, model_id)
-        if not config:
+        try:
+            backend = _make_backend(session_data)
+            config = _get_monitor_config_for_reference(backend, model_id)
+            if not config:
+                return [], [], [], None
+            seed_metrics = selected_metrics if selected_metrics is not None else _configured_performance_metric_names(config)
+            seed_default = current_default if current_default is not None else _configured_default_performance_metric(config)
+            return _sync_performance_metric_selection(
+                problem_type=config.problem_type,
+                selected_metrics=seed_metrics,
+                current_default=seed_default,
+            )
+        except Exception as error:
+            logger.exception("Failed to sync reference performance metrics", exc_info=error)
             return [], [], [], None
-        seed_metrics = selected_metrics if selected_metrics is not None else _configured_performance_metric_names(config)
-        seed_default = current_default if current_default is not None else _configured_default_performance_metric(config)
-        return _sync_performance_metric_selection(
-            problem_type=config.problem_type,
-            selected_metrics=seed_metrics,
-            current_default=seed_default,
-        )
 
     @app.callback(
         Output("reference-page-status", "children"),
@@ -3532,6 +3957,14 @@ def register_callbacks(app) -> None:
         State("reference-schedule-enabled-toggle", "value"),
         State("reference-performance-metrics-select", "value"),
         State("reference-default-performance-metric-select", "value"),
+        State("reference-threshold-psi-warning-input", "value"),
+        State("reference-threshold-psi-critical-input", "value"),
+        State("reference-threshold-js_divergence-warning-input", "value"),
+        State("reference-threshold-js_divergence-critical-input", "value"),
+        State("reference-threshold-kl_divergence-warning-input", "value"),
+        State("reference-threshold-kl_divergence-critical-input", "value"),
+        State("reference-threshold-null_rate-warning-input", "value"),
+        State("reference-threshold-null_rate-critical-input", "value"),
         State("session-config-store", "data"),
         prevent_initial_call=True,
     )
@@ -3544,6 +3977,14 @@ def register_callbacks(app) -> None:
         schedule_enabled,
         performance_metric_names,
         default_performance_metric,
+        psi_warning,
+        psi_critical,
+        js_warning,
+        js_critical,
+        kl_warning,
+        kl_critical,
+        null_warning,
+        null_critical,
         session_data,
     ):
         model_id = _resolve_reference_model_id(global_model_id, reference_model_id)
@@ -3554,6 +3995,14 @@ def register_callbacks(app) -> None:
         if not config:
             return _status_alert("Selected monitor no longer exists.", "warning"), no_update
         try:
+            threshold_overrides = _collect_threshold_overrides_from_inputs(
+                {
+                    "psi": (psi_warning, psi_critical),
+                    "js_divergence": (js_warning, js_critical),
+                    "kl_divergence": (kl_warning, kl_critical),
+                    "null_rate": (null_warning, null_critical),
+                }
+            )
             updated = MonitorConfig(
                 model_key=config.model_key,
                 display_name=config.display_name,
@@ -3575,6 +4024,7 @@ def register_callbacks(app) -> None:
                     else "disabled"
                 ),
                 schedule_enabled="enabled" in (schedule_enabled or []),
+                threshold_overrides=threshold_overrides,
                 mlflow=config.mlflow,
                 created_by=config.created_by,
                 status=getattr(config, "status", "active"),
@@ -3605,9 +4055,29 @@ def register_callbacks(app) -> None:
                     )
                 )
         except Exception as error:
-            return _status_alert(f"Could not update cadence: {error}", "danger"), no_update
+            return _status_alert(f"Could not update monitor settings: {error}", "danger"), no_update
         return (
-            _status_alert(f"Updated refresh cadence for {updated.display_name}.", "success"),
+            _status_alert(f"Updated monitor settings for {updated.display_name}.", "success"),
+            datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        )
+
+    @app.callback(
+        Output("reference-page-status", "children", allow_duplicate=True),
+        Output("reload-token", "data", allow_duplicate=True),
+        Input("reference-save-shared-schedule-btn", "n_clicks"),
+        State("reference-shared-schedule-select", "value"),
+        prevent_initial_call=True,
+    )
+    def save_reference_shared_schedule(_, interval_hours):
+        try:
+            status = update_shared_workflow_schedule(int(interval_hours or 1))
+        except Exception as error:
+            return _status_alert(f"Could not update the shared workflow schedule: {error}", "danger"), no_update
+        return (
+            _status_alert(
+                f"Updated the shared refresh workflow to {status.current_label.lower()} for job {status.job_id}.",
+                "success",
+            ),
             datetime.now(timezone.utc).isoformat(timespec="seconds"),
         )
 

@@ -696,3 +696,131 @@ def test_validate_workspace_readiness_blocks_paused_shared_schedule(monkeypatch)
     assert readiness.overall_mode == "not_ready"
     assert readiness.scheduler_path_available is False
     assert any("paused" in issue.lower() for issue in readiness.blocking_issues)
+
+
+def test_resolve_shared_workflow_schedule_status_detects_supported_interval_and_manage_access(monkeypatch) -> None:
+    monkeypatch.setattr(
+        refresh_jobs,
+        "settings",
+        SimpleNamespace(
+            sql_warehouse_id="wh-123",
+            refresh_job_id="321",
+            refresh_job_name="model-lens-refresh",
+            lakebase_host="",
+            lakebase_port=5432,
+            lakebase_pguser="",
+            lakebase_sslmode="require",
+            lakebase_schema="model_lens_ui",
+        ),
+    )
+
+    fake_job = SimpleNamespace(
+        job_id=321,
+        settings=SimpleNamespace(
+            name="model-lens-refresh",
+            schedule=SimpleNamespace(
+                pause_status="UNPAUSED",
+                quartz_cron_expression="0 0 */6 * * ?",
+                timezone_id="UTC",
+            ),
+            trigger=None,
+            continuous=None,
+            queue=SimpleNamespace(enabled=True),
+            max_concurrent_runs=1,
+        ),
+    )
+    fake_workspace = SimpleNamespace(
+        jobs=SimpleNamespace(
+            get=lambda **_: fake_job,
+            get_permissions=lambda *_: SimpleNamespace(
+                access_control_list=[
+                    SimpleNamespace(
+                        user_name="svc@app",
+                        service_principal_name=None,
+                        display_name="svc@app",
+                        all_permissions=[SimpleNamespace(permission_level="CAN_MANAGE")],
+                    )
+                ]
+            ),
+        ),
+        current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name="svc@app", display_name="svc@app")),
+    )
+
+    status = refresh_jobs.resolve_shared_workflow_schedule_status(fake_workspace)
+
+    assert status.configured is True
+    assert status.resolved is True
+    assert status.current_interval_hours == 6
+    assert status.current_label == "Every 6 Hours"
+    assert status.editable is True
+    assert status.supported is True
+
+
+def test_update_shared_workflow_schedule_updates_only_schedule_field(monkeypatch) -> None:
+    monkeypatch.setattr(
+        refresh_jobs,
+        "settings",
+        SimpleNamespace(
+            sql_warehouse_id="wh-123",
+            refresh_job_id="321",
+            refresh_job_name="model-lens-refresh",
+            lakebase_host="",
+            lakebase_port=5432,
+            lakebase_pguser="",
+            lakebase_sslmode="require",
+            lakebase_schema="model_lens_ui",
+        ),
+    )
+
+    fake_job = SimpleNamespace(
+        job_id=321,
+        settings=SimpleNamespace(
+            name="model-lens-refresh",
+            schedule=SimpleNamespace(
+                pause_status="UNPAUSED",
+                quartz_cron_expression="0 0 * * * ?",
+                timezone_id="UTC",
+            ),
+            trigger=None,
+            continuous=None,
+            queue=SimpleNamespace(enabled=True),
+            max_concurrent_runs=1,
+        ),
+    )
+
+    class FakeJobs:
+        def __init__(self) -> None:
+            self.update_call = None
+
+        def get(self, **_) -> object:
+            return fake_job
+
+        def get_permissions(self, *_):
+            return SimpleNamespace(
+                access_control_list=[
+                    SimpleNamespace(
+                        user_name="svc@app",
+                        service_principal_name=None,
+                        display_name="svc@app",
+                        all_permissions=[SimpleNamespace(permission_level="CAN_MANAGE")],
+                    )
+                ]
+            )
+
+        def update(self, **kwargs):
+            self.update_call = kwargs
+            fake_job.settings.schedule = kwargs["new_settings"].schedule
+
+    fake_jobs = FakeJobs()
+    fake_workspace = SimpleNamespace(
+        jobs=fake_jobs,
+        current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name="svc@app", display_name="svc@app")),
+    )
+
+    status = refresh_jobs.update_shared_workflow_schedule(12, workspace_client=fake_workspace)
+
+    assert fake_jobs.update_call is not None
+    assert fake_jobs.update_call["job_id"] == 321
+    assert fake_jobs.update_call["new_settings"].schedule.quartz_cron_expression == "0 0 */12 * * ?"
+    assert status.current_interval_hours == 12
+    assert status.current_label == "Every 12 Hours"

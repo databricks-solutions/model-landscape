@@ -3,9 +3,12 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
+import model_lens.backend as backend_module
 from model_lens.backend import DashboardBackend, _null_rate_dict, _safe_json_list
 from model_lens.domain.models import BaselinePolicy, InferenceContract, MonitorConfig
+from model_lens.services.refresh_jobs import SharedWorkflowScheduleStatus
 from model_lens.services.thresholds import get_thresholds
 
 
@@ -330,6 +333,26 @@ def test_get_drift_results_aggregates_weekly_history_with_latest_overlay_and_sum
     assert drift.iloc[0]["cur_count"] == 230
 
 
+def test_get_drift_results_limits_to_recent_windows_in_sql() -> None:
+    class _RecordingWarehouse(_FakeWarehouse):
+        def __init__(self) -> None:
+            self.query_param_calls: list[tuple[str, tuple]] = []
+
+        def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
+            self.query_param_calls.append((sql, params))
+            return super().query_params(sql, params)
+
+    backend = _make_backend()
+    warehouse = _RecordingWarehouse()
+    backend.repository._warehouse = warehouse
+
+    backend.get_drift_results("fraud_model_demo")
+
+    sql, _ = warehouse.query_param_calls[-1]
+    assert "recent_windows" in sql
+    assert "LIMIT 400" in sql
+
+
 def test_get_quality_stats_parses_json_payloads() -> None:
     backend = _make_backend()
 
@@ -349,6 +372,26 @@ def test_get_quality_history_returns_windowed_rows_with_null_rate_metadata() -> 
     assert list(history["row_count"]) == [110, 120]
     assert history.iloc[1]["null_rates_dict"] == {"amount": 0.0, "velocity_7d": 1.2}
     assert history.iloc[1]["max_null_rate"] == 1.2
+
+
+def test_get_quality_history_limits_to_recent_windows_in_sql() -> None:
+    class _RecordingWarehouse(_FakeWarehouse):
+        def __init__(self) -> None:
+            self.query_param_calls: list[tuple[str, tuple]] = []
+
+        def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
+            self.query_param_calls.append((sql, params))
+            return super().query_params(sql, params)
+
+    backend = _make_backend()
+    warehouse = _RecordingWarehouse()
+    backend.repository._warehouse = warehouse
+
+    backend.get_quality_history("fraud_model_demo")
+
+    sql, _ = warehouse.query_param_calls[-1]
+    assert "recent_history" in sql
+    assert "LIMIT 400" in sql
 
 
 def test_get_quality_history_falls_back_to_daily_profiles_when_window_history_is_missing() -> None:
@@ -417,6 +460,26 @@ def test_get_performance_summary_keeps_zero_delta_rows_visible() -> None:
     assert set(performance["contributors"]["feature"]) == {"amount", "velocity_7d"}
     assert performance["has_significant_degradation"] is False
     assert performance["worst_weighted_delta"] == 0.0
+
+
+def test_get_performance_rows_limits_to_recent_windows_in_sql() -> None:
+    class _RecordingWarehouse(_FakeWarehouse):
+        def __init__(self) -> None:
+            self.query_param_calls: list[tuple[str, tuple]] = []
+
+        def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
+            self.query_param_calls.append((sql, params))
+            return super().query_params(sql, params)
+
+    backend = _make_backend()
+    warehouse = _RecordingWarehouse()
+    backend.repository._warehouse = warehouse
+
+    backend.get_performance_rows("fraud_model_demo", metric_name="f1")
+
+    sql, _ = warehouse.query_param_calls[-1]
+    assert "recent_windows" in sql
+    assert "LIMIT 180" in sql
 
 
 def test_get_performance_summary_supports_alternate_metric_names() -> None:
@@ -857,7 +920,63 @@ def test_feature_detail_returns_empty_when_only_unbounded_load_is_supported() ->
 
     assert details["baseline"].empty
     assert details["current"].empty
-    assert details["distribution_source"] == "unavailable"
+    assert details["distribution_source"] == "unavailable_unsafe_bounded_read"
+
+
+def test_feature_detail_skips_raw_fallback_without_hard_row_cap() -> None:
+    calls: list[dict[str, object]] = []
+    config = MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.model_lens_demo.inference_logs",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=("amount",),
+            slice_columns=("region",),
+            categorical_columns=("region",),
+        ),
+        baseline=BaselinePolicy(n_days=7),
+        model_id_value="fraud_model_v1",
+    )
+
+    def load_monitor_frame(config_arg, *, start_date=None, end_date=None, feature_columns=None):
+        del config_arg
+        calls.append(
+            {
+                "start_date": start_date,
+                "end_date": end_date,
+                "feature_columns": feature_columns,
+            }
+        )
+        return pd.DataFrame(
+            [
+                {"event_ts": "2026-01-20T00:00:00", "amount": 10.0},
+            ]
+        )
+
+    repository = SimpleNamespace(
+        _warehouse=_FakeWarehouse(),
+        table_names=SimpleNamespace(
+            drift_metrics="drift_metrics",
+            quality_metrics="quality_metrics",
+            quality_history="quality_history",
+            performance_metrics="performance_metrics",
+        ),
+        list_monitor_configs=lambda status="active": [config],
+        get_monitor_summary=lambda: pd.DataFrame(),
+        load_monitor_frame=load_monitor_frame,
+    )
+    backend = DashboardBackend(repository=repository)
+
+    details = backend.get_feature_distribution_details("fraud_model_demo", "amount")
+
+    assert details["baseline"].empty
+    assert details["current"].empty
+    assert details["distribution_source"] == "unavailable_unsafe_bounded_read"
+    assert calls == []
 
 
 def test_current_window_detail_reads_use_current_window_bounds_only() -> None:
@@ -1330,6 +1449,71 @@ def test_get_overview_rows_marks_models_without_drift_as_computing() -> None:
     assert rows_by_id["spoof_model_demo"]["top_drifter"] == "Computing/Pending"
 
 
+def test_get_overview_rows_uses_monitor_threshold_overrides_for_drifting_features() -> None:
+    class OverviewWarehouse:
+        def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
+            if "FROM quality_metrics" in sql:
+                return pd.DataFrame(
+                    [
+                        {
+                            "model_key": "fraud_model_demo",
+                            "total_rows": 840,
+                            "min_date": "2026-01-01",
+                            "max_date": "2026-01-21",
+                            "prediction_mean": 0.44,
+                            "prediction_std": 0.13,
+                            "daily_volume": '{"2026-01-21": 40}',
+                            "null_rates": '{"amount": 0.0}',
+                            "computed_at": "2026-01-21T10:00:00",
+                        }
+                    ]
+                )
+            if "WITH feature_metric_history AS" in sql and "FROM drift_metrics" in sql:
+                return pd.DataFrame(
+                    [
+                        {
+                            "model_key": "fraud_model_demo",
+                            "feature_name": "amount",
+                            "metric_name": "psi",
+                            "metric_value": 0.12,
+                        }
+                    ]
+                )
+            return pd.DataFrame()
+
+    config = MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.model_lens_demo.inference_logs",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            feature_columns=("amount",),
+        ),
+        baseline=BaselinePolicy(n_days=7),
+        model_id_value="fraud_model_v1",
+        threshold_overrides={"psi": {"warning": 0.2, "critical": 0.4}},
+    )
+    repository = SimpleNamespace(
+        _warehouse=OverviewWarehouse(),
+        table_names=SimpleNamespace(
+            quality_metrics="quality_metrics",
+            drift_metrics="drift_metrics",
+        ),
+        list_monitor_configs=lambda status="active": [config],
+        get_monitor_summary=lambda: pd.DataFrame(),
+        list_monitor_runtime_states=lambda keys: {},
+    )
+    backend = DashboardBackend(repository=repository)
+
+    rows = backend.get_overview_rows(metric="psi")
+
+    assert rows[0]["drifting_features"] == 0
+    assert rows[0]["threshold_warning"] == 0.2
+    assert rows[0]["threshold_critical"] == 0.4
+
+
 def test_get_overview_rows_returns_empty_without_active_monitors() -> None:
     repository = SimpleNamespace(
         list_monitor_configs=lambda status="active": [],
@@ -1353,7 +1537,27 @@ def test_shared_thresholds_cover_metric_specific_warning_logic() -> None:
     assert critical == 0.15
 
 
-def test_get_reference_data_includes_recent_incident_history_when_available() -> None:
+def test_get_reference_data_includes_recent_incident_history_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        backend_module,
+        "resolve_shared_workflow_schedule_status",
+        lambda: SharedWorkflowScheduleStatus(
+            configured=True,
+            resolved=True,
+            job_id=123,
+            job_name="model-lens-refresh",
+            scheduler_mode="cron",
+            current_expression="0 0 * * * ?",
+            current_interval_hours=1,
+            current_label="Every 1 Hour",
+            timezone_id="UTC",
+            paused=False,
+            editable=True,
+            supported=True,
+            checked_at="2026-01-21T10:06:00Z",
+            management_available=True,
+        ),
+    )
     config = MonitorConfig(
         model_key="fraud_model_demo",
         display_name="Fraud Model Demo",

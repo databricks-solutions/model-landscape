@@ -10,6 +10,7 @@ from model_lens.domain.performance_metrics import (
     normalize_problem_type,
     resolve_default_performance_metric,
 )
+from model_lens.services.thresholds import normalize_threshold_overrides
 
 
 REQUIRED_INFERENCE_COLUMNS = ("event_ts", "prediction")
@@ -129,6 +130,7 @@ class MonitorConfig:
     drift_cadence_preset: str = "6h"
     performance_cadence_preset: str = "disabled"
     schedule_enabled: bool = True
+    threshold_overrides: dict[str, dict[str, float]] = field(default_factory=dict)
     mlflow: MLflowLineage = field(default_factory=MLflowLineage)
     created_by: str = "app"
     status: str = "active"
@@ -154,6 +156,7 @@ class MonitorConfig:
         object.__setattr__(self, "drift_cadence_preset", drift)
         object.__setattr__(self, "performance_cadence_preset", performance)
         object.__setattr__(self, "status", status)
+        object.__setattr__(self, "threshold_overrides", normalize_threshold_overrides(self.threshold_overrides))
 
     @property
     def has_labels(self) -> bool:

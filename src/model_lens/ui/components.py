@@ -3,7 +3,7 @@ from __future__ import annotations
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
-from model_lens.services.thresholds import drift_severity, get_thresholds
+from model_lens.services.thresholds import drift_severity
 from model_lens.ui.styles import (
     CARD_STYLE,
     COLORS,
@@ -13,8 +13,12 @@ from model_lens.ui.styles import (
 )
 
 
-def get_drift_status(value: float | int | None, metric: str = "psi") -> tuple[str, str, str]:
-    severity = drift_severity(value, metric)
+def get_drift_status(
+    value: float | int | None,
+    metric: str = "psi",
+    thresholds: dict[str, dict[str, float]] | None = None,
+) -> tuple[str, str, str]:
+    severity = drift_severity(value, metric, thresholds)
     if severity == "critical":
         return "Critical", "danger", COLORS["high"]
     if severity == "warning":
@@ -57,6 +61,7 @@ def make_model_status_card(
     has_labels: bool = False,
     metric_label: str = "PSI",
     metric_key: str = "psi",
+    thresholds: dict[str, dict[str, float]] | None = None,
     computing: bool = False,
     freshness_status: str = "fresh",
     last_run_status: str = "",
@@ -103,7 +108,7 @@ def make_model_status_card(
             className="h-100",
         )
 
-    status, badge_color, border = get_drift_status(max_psi, metric_key)
+    status, badge_color, border = get_drift_status(max_psi, metric_key, thresholds)
     badges = [dbc.Badge(status, color=badge_color, className="mb-2")]
     freshness_badges = {
         "pending_bootstrap": dbc.Badge("Pending Bootstrap", color="secondary", className="ms-1 mb-2"),
@@ -118,7 +123,7 @@ def make_model_status_card(
             dbc.Badge([html.I(className="fas fa-tag me-1"), "Labels"], color="info", className="ms-1 mb-2")
         )
     if max_null_rate is not None and max_null_rate > 0:
-        null_status, null_badge_color, _ = get_drift_status(max_null_rate, "null_rate")
+        null_status, null_badge_color, _ = get_drift_status(max_null_rate, "null_rate", thresholds)
         if null_status != "Healthy":
             badges.append(
                 dbc.Badge(

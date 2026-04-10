@@ -225,6 +225,9 @@ Optional:
 - `CAN_MANAGE_RUN` on the shared refresh job
   - only needed if you want the app to trigger the first refresh immediately from the UI
   - not required if `scheduler_only` mode is acceptable
+- `CAN_MANAGE` on the shared refresh job
+  - only needed if you want operators to change the shared wake interval from `Monitor Settings -> Admin`
+  - not required if the schedule will always be edited externally
 
 ### Refresh Job Run As Identity
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from model_lens.config import settings
@@ -57,6 +58,29 @@ class WorkspaceReadiness:
     overall_mode: str
     blocking_issues: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SharedWorkflowScheduleStatus:
+    configured: bool
+    resolved: bool
+    job_id: int | None
+    job_name: str
+    scheduler_mode: str
+    current_expression: str
+    current_interval_hours: int | None
+    current_label: str
+    timezone_id: str
+    paused: bool
+    editable: bool
+    supported: bool
+    checked_at: str
+    management_available: bool | None = None
+    blocking_issues: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+
+SCHEDULE_INTERVAL_OPTIONS: tuple[int, ...] = (1, 3, 6, 12, 24)
 
 
 def run_now_permission_guidance(job_id: int | None) -> str | None:
@@ -160,6 +184,107 @@ def _pause_status(resource: object | None) -> str:
     return _clean(getattr(raw, "value", raw)).upper()
 
 
+def _checked_at_text() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _schedule_interval_label(interval_hours: int | None) -> str:
+    if interval_hours == 1:
+        return "Every 1 Hour"
+    if interval_hours == 24:
+        return "Every 24 Hours"
+    if interval_hours in SCHEDULE_INTERVAL_OPTIONS:
+        return f"Every {int(interval_hours)} Hours"
+    return "Custom / Unsupported"
+
+
+def _schedule_interval_to_quartz(interval_hours: int) -> str:
+    interval = int(interval_hours)
+    if interval not in SCHEDULE_INTERVAL_OPTIONS:
+        raise RefreshJobConfigError(
+            f"Shared refresh schedule must be one of {', '.join(str(value) for value in SCHEDULE_INTERVAL_OPTIONS)} hours."
+        )
+    if interval == 1:
+        return "0 0 * * * ?"
+    if interval == 24:
+        return "0 0 0 * * ?"
+    return f"0 0 */{interval} * * ?"
+
+
+def _quartz_interval_hours(expression: str) -> int | None:
+    parts = [part.strip() for part in _clean(expression).split() if part.strip()]
+    if len(parts) not in {6, 7}:
+        return None
+    _, minute, hour, day_of_month, _, day_of_week = parts[:6]
+    if minute != "0":
+        return None
+    if day_of_month != "*" or day_of_week not in {"?", "*"}:
+        return None
+    normalized_hour = hour.lower()
+    if normalized_hour == "*":
+        return 1
+    if normalized_hour.startswith("*/"):
+        try:
+            interval = int(normalized_hour.split("/", 1)[1])
+        except ValueError:
+            return None
+        return interval if interval in SCHEDULE_INTERVAL_OPTIONS else None
+    if normalized_hour.startswith("0/"):
+        try:
+            interval = int(normalized_hour.split("/", 1)[1])
+        except ValueError:
+            return None
+        return interval if interval in SCHEDULE_INTERVAL_OPTIONS else None
+    try:
+        int(normalized_hour)
+    except ValueError:
+        return None
+    return 24
+
+
+def _principal_candidates(workspace_client) -> tuple[set[str], str | None]:
+    try:
+        identity = workspace_client.current_user.me()
+    except Exception:
+        return set(), "Could not verify the current app principal against refresh workflow permissions."
+
+    principal_candidates = {
+        _normalized_job_name(getattr(identity, "user_name", None)),
+        _normalized_job_name(getattr(identity, "display_name", None)),
+    }
+    principal_candidates.discard("")
+    if not principal_candidates:
+        return set(), "Could not identify the current app principal to verify refresh workflow permissions."
+    return principal_candidates, None
+
+
+def _job_permission_levels(workspace_client, job_id: int) -> tuple[set[str] | None, str | None]:
+    principal_candidates, identity_warning = _principal_candidates(workspace_client)
+    if not principal_candidates:
+        return None, identity_warning
+
+    try:
+        permissions = workspace_client.jobs.get_permissions(str(job_id))
+    except Exception:
+        return None, "Could not read refresh workflow permissions."
+
+    for acl in getattr(permissions, "access_control_list", None) or []:
+        principal_names = {
+            _normalized_job_name(getattr(acl, "user_name", None)),
+            _normalized_job_name(getattr(acl, "service_principal_name", None)),
+            _normalized_job_name(getattr(acl, "display_name", None)),
+        }
+        principal_names.discard("")
+        if not principal_candidates.intersection(principal_names):
+            continue
+        permission_levels = {
+            _clean(getattr(getattr(permission, "permission_level", None), "value", getattr(permission, "permission_level", None))).upper()
+            for permission in (getattr(acl, "all_permissions", None) or [])
+        }
+        return permission_levels, None
+    return None, "Could not confirm refresh workflow permissions from the job ACL."
+
+
 def _scheduler_path_status(job: object) -> tuple[bool, str, str | None]:
     job_settings = getattr(job, "settings", None)
     if job_settings is None:
@@ -187,43 +312,29 @@ def _scheduler_path_status(job: object) -> tuple[bool, str, str | None]:
 
 
 def _direct_run_now_permission(workspace_client, job_id: int) -> tuple[bool | None, str | None]:
-    try:
-        identity = workspace_client.current_user.me()
-    except Exception:
-        return None, "Could not verify immediate Run now permission. Direct trigger may still work, but the app could not inspect the current principal."
+    permission_levels, warning = _job_permission_levels(workspace_client, job_id)
+    if permission_levels is None:
+        return None, (
+            "Could not verify immediate Run now permission. Direct trigger may still work, but the app could not inspect the current principal."
+            if warning is None
+            else f"{warning} Direct trigger may still work."
+        )
+    if permission_levels.intersection({"IS_OWNER", "CAN_MANAGE", "CAN_MANAGE_RUN"}):
+        return True, None
+    return False, None
 
-    principal_candidates = {
-        _normalized_job_name(getattr(identity, "user_name", None)),
-        _normalized_job_name(getattr(identity, "display_name", None)),
-    }
-    principal_candidates.discard("")
 
-    if not principal_candidates:
-        return None, "Could not identify the current app principal to verify immediate Run now permission. Direct trigger may still work."
-
-    try:
-        permissions = workspace_client.jobs.get_permissions(str(job_id))
-    except Exception:
-        return None, "Could not read refresh workflow permissions to verify immediate Run now access. Direct trigger may still work."
-
-    for acl in getattr(permissions, "access_control_list", None) or []:
-        principal_names = {
-            _normalized_job_name(getattr(acl, "user_name", None)),
-            _normalized_job_name(getattr(acl, "service_principal_name", None)),
-            _normalized_job_name(getattr(acl, "display_name", None)),
-        }
-        principal_names.discard("")
-        if not principal_candidates.intersection(principal_names):
-            continue
-        permission_levels = {
-            _clean(getattr(getattr(permission, "permission_level", None), "value", getattr(permission, "permission_level", None))).upper()
-            for permission in (getattr(acl, "all_permissions", None) or [])
-        }
-        if permission_levels.intersection({"IS_OWNER", "CAN_MANAGE", "CAN_MANAGE_RUN"}):
-            return True, None
-        return False, None
-
-    return None, "Could not confirm immediate Run now permission from the refresh workflow ACL. Direct trigger may still work."
+def _direct_schedule_manage_permission(workspace_client, job_id: int) -> tuple[bool | None, str | None]:
+    permission_levels, warning = _job_permission_levels(workspace_client, job_id)
+    if permission_levels is None:
+        return None, (
+            "Could not verify shared workflow schedule-edit permission."
+            if warning is None
+            else f"{warning} Schedule editing may still work."
+        )
+    if permission_levels.intersection({"IS_OWNER", "CAN_MANAGE"}):
+        return True, None
+    return False, None
 
 
 def resolve_refresh_workflow_status(
@@ -412,6 +523,128 @@ def workspace_readiness_payload(readiness: WorkspaceReadiness) -> dict[str, obje
     payload["blocking_issues"] = list(readiness.blocking_issues)
     payload["warnings"] = list(readiness.warnings)
     return payload
+
+
+def resolve_shared_workflow_schedule_status(workspace_client=None) -> SharedWorkflowScheduleStatus:
+    workflow_status = resolve_refresh_workflow_status(
+        workspace_client=workspace_client,
+        workflow_kind="shared",
+        require_scheduler_path=False,
+    )
+    checked_at = _checked_at_text()
+    warnings = list(workflow_status.warnings)
+    blocking_issues = list(workflow_status.blocking_issues)
+    if not workflow_status.configured or not workflow_status.resolved or workflow_status.job_id is None:
+        return SharedWorkflowScheduleStatus(
+            configured=workflow_status.configured,
+            resolved=workflow_status.resolved,
+            job_id=workflow_status.job_id,
+            job_name=workflow_status.job_name,
+            scheduler_mode=workflow_status.scheduler_mode,
+            current_expression="",
+            current_interval_hours=None,
+            current_label="Unavailable",
+            timezone_id="UTC",
+            paused=False,
+            editable=False,
+            supported=False,
+            checked_at=checked_at,
+            management_available=None,
+            blocking_issues=tuple(blocking_issues),
+            warnings=tuple(warnings),
+        )
+
+    client = workspace_client or _workspace_client()
+    job = _load_job_by_id(client, workflow_status.job_id, workflow_kind="shared")
+    job_settings = getattr(job, "settings", None)
+    schedule = getattr(job_settings, "schedule", None)
+    if schedule is None:
+        current_label = {
+            "trigger": "Shared workflow uses a trigger, not a cron schedule.",
+            "continuous": "Shared workflow uses continuous execution, not a cron schedule.",
+            "missing": "Shared workflow has no editable cron schedule.",
+        }.get(workflow_status.scheduler_mode, "Shared workflow does not expose a cron schedule.")
+        manage_available, manage_warning = _direct_schedule_manage_permission(client, workflow_status.job_id)
+        if manage_warning:
+            warnings.append(manage_warning)
+        return SharedWorkflowScheduleStatus(
+            configured=True,
+            resolved=True,
+            job_id=workflow_status.job_id,
+            job_name=workflow_status.job_name,
+            scheduler_mode=workflow_status.scheduler_mode,
+            current_expression="",
+            current_interval_hours=None,
+            current_label=current_label,
+            timezone_id="UTC",
+            paused=False,
+            editable=False,
+            supported=False,
+            checked_at=checked_at,
+            management_available=manage_available,
+            blocking_issues=tuple(blocking_issues),
+            warnings=tuple(warnings),
+        )
+
+    current_expression = _clean(getattr(schedule, "quartz_cron_expression", None))
+    timezone_id = _clean(getattr(schedule, "timezone_id", None)) or "UTC"
+    paused = _pause_status(schedule) == "PAUSED"
+    interval_hours = _quartz_interval_hours(current_expression)
+    manage_available, manage_warning = _direct_schedule_manage_permission(client, workflow_status.job_id)
+    if manage_warning:
+        warnings.append(manage_warning)
+    supported = interval_hours in SCHEDULE_INTERVAL_OPTIONS
+    if not supported:
+        warnings.append(
+            "Shared workflow uses a custom cron schedule. The app can display it, but only the standard 1/3/6/12/24-hour options are editable here."
+        )
+    return SharedWorkflowScheduleStatus(
+        configured=True,
+        resolved=True,
+        job_id=workflow_status.job_id,
+        job_name=workflow_status.job_name,
+        scheduler_mode=workflow_status.scheduler_mode,
+        current_expression=current_expression,
+        current_interval_hours=interval_hours,
+        current_label=_schedule_interval_label(interval_hours) if supported else f"Custom cron: {current_expression or '(unset)'}",
+        timezone_id=timezone_id,
+        paused=paused,
+        editable=bool(manage_available) and supported,
+        supported=supported,
+        checked_at=checked_at,
+        management_available=manage_available,
+        blocking_issues=tuple(blocking_issues),
+        warnings=tuple(warnings),
+    )
+
+
+def update_shared_workflow_schedule(interval_hours: int, workspace_client=None) -> SharedWorkflowScheduleStatus:
+    client = workspace_client or _workspace_client()
+    status = resolve_shared_workflow_schedule_status(client)
+    if not status.configured or not status.resolved or status.job_id is None:
+        raise RefreshJobConfigError("Shared refresh workflow is not configured or could not be resolved.")
+    if not status.supported:
+        raise RefreshJobConfigError(
+            "Shared workflow schedule editing is only supported when the job already uses a cron schedule."
+        )
+    if status.management_available is False:
+        raise RefreshJobConfigError(
+            f"The app principal cannot edit the shared workflow schedule for job {status.job_id}. Grant CAN_MANAGE or update the job externally."
+        )
+
+    from databricks.sdk.service import jobs
+
+    pause_status = jobs.PauseStatus.PAUSED if status.paused else jobs.PauseStatus.UNPAUSED
+    new_schedule = jobs.CronSchedule(
+        quartz_cron_expression=_schedule_interval_to_quartz(int(interval_hours)),
+        timezone_id=status.timezone_id or "UTC",
+        pause_status=pause_status,
+    )
+    client.jobs.update(
+        job_id=int(status.job_id),
+        new_settings=jobs.JobSettings(schedule=new_schedule),
+    )
+    return resolve_shared_workflow_schedule_status(client)
 
 
 def build_refresh_job_named_params(

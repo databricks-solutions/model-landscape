@@ -69,6 +69,13 @@ def _find_callback_by_output(app, output_id: str):
     raise AssertionError(f"callback with output {output_id!r} not found")
 
 
+def _find_callback_meta_by_output(app, output_id: str):
+    for key, meta in app.callback_map.items():
+        if key.startswith(f"{output_id}.") or f"...{output_id}." in key:
+            return meta
+    raise AssertionError(f"callback metadata with output {output_id!r} not found")
+
+
 def _find_callback_by_input_and_output(app, input_id: str, output_id: str):
     for key, meta in app.callback_map.items():
         if output_id not in key:
@@ -665,6 +672,22 @@ def test_render_overview_shows_empty_state_when_no_monitors_exist(monkeypatch) -
     assert "No monitors onboarded yet. Go to Onboarding to add your first model." in str(result)
 
 
+def test_render_overview_surfaces_backend_errors_instead_of_raising(monkeypatch) -> None:
+    class _FailingBackend:
+        def get_overview_rows(self, metric="psi"):
+            assert metric == "psi"
+            raise RuntimeError("warehouse timeout")
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FailingBackend())
+    app = create_app()
+    fn = _find_callback_by_output(app, "overview-page-body")
+
+    result = fn("/", None, {})
+
+    assert "Could not load overview: warehouse timeout" in str(result)
+    assert "Overview is unavailable right now." in str(result)
+
+
 def test_render_overview_surfaces_computing_pending_bucket(monkeypatch) -> None:
     class _FakeBackend:
         def get_overview_rows(self, metric="psi"):
@@ -778,7 +801,7 @@ def test_render_drift_callback_reports_when_only_one_window_exists(monkeypatch) 
     callback = app.callback_map[RENDER_DRIFT_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn("/drift", "fraud_model_demo", "psi", "weekly", 10, None, None, "all", "all", False, 0, {})
+    result = fn("/drift", "fraud_model_demo", 0, {}, 0, "psi", "weekly", 10, None, None, "all", "all", False)
 
     assert "Only one weekly comparison window is available" in str(result[1])
     assert "Categorical features are stored" in str(result[1])
@@ -816,9 +839,9 @@ def test_render_drift_callback_respects_top_n_selection(monkeypatch) -> None:
     callback = app.callback_map[RENDER_DRIFT_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result_top_5 = fn("/drift", "fraud_model_demo", "psi", "daily", 5, None, None, "all", "all", False, 0, {})
-    result_top_6 = fn("/drift", "fraud_model_demo", "psi", "daily", 6, None, None, "all", "all", False, 0, {})
-    result_thresholds = fn("/drift", "fraud_model_demo", "psi", "daily", 5, None, None, "all", "all", True, 0, {})
+    result_top_5 = fn("/drift", "fraud_model_demo", 0, {}, 0, "psi", "daily", 5, None, None, "all", "all", False)
+    result_top_6 = fn("/drift", "fraud_model_demo", 0, {}, 1, "psi", "daily", 6, None, None, "all", "all", False)
+    result_thresholds = fn("/drift", "fraud_model_demo", 0, {}, 2, "psi", "daily", 5, None, None, "all", "all", True)
 
     heatmap_5 = result_top_5[0].children.children.figure
     top_5_figure = result_top_5[3].children.children.figure
@@ -986,8 +1009,8 @@ def test_render_quality_callback_surfaces_history_and_latest_snapshot(monkeypatc
     callback = app.callback_map[RENDER_QUALITY_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn("/quality", "fraud_model_demo", None, None, "all", "all", False, 0, {})
-    result_with_guides = fn("/quality", "fraud_model_demo", None, None, "all", "all", True, 0, {})
+    result = fn("/quality", "fraud_model_demo", 0, {}, 0, None, None, "all", "all", False)
+    result_with_guides = fn("/quality", "fraud_model_demo", 0, {}, 1, None, None, "all", "all", True)
 
     assert "Monitoring Rows" in str(result[0])
     assert "Rows Per Comparison Window" in str(result[1])
@@ -1031,13 +1054,54 @@ def test_render_quality_callback_uses_na_for_missing_prediction_mean_and_shows_s
     callback = app.callback_map[RENDER_QUALITY_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn("/quality", "fraud_model_demo", None, None, "all", "all", False, 0, {})
+    result = fn("/quality", "fraud_model_demo", 0, {}, 0, None, None, "all", "all", False)
 
     rendered = str(result[0])
     assert "Prediction Average" in rendered
     assert "N/A" in rendered
     assert "Prediction Std" in rendered
     assert "No labeled snapshot is available for this monitor." in str(result[3])
+
+
+def test_render_quality_callback_surfaces_backend_errors_instead_of_raising(monkeypatch) -> None:
+    class _FailingBackend:
+        def get_monitor_config(self, model_id):
+            raise RuntimeError("sql endpoint unavailable")
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FailingBackend())
+    app = create_app()
+    callback = app.callback_map[RENDER_QUALITY_CALLBACK]["callback"]
+    fn = getattr(callback, "__wrapped__", callback)
+
+    result = fn("/quality", "fraud_model_demo", 0, {}, 0, None, None, "all", "all", False)
+
+    assert "Could not load data quality: sql endpoint unavailable" in str(result[0])
+    assert "Data quality is unavailable right now." in str(result[0])
+
+
+def test_drift_and_quality_callbacks_use_apply_buttons_for_expensive_queries() -> None:
+    app = create_app()
+
+    drift_meta = app.callback_map[RENDER_DRIFT_CALLBACK]
+    drift_input_ids = [item["id"] for item in drift_meta.get("inputs", [])]
+    drift_state_ids = [item["id"] for item in drift_meta.get("state", [])]
+    assert "drift-apply-filters-btn" in drift_input_ids
+    assert "drift-metric-select" in drift_state_ids
+    assert "drift-granularity-select" in drift_state_ids
+    assert "drift-top-n" in drift_state_ids
+    assert "drift-date-range" in drift_state_ids
+    assert "drift-class-basis-select" in drift_state_ids
+    assert "drift-class-value-select" in drift_state_ids
+    assert "drift-threshold-toggle" in drift_state_ids
+
+    quality_meta = app.callback_map[RENDER_QUALITY_CALLBACK]
+    quality_input_ids = [item["id"] for item in quality_meta.get("inputs", [])]
+    quality_state_ids = [item["id"] for item in quality_meta.get("state", [])]
+    assert "quality-apply-filters-btn" in quality_input_ids
+    assert "quality-date-range" in quality_state_ids
+    assert "quality-class-basis-select" in quality_state_ids
+    assert "quality-class-value-select" in quality_state_ids
+    assert "quality-threshold-toggle" in quality_state_ids
 
 
 def test_scan_source_table_failure_clears_prior_scan_data(monkeypatch) -> None:
@@ -1112,7 +1176,7 @@ def test_render_feature_deep_dive_reports_distribution_context(monkeypatch) -> N
     app = create_app()
     fn = _find_callback_by_input_and_output(app, "deepdive-feature-select", "deepdive-distribution-container")
 
-    distribution, dimension, context = fn("/features", "fraud_model_demo", "amount", "region", "auto", 40, "", "off", 1.0, 0, {})
+    distribution, dimension, context = fn("/features", "fraud_model_demo", "amount", "region", 0, {}, 0, "auto", 40, "", "off", 1.0)
 
     assert "Distribution: amount" in str(distribution)
     assert "amount by region" in str(dimension).lower()
@@ -1144,7 +1208,7 @@ def test_render_feature_deep_dive_iqr_mode_requests_exact_samples(monkeypatch) -
     app = create_app()
     fn = _find_callback_by_input_and_output(app, "deepdive-feature-select", "deepdive-distribution-container")
 
-    distribution, _, context = fn("/features", "fraud_model_demo", "amount", "", "fixed", 20, "", "iqr_fence", 1.5, 0, {})
+    distribution, _, context = fn("/features", "fraud_model_demo", "amount", "", 0, {}, 1, "fixed", 20, "", "iqr_fence", 1.5)
 
     assert backend.calls == [True]
     assert "Distribution: amount" in str(distribution)
@@ -1160,10 +1224,71 @@ def test_render_feature_deep_dive_handles_backend_errors(monkeypatch) -> None:
     app = create_app()
     fn = _find_callback_by_input_and_output(app, "deepdive-feature-select", "deepdive-distribution-container")
 
-    distribution, dimension, context = fn("/features", "fraud_model_demo", "amount", "", "auto", 40, "", "off", 1.0, 0, {})
+    distribution, dimension, context = fn("/features", "fraud_model_demo", "amount", "", 0, {}, 0, "auto", 40, "", "off", 1.0)
 
     assert "Could not load feature detail: feature read failed" in str(distribution)
     assert "Feature detail is unavailable right now." in str(context)
+
+
+def test_render_feature_deep_dive_reports_unsafe_raw_fallback(monkeypatch) -> None:
+    class _FakeBackend:
+        def get_feature_distribution_details(self, model_id, feature, require_exact_samples=False):
+            return {
+                "baseline": pd.Series(dtype=float),
+                "current": pd.Series(dtype=float),
+                "distribution_source": "unavailable_unsafe_bounded_read",
+                "approximate": False,
+                "window_label": "Baseline: 2026-01-01 to 2026-01-07 | Current: 2026-01-08 to 2026-01-14",
+            }
+
+        def get_dimension_breakdown(self, model_id, feature, dimension):
+            return pd.DataFrame()
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_input_and_output(app, "deepdive-feature-select", "deepdive-distribution-container")
+
+    distribution, _, context = fn("/features", "fraud_model_demo", "amount", "", 0, {}, 0, "auto", 40, "", "off", 1.0)
+
+    assert "cannot enforce a hard cap on raw source-window reads" in str(distribution)
+    assert "cannot enforce a hard cap on raw source-window reads" in str(context)
+
+
+def test_render_feature_deep_dive_uses_prevent_initial_call() -> None:
+    app = create_app()
+
+    for meta in app._callback_list:
+        if "deepdive-distribution-container.children" not in str(meta.get("output")):
+            continue
+        assert meta.get("prevent_initial_call") is True
+        return
+
+    raise AssertionError("feature deep dive render callback not found")
+
+
+def test_render_feature_deep_dive_uses_apply_button_for_distribution_controls() -> None:
+    app = create_app()
+
+    for meta in app._callback_list:
+        output = str(meta.get("output"))
+        if "deepdive-distribution-container.children" not in output:
+            continue
+        input_ids = {item["id"] for item in meta.get("inputs", [])}
+        state_ids = {item["id"] for item in meta.get("state", [])}
+        assert "deepdive-apply-controls-btn" in input_ids
+        assert "deepdive-binning-mode-select" not in input_ids
+        assert "deepdive-bin-count-input" not in input_ids
+        assert "deepdive-custom-edges-input" not in input_ids
+        assert "deepdive-outlier-mode-select" not in input_ids
+        assert "deepdive-outlier-value-input" not in input_ids
+        assert "deepdive-binning-mode-select" in state_ids
+        assert "deepdive-bin-count-input" in state_ids
+        assert "deepdive-custom-edges-input" in state_ids
+        assert "deepdive-outlier-mode-select" in state_ids
+        assert "deepdive-outlier-value-input" in state_ids
+        return
+
+    raise AssertionError("feature deep dive render callback not found")
 
 
 def test_analysis_pages_include_loading_wrappers() -> None:
@@ -1403,6 +1528,9 @@ def test_render_reference_callback_shows_refresh_diagnostics(monkeypatch) -> Non
     result = fn("/reference", "fraud_model_demo", None, 0, {})
 
     assert "Refresh Diagnostics" in str(result)
+    assert "Thresholds" in str(result)
+    assert "Shared Workflow Schedule" in str(result)
+    assert "Compute Guidance" in str(result)
     assert "Recent Median Duration" in str(result)
     assert "Daily Profiles Bound" in str(result)
     assert "Recent Diagnosed Runs" in str(result)
@@ -1700,6 +1828,86 @@ def test_restore_reference_monitor_callback_restores_selected_monitor(monkeypatc
 
     assert repository.restored == ["fraud_model_demo"]
     assert "Restored Fraud Model Demo" in str(result[0])
+    assert result[1]
+
+
+def test_save_reference_schedule_persists_threshold_overrides(monkeypatch) -> None:
+    saved = {}
+
+    config = callbacks_module.MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.demo.inference",
+        contract=callbacks_module.build_inference_contract(
+            columns=["event_ts", "prediction", "label", "amount"],
+            timestamp_col="event_ts",
+            model_id_col=None,
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=["amount"],
+        ),
+        baseline=callbacks_module.build_default_baseline(n_days=7),
+        problem_type="classification",
+        performance_metric_names=("f1",),
+        default_performance_metric="f1",
+    )
+
+    class _FakeBackend:
+        def __init__(self):
+            self.repository = SimpleNamespace(
+                upsert_monitor_config=lambda updated: saved.setdefault("config", updated),
+                get_monitor_runtime_state=lambda _: None,
+            )
+
+        def get_monitor_config(self, model_id):
+            assert model_id == "fraud_model_demo"
+            return config
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_input_and_output(app, "reference-save-schedule-btn", "reference-page-status")
+
+    result = fn(
+        1,
+        "fraud_model_demo",
+        None,
+        "6h",
+        "daily_7d_repair",
+        ["enabled"],
+        ["f1"],
+        "f1",
+        0.15,
+        0.35,
+        0.08,
+        0.2,
+        0.12,
+        0.4,
+        2.0,
+        8.0,
+        {},
+    )
+
+    assert saved["config"].threshold_overrides == {
+        "psi": {"warning": 0.15, "critical": 0.35},
+        "js_divergence": {"warning": 0.08, "critical": 0.2},
+        "kl_divergence": {"warning": 0.12, "critical": 0.4},
+        "null_rate": {"warning": 2.0, "critical": 8.0},
+    }
+    assert "Updated monitor settings for Fraud Model Demo" in str(result[0])
+
+
+def test_save_reference_shared_schedule_callback_updates_shared_job(monkeypatch) -> None:
+    monkeypatch.setattr(
+        callbacks_module,
+        "update_shared_workflow_schedule",
+        lambda interval_hours: SimpleNamespace(current_label="Every 12 Hours", job_id=321),
+    )
+    app = create_app()
+    fn = _find_callback_by_input_and_output(app, "reference-save-shared-schedule-btn", "reference-page-status")
+
+    result = fn(1, 12)
+
+    assert "Updated the shared refresh workflow to every 12 hours for job 321." in str(result[0])
     assert result[1]
 
 

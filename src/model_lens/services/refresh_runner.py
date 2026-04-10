@@ -1192,9 +1192,13 @@ def _execute_target(
         )
 
         if target.scope == "bootstrap":
-            repository.replace_all_refresh_results(config.model_key, result, source_run_id=run_id)
+            generation_id = run_id
+            repository.replace_all_refresh_results(config.model_key, result, source_run_id=generation_id)
         else:
-            repository.append_refresh_result(config.model_key, result, source_run_id=run_id)
+            generation_getter = getattr(repository, "get_latest_published_generation_id", None)
+            generation_id = generation_getter(config.model_key) if callable(generation_getter) else None
+            generation_id = generation_id or run_id
+            repository.append_refresh_result(config.model_key, result, source_run_id=generation_id)
 
         repository.complete_refresh_run(
             run_id,
@@ -1204,6 +1208,8 @@ def _execute_target(
             quality_row_count=len(result.quality_rows),
             performance_row_count=len(result.performance_rows),
             incident_row_count=len(result.incident_rows),
+            generation_id=generation_id,
+            publish=True,
         )
         completed_at = _utc_now()
         _upsert_runtime_state(

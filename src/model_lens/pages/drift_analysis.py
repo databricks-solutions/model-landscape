@@ -124,6 +124,22 @@ def layout():
                         ],
                         md=4,
                     ),
+                    dbc.Col(
+                        [
+                            dbc.Label("Apply Filters", className="text-muted"),
+                            dbc.Button(
+                                "Apply Drift Filters",
+                                id="drift-apply-filters-btn",
+                                color="primary",
+                                className="w-100",
+                            ),
+                            html.Small(
+                                "Metric, date, class, granularity, and guide changes apply when you click this button.",
+                                className="text-muted d-block mt-1",
+                            ),
+                        ],
+                        md=2,
+                    ),
                 ],
                 className="mb-4",
             ),

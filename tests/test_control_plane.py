@@ -66,11 +66,12 @@ class FakeWarehouse:
             "labels_table": "",
             "labels_join_col": "",
             "labels_order_col": "",
-            "performance_metric_names": '["f1","precision","recall"]',
-            "default_performance_metric": "f1",
-            "mlflow_experiment_name": "",
-            "mlflow_experiment_id": "",
-            "mlflow_run_id": "",
+        "performance_metric_names": '["f1","precision","recall"]',
+        "default_performance_metric": "f1",
+        "threshold_overrides": "{}",
+        "mlflow_experiment_name": "",
+        "mlflow_experiment_id": "",
+        "mlflow_run_id": "",
             "mlflow_registered_model_name": "",
             "mlflow_model_version": "",
             "created_by": "app",
@@ -132,12 +133,13 @@ class FakeWarehouse:
                 "drift_cadence_preset": params[22],
                 "performance_cadence_preset": params[23],
                 "schedule_enabled": params[24],
-                "mlflow_experiment_name": params[25],
-                "mlflow_experiment_id": params[26],
-                "mlflow_run_id": params[27],
-                "mlflow_registered_model_name": params[28],
-                "mlflow_model_version": params[29],
-                "created_by": params[30],
+                "threshold_overrides": params[25],
+                "mlflow_experiment_name": params[26],
+                "mlflow_experiment_id": params[27],
+                "mlflow_run_id": params[28],
+                "mlflow_registered_model_name": params[29],
+                "mlflow_model_version": params[30],
+                "created_by": params[31],
             }
 
     def execute_batch(self, insert_template: str, rows: list[tuple], batch_size: int = 200) -> None:
@@ -173,7 +175,7 @@ class FakeWarehouse:
             ])
         if "ROUND(AVG(CASE WHEN s.`amount` IS NULL" in sql:
             return pd.DataFrame([{"amount": 1.25, "segment": 0.0}])
-        if "WITH historical_drift AS" in sql:
+        if "historical_drift AS" in sql:
             return pd.DataFrame([{
                 "model_key": self.monitor_row["model_key"],
                 "display_name": self.monitor_row["display_name"],
@@ -195,7 +197,7 @@ class FakeWarehouse:
             return pd.DataFrame([{"label_value": "0"}, {"label_value": "1"}])
         if "AS sampled_value" in sql:
             return pd.DataFrame([{"sampled_value": "m1"}])
-        if "FROM model_observability.control_plane.incidents" in sql and "WHERE status = 'open'" in sql:
+        if "FROM model_observability.control_plane.incidents" in sql and "status = 'open'" in sql:
             return pd.DataFrame([{
                 "model_key": self.monitor_row["model_key"],
                 "feature_name": "amount",
@@ -340,8 +342,45 @@ def test_upsert_monitor_config_keeps_full_feature_and_categorical_metadata() -> 
     assert insert_params[22] == "6h"
     assert insert_params[23] == "disabled"
     assert insert_params[24] is True
-    assert insert_params[25] == "fraud_monitoring"
-    assert insert_params[29] == "7"
+    assert insert_params[25] == "{}"
+    assert insert_params[26] == "fraud_monitoring"
+    assert insert_params[30] == "7"
+
+
+def test_upsert_monitor_config_persists_threshold_overrides() -> None:
+    warehouse = FakeWarehouse()
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    config = replace(
+        _monitor_config(),
+        threshold_overrides={
+            "psi": {"warning": 0.15, "critical": 0.35},
+            "null_rate": {"warning": 2.0, "critical": 8.0},
+        },
+    )
+
+    repository.upsert_monitor_config(config)
+
+    _, insert_params = warehouse.executed_params[-1]
+    assert json.loads(insert_params[25]) == {
+        "psi": {"warning": 0.15, "critical": 0.35},
+        "null_rate": {"warning": 2.0, "critical": 8.0},
+    }
+
+
+def test_list_monitor_configs_parses_threshold_overrides() -> None:
+    warehouse = FakeWarehouse()
+    warehouse.monitor_row["threshold_overrides"] = json.dumps({
+        "psi": {"warning": 0.15, "critical": 0.35},
+        "null_rate": {"warning": 2.0, "critical": 8.0},
+    })
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    config = repository.list_monitor_configs(status="active")[0]
+
+    assert config.threshold_overrides == {
+        "psi": {"warning": 0.15, "critical": 0.35},
+        "null_rate": {"warning": 2.0, "critical": 8.0},
+    }
 
 
 def test_upsert_monitor_config_accepts_hyphenated_feature_names() -> None:
@@ -416,6 +455,30 @@ def test_load_monitor_frame_sampling_caps_rows_per_day_and_total_rows() -> None:
     assert "LIMIT 500" in data_query
     assert "CAST(%s AS DATE)" in data_query
     assert params == ("m1", "2026-01-01", "2026-01-21")
+
+
+def test_get_daily_quality_profile_rows_limits_to_recent_dates() -> None:
+    warehouse = FakeWarehouse()
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    repository.get_daily_quality_profile_rows("payments_risk_v1")
+
+    data_query, params = warehouse.query_param_calls[-1]
+    assert "recent_dates" in data_query
+    assert "LIMIT 400" in data_query
+    assert params == ("payments_risk_v1",)
+
+
+def test_get_daily_label_metric_rows_limits_to_recent_dates() -> None:
+    warehouse = FakeWarehouse()
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    repository.get_daily_label_metric_rows("payments_risk_v1")
+
+    data_query, params = warehouse.query_param_calls[-1]
+    assert "recent_dates" in data_query
+    assert "LIMIT 400" in data_query
+    assert params == ("payments_risk_v1",)
 
 
 def test_load_monitor_frame_uses_shared_labels_join_when_entity_id_is_absent() -> None:
@@ -1202,6 +1265,83 @@ def test_update_refresh_run_metadata_updates_range_and_row_counts() -> None:
     sql, params = warehouse.executed_params[-1]
     assert "UPDATE model_observability.control_plane.refresh_runs" in sql
     assert params == ("2026-01-01", "2026-01-21", "2026-01-15", "2026-01-21", 123, 45, "run-1")
+
+
+def test_complete_refresh_run_can_publish_generation_metadata() -> None:
+    warehouse = FakeWarehouse()
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    repository.complete_refresh_run(
+        "run-1",
+        status="completed",
+        window_count=2,
+        drift_row_count=10,
+        quality_row_count=3,
+        performance_row_count=4,
+        incident_row_count=1,
+        generation_id="generation-1",
+        publish=True,
+    )
+
+    sql, params = warehouse.executed_params[-1]
+    assert "generation_id = %s" in sql
+    assert "published_at = CAST(%s AS TIMESTAMP)" in sql
+    assert params[-3] == "generation-1"
+    assert params[-2]
+    assert params[-1] == "run-1"
+
+
+def test_replace_all_refresh_results_stages_generation_without_deleting_existing_rows() -> None:
+    warehouse = FakeWarehouse()
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    repository.replace_all_refresh_results(
+        "payments_risk_v1",
+        RefreshResult(
+            drift_rows=[
+                {
+                    "model_key": "payments_risk_v1",
+                    "window_id": "window-1",
+                    "feature_name": "amount",
+                    "metric_name": "psi",
+                    "metric_value": 0.12,
+                    "window_start": "2026-01-08",
+                    "window_end": "2026-01-14",
+                    "baseline_start": "2026-01-01",
+                    "baseline_end": "2026-01-07",
+                    "ref_mean": 1.0,
+                    "cur_mean": 1.1,
+                    "ref_std": 0.1,
+                    "cur_std": 0.2,
+                    "ref_null_pct": 0.0,
+                    "cur_null_pct": 0.0,
+                    "ref_count": 100,
+                    "cur_count": 100,
+                    "computed_at": "2026-01-14T00:00:00+00:00",
+                }
+            ],
+            quality_rows=[],
+            performance_rows=[],
+            incident_rows=[],
+            incident_history_rows=[],
+            quality_history_rows=[],
+            window_rows=[],
+            daily_quality_profile_rows=[],
+            performance_bin_specs={},
+        ),
+        source_run_id="generation-1",
+    )
+
+    assert not any(
+        "DELETE FROM model_observability.control_plane.drift_metrics" in sql
+        for sql, _ in warehouse.executed_params
+    )
+    drift_insert_rows = next(
+        rows
+        for sql, rows in warehouse.batch_calls
+        if "INSERT INTO model_observability.control_plane.drift_metrics" in sql
+    )
+    assert drift_insert_rows[0][-1] == "generation-1"
 
 
 def test_get_label_watermark_uses_label_signature_for_in_source_labels() -> None:

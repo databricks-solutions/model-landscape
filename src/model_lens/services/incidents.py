@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from model_lens.services.thresholds import DEFAULT_THRESHOLDS
+from model_lens.services.thresholds import merged_thresholds
 
 _SEVERITY_RANK = {"warning": 1, "critical": 2}
 
@@ -16,7 +16,7 @@ def _observed_at(row: dict[str, Any]) -> str:
 
 
 def _incident_candidate(row: dict[str, Any], thresholds: dict[str, dict[str, float]]) -> dict[str, Any] | None:
-    active_thresholds = thresholds or DEFAULT_THRESHOLDS
+    active_thresholds = merged_thresholds(thresholds)
     metric_name = str(row["metric_name"])
     metric_thresholds = active_thresholds.get(metric_name)
     if not metric_thresholds:
@@ -71,7 +71,7 @@ def _incident_map(
 
 
 def build_incidents(drift_rows: list[dict[str, Any]], thresholds: dict | None = None) -> list[dict]:
-    active_thresholds = thresholds or DEFAULT_THRESHOLDS
+    active_thresholds = merged_thresholds(thresholds)
     return list(_incident_map(drift_rows, active_thresholds).values())
 
 
@@ -82,7 +82,7 @@ def build_incident_history(
     prior_open_incidents: dict[tuple[str, str, str], dict[str, Any]] | None = None,
     thresholds: dict | None = None,
 ) -> list[dict[str, Any]]:
-    active_thresholds = thresholds or DEFAULT_THRESHOLDS
+    active_thresholds = merged_thresholds(thresholds)
     rows_by_window: dict[str, list[dict[str, Any]]] = {}
     for row in drift_rows:
         rows_by_window.setdefault(str(row.get("window_id") or ""), []).append(row)

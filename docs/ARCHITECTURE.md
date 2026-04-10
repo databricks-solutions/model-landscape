@@ -153,6 +153,8 @@ The refresh workflow is a Spark-capable Databricks job.
 
 Model Lens uses one shared refresh workflow by default. The bundle-managed workflow and the generated manual existing-app workflow payload are both scheduled hourly, so saved monitors have a default pickup path even when the app cannot call `Run now`, as long as that shared workflow already exists in the workspace and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`.
 
+Operators can now change the shared wake interval from `Monitor Settings -> Admin` when the app identity has `CAN_MANAGE` on that shared job. That editor only changes the cron schedule on the existing shared workflow; it does not rewrite tasks, libraries, or compute settings, and it falls back to read-only status when the app can inspect but not manage the job.
+
 The app does not run the heavy first refresh inline. During activation it saves the monitor config, resolves the workflow from `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`, and can trigger the job asynchronously so the UI stays responsive. Those are deploy-time app environment variables, not onboarding inputs. The shared refresh job now declares job-level parameters, pushes them into the wheel task's named arguments, and the app triggers `jobs/run-now` with `job_parameters`, which is the override path Databricks actually honors for this workflow. The workflow entrypoint also treats `scope=scheduler` plus a single `model_key` as `bootstrap`, so targeted single-monitor runs still land on the bootstrap path even if the caller only overrides `model_key`.
 
 For large tenants, there is now an optional extension path for bootstrap/backfill acceleration:
@@ -163,6 +165,8 @@ For large tenants, there is now an optional extension path for bootstrap/backfil
 If either is set, direct bootstrap/backfill triggers use that second workflow instead of the main shared job. If neither is set, bootstrap uses the shared refresh workflow by default. This extension is intentionally non-blocking: readiness and scheduler-only operation are still anchored on the main shared workflow so low-permission workspaces do not dead-end when the optional second lane is absent.
 
 `CAN MANAGE RUN` on the shared refresh job is therefore optional acceleration for the app service principal, while the job's Run as identity still needs the source-data and control-plane privileges required for the actual computation. If a separate bootstrap job is configured by ID, `CAN MANAGE RUN` on that second job is only required for direct bootstrap acceleration; scheduled pickup still falls back to the main shared job.
+
+Severity thresholds are also no longer fully global. Model Lens still ships default thresholds for `psi`, `js_divergence`, `kl_divergence`, and `null_rate`, but each monitor can override them in `Monitor Settings -> Settings`. Those overrides affect Overview severity, Drift/Data Quality threshold guides, and future incident generation. Historical incident history is intentionally left unchanged so past events remain auditable under the thresholds that produced them.
 
 The `Setup` step now validates more than the control-plane namespace. `Validate Workspace Wiring` computes a workspace-readiness state with three modes:
 
@@ -188,6 +192,8 @@ Responsibilities:
 - materialize daily quality, feature, and performance profiles from the Spark range load, then derive the persisted comparison-window history from those daily profiles in the same refresh pass
 - for non-bootstrap runs, read the affected persisted daily facts back through the Spark repository, merge them with the current run’s daily facts there, and derive the window/history tables from that Spark-side union instead of a Python list merge
 - when the Spark repository is active, persist the affected derived/fact tables back into Delta through Spark writes instead of row-batch warehouse inserts
+- publish full bootstrap replacements as a new refresh generation only after every affected result table has been written, so a crash mid-bootstrap leaves the previously published generation visible instead of blanking the monitor
+- keep incremental append refreshes inside the currently published generation and rewrite only the affected windows/dates there; that preserves the active generation pointer but is still a scoped in-place swap rather than a full copy-on-write publish
 - before those strict Spark writes, normalize required metadata fields such as `model_key`, `window_id`, and `computed_at` at the repository boundary so nullability-only row-contract gaps do not abort bootstrap persistence
 - with the Spark repository active, numeric drift histogram aggregation and incident lifecycle derivation also stay inside the Spark refresh layer rather than dropping back to Python helpers on the hot path
 - stream the final derived rows that still need Python-side packaging with iterator-based reads rather than whole-frame `collect()` calls, so the driver sees only already-aggregated outputs
@@ -275,8 +281,8 @@ Current limitation:
 1. In Lakebase mode, the app reads monitor summary and incident inbox data from Lakebase.
 2. In warehouse-only mode, or if Lakebase is unavailable, it reads those views from the warehouse-backed repository.
 3. Overview severity and the Drift top-feature ranking are derived from historical max drift across the stored comparison windows, while `quality_metrics` remains the latest model-wide compatibility row rebuilt from daily quality facts.
-4. Drift and Data Quality date-range filters are applied inclusively, and binary class filters (`actual` / `predicted`, `positive` / `negative`) read the new class-aware daily facts instead of rescanning source tables. If a class filter is requested before those daily facts exist, the app returns an explicit unavailable state.
-5. Feature Deep Dive reads persisted daily-feature distributions first and only uses bounded source-window fallbacks; it no longer falls back to an unbounded raw-table scan. Custom edges and percentile clipping request exact bounded samples when they are available.
+4. Drift and Data Quality date-range filters are applied inclusively, and binary class filters (`actual` / `predicted`, `positive` / `negative`) read the new class-aware daily facts instead of rescanning source tables. Those heavier filter controls now apply explicitly through `Apply Drift Filters` / `Apply Quality Filters`, so changing several controls does not trigger a burst of duplicate warehouse reads. If a class filter is requested before those daily facts exist, the app returns an explicit unavailable state.
+5. Feature Deep Dive reads persisted daily-feature distributions first and only uses bounded source-window fallbacks; it no longer falls back to an unbounded raw-table scan. Custom edges and percentile clipping request exact bounded samples when they are available, and the heavier binning/outlier control changes are applied explicitly through the page's `Apply Distribution Controls` action instead of rerendering on every control default/change.
 6. The Performance timeline prefers `daily_label_metrics`, so undefined daily precision / recall / F1 render as gaps instead of being implied as zeros or weighted window aggregates.
 7. The app renders the current state for operators with loading indicators around the slower warehouse-backed panes.
 

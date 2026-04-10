@@ -1230,13 +1230,14 @@ def refresh_monitor_backfill(
             all_drift_rows,
             all_window_rows,
             prior_open_incidents=prior_open_incidents,
+            thresholds=config.threshold_overrides,
         )
 
     return RefreshResult(
         drift_rows=all_drift_rows,
         quality_rows=_build_quality_rows(config=config, inference_df=inference_df, computed_at=now) if include_drift_quality else [],
         performance_rows=all_performance_rows,
-        incident_rows=build_incidents(latest_window_drift_rows) if include_drift_quality else [],
+        incident_rows=build_incidents(latest_window_drift_rows, thresholds=config.threshold_overrides) if include_drift_quality else [],
         incident_history_rows=all_incident_history_rows,
         quality_history_rows=all_quality_history_rows,
         window_rows=all_window_rows,
@@ -1254,7 +1255,7 @@ def refresh_monitor(config: MonitorConfig, inference_df: pd.DataFrame) -> Refres
         drift_rows=latest_drift_rows,
         quality_rows=result.quality_rows,
         performance_rows=latest_performance_rows,
-        incident_rows=build_incidents(latest_drift_rows),
+        incident_rows=build_incidents(latest_drift_rows, thresholds=config.threshold_overrides),
         incident_history_rows=[
             row for row in result.incident_history_rows if str(row["window_end"]) == latest_window_end
         ],
@@ -1314,12 +1315,13 @@ def derive_refresh_result_from_daily_profiles(
     )
     latest_window_end = max((metadata["window_end"] for metadata in metadata_list), default="")
     latest_drift_rows = [row for row in drift_rows if str(row["window_end"]) == latest_window_end]
-    incident_rows = build_incidents(latest_drift_rows) if include_drift_quality else []
+    incident_rows = build_incidents(latest_drift_rows, thresholds=config.threshold_overrides) if include_drift_quality else []
     incident_history_rows = (
         build_incident_history(
             drift_rows,
             window_rows,
             prior_open_incidents=prior_open_incidents,
+            thresholds=config.threshold_overrides,
         )
         if include_drift_quality
         else []
@@ -1418,7 +1420,7 @@ def refresh_monitor_window_frames(
         drift_rows=drift_rows,
         quality_rows=[],
         performance_rows=performance_rows,
-        incident_rows=build_incidents(drift_rows) if drift_rows else [],
+        incident_rows=build_incidents(drift_rows, thresholds=config.threshold_overrides) if drift_rows else [],
         incident_history_rows=[],
         quality_history_rows=quality_history_rows,
         window_rows=window_rows,

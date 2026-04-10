@@ -109,6 +109,22 @@ def layout():
                         ],
                         md=3,
                     ),
+                    dbc.Col(
+                        [
+                            dbc.Label("Apply Controls", className="text-muted"),
+                            dbc.Button(
+                                "Apply Distribution Controls",
+                                id="deepdive-apply-controls-btn",
+                                color="primary",
+                                className="w-100",
+                            ),
+                            html.Small(
+                                "Feature and dimension changes update immediately. Binning and outlier settings apply when you click this button.",
+                                className="text-muted d-block mt-2",
+                            ),
+                        ],
+                        md=4,
+                    ),
                 ],
                 className="mb-4",
             ),

@@ -72,6 +72,24 @@ def layout():
                         ],
                         md=2,
                     ),
+                    dbc.Col(
+                        [
+                            dbc.Label("Apply Filters", className="text-muted"),
+                            dbc.Button(
+                                "Apply Quality Filters",
+                                id="quality-apply-filters-btn",
+                                color="primary",
+                                className="w-100",
+                            ),
+                            html.Small(
+                                "Date, class, and guide changes apply when you click this button.",
+                                className="text-muted d-block mt-1",
+                            ),
+                        ],
+                        md=12,
+                        lg=12,
+                        xl=12,
+                    ),
                 ],
                 className="mb-4",
             ),

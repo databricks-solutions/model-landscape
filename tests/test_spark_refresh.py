@@ -58,14 +58,22 @@ class RecordingSparkPersistenceRepository(SparkRefreshRepository):
 
 
 class RecordingSparkAppendRepository(RecordingSparkPersistenceRepository):
-    def _rewrite_quality_summary(self, model_key: str) -> None:
+    def _rewrite_quality_summary(self, model_key: str, *, source_run_id: str | None = None) -> None:
+        del source_run_id
         self.rewritten.append(model_key)
 
     def get_performance_bin_specs(self, model_key: str) -> dict[str, tuple[float, ...]]:
         del model_key
         return {"amount": (0.0, 1.0, 2.0)}
 
-    def replace_performance_bin_specs(self, model_key: str, specs: dict[str, tuple[float, ...]]) -> None:
+    def replace_performance_bin_specs(
+        self,
+        model_key: str,
+        specs: dict[str, tuple[float, ...]],
+        *,
+        source_run_id: str | None = None,
+    ) -> None:
+        del source_run_id
         self.replaced_bin_specs.append((model_key, specs))
 
 
@@ -690,9 +698,9 @@ def test_spark_refresh_repository_replace_all_refresh_results_uses_spark_table_w
     )
 
     deleted_tables = {table_name for table_name, _ in repository.deleted}
-    assert table_names.comparison_windows in deleted_tables
-    assert table_names.daily_quality_profiles in deleted_tables
-    assert table_names.performance_bin_specs in deleted_tables
+    assert table_names.comparison_windows not in deleted_tables
+    assert table_names.daily_quality_profiles not in deleted_tables
+    assert table_names.performance_bin_specs not in deleted_tables
     appended_tables = {table_name for table_name, _ in repository.appended}
     assert table_names.comparison_windows in appended_tables
     assert table_names.daily_quality_profiles in appended_tables

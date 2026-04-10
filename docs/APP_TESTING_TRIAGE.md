@@ -19,7 +19,7 @@ This file records the implementation status of the highest-confidence items from
 - Drift visuals now rank from one historical-max feature subset across heatmap/timeline/top-drifter views, hide threshold guides by default behind an explicit toggle, and automatically switch to scientific notation for very small values.
 - Feature Deep Dive now exposes binning controls plus both percentile clipping and IQR-fence outlier modes, keeps `Average` as the user-facing label, removes the old `Null %` dimension overlay, and only uses bounded exact-sample reads when the requested controls require them.
 - Performance timelines now use raw persisted `daily_label_metrics` as the canonical source for labeled classification metrics, so undefined daily precision / recall / F1 render as gaps instead of looking like smoothed window aggregates.
-- Monitor Settings now explains that the shared refresh workflow wakes up hourly by default, while recent `refresh_runs` duration and scanned-row telemetry are the practical proxy for compute footprint.
+- Monitor Settings now explains the distinction between the shared workflow wake interval and per-monitor cadence, exposes per-monitor threshold overrides, supports in-app shared-schedule editing when the app has `CAN_MANAGE` on the job, and turns recent `refresh_runs` telemetry into explicit compute guidance without pretending to estimate dollars.
 
 ## Already Fixed Or Stale
 

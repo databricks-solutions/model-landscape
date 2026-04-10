@@ -25,8 +25,12 @@ def _apply_layout(fig, **kwargs):
     return fig
 
 
-def _metric_color(value: float | int | None, metric: str) -> str:
-    severity = drift_severity(value, metric)
+def _metric_color(
+    value: float | int | None,
+    metric: str,
+    thresholds: dict[str, dict[str, float]] | None = None,
+) -> str:
+    severity = drift_severity(value, metric, thresholds)
     if severity == "critical":
         return COLORS["high"]
     if severity == "warning":
@@ -79,8 +83,13 @@ def _apply_outlier_filter(values: np.ndarray, mode: str = "off", value: float | 
     return values
 
 
-def _heatmap_colorscale(metric: str, *, zmax: float) -> list[list[float | str]]:
-    warning, critical = get_thresholds(metric)
+def _heatmap_colorscale(
+    metric: str,
+    *,
+    zmax: float,
+    thresholds: dict[str, dict[str, float]] | None = None,
+) -> list[list[float | str]]:
+    warning, critical = get_thresholds(metric, thresholds)
     safe_max = max(float(zmax), float(critical) * 1.5, 1e-9)
     warning_stop = min(max(warning / safe_max, 0.0), 1.0)
     critical_stop = min(max(critical / safe_max, warning_stop), 1.0)
@@ -118,6 +127,7 @@ def build_drift_heatmap(
     title: str = "Feature Drift Over Time",
     *,
     show_thresholds: bool = False,
+    thresholds: dict[str, dict[str, float]] | None = None,
 ):
     if df.empty:
         fig = go.Figure()
@@ -126,10 +136,10 @@ def build_drift_heatmap(
 
     pivot = df.pivot_table(index="feature", columns="period", values=metric, aggfunc="max").sort_index()
     values = pd.to_numeric(pd.Series(pivot.values.ravel()), errors="coerce").dropna()
-    _, critical = get_thresholds(metric)
+    _, critical = get_thresholds(metric, thresholds)
     if show_thresholds:
         zmax = max(values.max(), critical * 1.5) if not values.empty else critical * 1.5
-        colorscale = _heatmap_colorscale(metric, zmax=zmax)
+        colorscale = _heatmap_colorscale(metric, zmax=zmax, thresholds=thresholds)
     else:
         zmax = max(float(values.max()), 1e-9) if not values.empty else 1.0
         colorscale = _neutral_heatmap_colorscale()
@@ -155,7 +165,13 @@ def build_drift_heatmap(
     )
 
 
-def build_drift_timeline(df: pd.DataFrame, features: list[str], metric: str = "psi", thresholds: dict | None = None, title: str | None = None):
+def build_drift_timeline(
+    df: pd.DataFrame,
+    features: list[str],
+    metric: str = "psi",
+    thresholds: dict | None = None,
+    title: str | None = None,
+):
     if df.empty:
         fig = go.Figure()
         fig.add_annotation(text="No drift data available", showarrow=False)
@@ -217,6 +233,7 @@ def build_top_drifters_bar(
     title: str | None = None,
     *,
     show_thresholds: bool = False,
+    thresholds: dict[str, dict[str, float]] | None = None,
 ):
     if df.empty:
         fig = go.Figure()
@@ -230,7 +247,11 @@ def build_top_drifters_bar(
         .max()
         .nlargest(top_n, metric)
     )
-    colors = [_metric_color(value, metric) for value in latest[metric]] if show_thresholds else _ranked_bar_colors(len(latest))
+    colors = (
+        [_metric_color(value, metric, thresholds) for value in latest[metric]]
+        if show_thresholds
+        else _ranked_bar_colors(len(latest))
+    )
     tickformat = _metric_tickformat(metric, latest[metric] if metric in latest.columns else pd.Series(dtype=float))
     fig = go.Figure(
         go.Bar(
@@ -354,7 +375,12 @@ def build_quality_window_timeline(history_df: pd.DataFrame):
     return _apply_layout(fig, title="Rows Per Comparison Window", xaxis_title="Window End", yaxis_title="Rows", height=300)
 
 
-def build_null_rate_chart(null_rates: dict[str, float], *, show_thresholds: bool = False):
+def build_null_rate_chart(
+    null_rates: dict[str, float],
+    *,
+    show_thresholds: bool = False,
+    thresholds: dict[str, dict[str, float]] | None = None,
+):
     if not null_rates:
         fig = go.Figure()
         fig.add_annotation(text="No null rate data", showarrow=False)
@@ -363,7 +389,7 @@ def build_null_rate_chart(null_rates: dict[str, float], *, show_thresholds: bool
     sorted_items = sorted(null_rates.items(), key=lambda item: item[1], reverse=True)
     features = [item[0] for item in sorted_items[:15]]
     rates = [item[1] for item in sorted_items[:15]]
-    colors = [_metric_color(rate, "null_rate") for rate in rates]
+    colors = [_metric_color(rate, "null_rate", thresholds) for rate in rates]
 
     fig = go.Figure(
         go.Bar(
@@ -375,7 +401,7 @@ def build_null_rate_chart(null_rates: dict[str, float], *, show_thresholds: bool
         )
     )
     if rates and show_thresholds:
-        _, critical = get_thresholds("null_rate")
+        _, critical = get_thresholds("null_rate", thresholds)
         fig.add_vline(x=critical, line_dash="dash", line_color=COLORS["high"])
     return _apply_layout(
         fig,
@@ -497,7 +523,12 @@ def build_multi_model_summary(model_drift_data: list[dict], metric: str = "psi")
         subplot_titles=("Max PSI by Model", "Drifting Features Count"),
         horizontal_spacing=0.15,
     )
-    colors = [COLORS["cyan"] if computing[index] else _metric_color(value, metric) for index, value in enumerate(max_psi)]
+    colors = [
+        COLORS["cyan"]
+        if computing[index]
+        else _metric_color(value, metric, model_drift_data[index].get("thresholds"))
+        for index, value in enumerate(max_psi)
+    ]
     max_trace = go.Bar(
         x=models,
         y=max_psi,

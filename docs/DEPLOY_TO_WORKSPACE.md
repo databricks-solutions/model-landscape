@@ -283,6 +283,7 @@ Treat the warehouse grant as a post-deploy check, not a one-time assumption. Aft
 If you want the app to accelerate onboarding with `Run now`, also verify `CAN MANAGE RUN` on the refresh workflow. If that permission is unavailable, the shared hourly job still remains the default pickup path only if that workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`.
 If `REFRESH_JOB_ID` is set, use that exact job as the permission target and grant the app service principal `CAN_MANAGE_RUN` on job `<REFRESH_JOB_ID>`.
 If you configure `BOOTSTRAP_REFRESH_JOB_ID` for the optional second lane, grant the app service principal `CAN_MANAGE_RUN` on that second job too if you expect direct `Run First Refresh` acceleration through it. Without that grant, onboarding should still work in scheduler-only mode through the main shared workflow.
+If you want operators to edit the shared wake interval from `Monitor Settings -> Admin`, also grant the app service principal `CAN_MANAGE` on the shared refresh workflow. Without that grant, the app will show the current schedule read-only and tell the operator to update the job externally.
 
 For large-table customers, also verify that the deployed app and shared refresh workflow configuration include the intended readback/fallback settings:
 

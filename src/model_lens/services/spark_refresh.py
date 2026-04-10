@@ -11,7 +11,6 @@ from pyspark.sql import DataFrame, Window
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
     ArrayType,
-    BooleanType,
     DoubleType,
     LongType,
     MapType,
@@ -28,7 +27,7 @@ from model_lens.services.control_plane import (
     ControlPlaneRepository,
     _resolve_source_labels_join_col,
 )
-from model_lens.services.thresholds import DEFAULT_THRESHOLDS
+from model_lens.services.incidents import build_incident_history, build_incidents
 from model_lens.services.lakebase import LakebaseReadModel
 from model_lens.services.spark_session import get_spark_session
 from model_lens.services.table_names import TableNames
@@ -185,6 +184,7 @@ QUALITY_METRIC_SCHEMA = StructType([
     StructField("daily_volume", StringType(), False),
     StructField("null_rates", StringType(), False),
     StructField("computed_at", StringType(), False),
+    StructField("source_run_id", StringType(), False),
 ])
 
 DRIFT_METRIC_SCHEMA = StructType([
@@ -206,6 +206,7 @@ DRIFT_METRIC_SCHEMA = StructType([
     StructField("ref_count", LongType(), False),
     StructField("cur_count", LongType(), False),
     StructField("computed_at", StringType(), False),
+    StructField("source_run_id", StringType(), False),
 ])
 
 WINDOW_WRITE_SCHEMA = StructType([
@@ -233,6 +234,7 @@ QUALITY_HISTORY_WRITE_SCHEMA = StructType([
     StructField("prediction_std", DoubleType(), True),
     StructField("null_rates", StringType(), False),
     StructField("computed_at", StringType(), False),
+    StructField("source_run_id", StringType(), False),
 ])
 
 DAILY_QUALITY_WRITE_SCHEMA = StructType([
@@ -269,6 +271,7 @@ PERFORMANCE_METRIC_SCHEMA = StructType([
     StructField("window_start", StringType(), False),
     StructField("window_end", StringType(), False),
     StructField("computed_at", StringType(), False),
+    StructField("source_run_id", StringType(), False),
 ])
 
 DAILY_PERFORMANCE_WRITE_SCHEMA = StructType([
@@ -286,6 +289,7 @@ PERFORMANCE_BIN_SPEC_SCHEMA = StructType([
     StructField("feature_name", StringType(), False),
     StructField("edges_json", StringType(), False),
     StructField("computed_at", StringType(), False),
+    StructField("source_run_id", StringType(), False),
 ])
 
 INCIDENT_SCHEMA = StructType([
@@ -297,6 +301,7 @@ INCIDENT_SCHEMA = StructType([
     StructField("metric_value", DoubleType(), False),
     StructField("window_end", StringType(), False),
     StructField("observed_at", StringType(), False),
+    StructField("source_run_id", StringType(), False),
 ])
 
 INCIDENT_HISTORY_SCHEMA = StructType([
@@ -313,6 +318,7 @@ INCIDENT_HISTORY_SCHEMA = StructType([
     StructField("baseline_start", StringType(), False),
     StructField("baseline_end", StringType(), False),
     StructField("observed_at", StringType(), False),
+    StructField("source_run_id", StringType(), False),
 ])
 
 _NULL_RATE_SCHEMA = MapType(StringType(), DoubleType(), True)
@@ -515,9 +521,16 @@ class SparkRefreshRepository(ControlPlaneRepository):
             frame = frame.withColumn(column_name, parsed)
         return frame
 
-    def _quality_metric_df_from_rows(self, rows: list[dict[str, Any]], *, default_model_key: str | None = None) -> DataFrame:
+    def _quality_metric_df_from_rows(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        source_run_id: str | None = None,
+        default_model_key: str | None = None,
+    ) -> DataFrame:
+        payload = [{**row, "source_run_id": source_run_id or ""} for row in rows]
         return self._typed_df_from_rows(
-            rows,
+            payload,
             schema=QUALITY_METRIC_SCHEMA,
             date_columns=("min_date", "max_date"),
             timestamp_columns=("computed_at",),
@@ -525,9 +538,16 @@ class SparkRefreshRepository(ControlPlaneRepository):
             row_kind="quality_metric",
         )
 
-    def _drift_df_from_rows(self, rows: list[dict[str, Any]], *, default_model_key: str | None = None) -> DataFrame:
+    def _drift_df_from_rows(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        source_run_id: str | None = None,
+        default_model_key: str | None = None,
+    ) -> DataFrame:
+        payload = [{**row, "source_run_id": source_run_id or ""} for row in rows]
         return self._typed_df_from_rows(
-            rows,
+            payload,
             schema=DRIFT_METRIC_SCHEMA,
             date_columns=("window_start", "window_end", "baseline_start", "baseline_end"),
             timestamp_columns=("computed_at",),
@@ -552,9 +572,16 @@ class SparkRefreshRepository(ControlPlaneRepository):
             row_kind="comparison_window",
         )
 
-    def _quality_history_df_from_rows(self, rows: list[dict[str, Any]], *, default_model_key: str | None = None) -> DataFrame:
+    def _quality_history_df_from_rows(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        source_run_id: str | None = None,
+        default_model_key: str | None = None,
+    ) -> DataFrame:
+        payload = [{**row, "source_run_id": source_run_id or ""} for row in rows]
         return self._typed_df_from_rows(
-            rows,
+            payload,
             schema=QUALITY_HISTORY_WRITE_SCHEMA,
             date_columns=("window_start", "window_end", "baseline_start", "baseline_end"),
             timestamp_columns=("computed_at",),
@@ -630,9 +657,16 @@ class SparkRefreshRepository(ControlPlaneRepository):
             row_kind="daily_class_feature_profile",
         )
 
-    def _performance_df_from_rows(self, rows: list[dict[str, Any]], *, default_model_key: str | None = None) -> DataFrame:
+    def _performance_df_from_rows(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        source_run_id: str | None = None,
+        default_model_key: str | None = None,
+    ) -> DataFrame:
+        payload = [{**row, "source_run_id": source_run_id or ""} for row in rows]
         return self._typed_df_from_rows(
-            rows,
+            payload,
             schema=PERFORMANCE_METRIC_SCHEMA,
             date_columns=("window_start", "window_end"),
             timestamp_columns=("computed_at",),
@@ -674,9 +708,16 @@ class SparkRefreshRepository(ControlPlaneRepository):
             row_kind="daily_label_metric",
         )
 
-    def _incident_df_from_rows(self, rows: list[dict[str, Any]], *, default_model_key: str | None = None) -> DataFrame:
+    def _incident_df_from_rows(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        source_run_id: str | None = None,
+        default_model_key: str | None = None,
+    ) -> DataFrame:
+        payload = [{**row, "source_run_id": source_run_id or ""} for row in rows]
         return self._typed_df_from_rows(
-            rows,
+            payload,
             schema=INCIDENT_SCHEMA,
             date_columns=("window_end",),
             timestamp_columns=("observed_at",),
@@ -688,10 +729,12 @@ class SparkRefreshRepository(ControlPlaneRepository):
         self,
         rows: list[dict[str, Any]],
         *,
+        source_run_id: str | None = None,
         default_model_key: str | None = None,
     ) -> DataFrame:
+        payload = [{**row, "source_run_id": source_run_id or ""} for row in rows]
         return self._typed_df_from_rows(
-            rows,
+            payload,
             schema=INCIDENT_HISTORY_SCHEMA,
             date_columns=("window_start", "window_end", "baseline_start", "baseline_end"),
             timestamp_columns=("observed_at",),
@@ -699,7 +742,13 @@ class SparkRefreshRepository(ControlPlaneRepository):
             row_kind="incident_history",
         )
 
-    def _performance_bin_spec_df_from_specs(self, model_key: str, specs: dict[str, tuple[float, ...]]) -> DataFrame:
+    def _performance_bin_spec_df_from_specs(
+        self,
+        model_key: str,
+        specs: dict[str, tuple[float, ...]],
+        *,
+        source_run_id: str | None = None,
+    ) -> DataFrame:
         computed_at = _current_utc_timestamp_string()
         frame = self._spark.createDataFrame(
             [
@@ -708,6 +757,7 @@ class SparkRefreshRepository(ControlPlaneRepository):
                     "feature_name": feature_name,
                     "edges_json": json.dumps([float(value) for value in edges]),
                     "computed_at": computed_at,
+                    "source_run_id": source_run_id or "",
                 }
                 for feature_name, edges in sorted(specs.items())
                 if feature_name and len(edges) >= 2
@@ -934,10 +984,17 @@ class SparkRefreshRepository(ControlPlaneRepository):
         return f"{row['watermark']}|{int(row['label_count'] or 0)}"
 
     def get_existing_window_keys(self, model_key: str) -> set[tuple[str, str, str, str]]:
+        generation_id = self.get_latest_published_generation_id(model_key)
         try:
             frame = (
                 self._read_table(self._table_names.comparison_windows)
-                .filter(F.col("model_key") == F.lit(model_key))
+                .filter(
+                    (F.col("model_key") == F.lit(model_key))
+                    & (
+                        F.lit(generation_id).isNull()
+                        | (F.col("source_run_id") == F.lit(generation_id))
+                    )
+                )
                 .select(
                     F.date_format(F.col("baseline_start"), "yyyy-MM-dd").alias("baseline_start"),
                     F.date_format(F.col("baseline_end"), "yyyy-MM-dd").alias("baseline_end"),
@@ -953,7 +1010,13 @@ class SparkRefreshRepository(ControlPlaneRepository):
             try:
                 rows = list(_iter_local_rows(
                     self._read_table(self._table_names.drift_metrics)
-                    .filter(F.col("model_key") == F.lit(model_key))
+                    .filter(
+                        (F.col("model_key") == F.lit(model_key))
+                        & (
+                            F.lit(generation_id).isNull()
+                            | (F.col("source_run_id") == F.lit(generation_id))
+                        )
+                    )
                     .select(
                         F.date_format(F.col("baseline_start"), "yyyy-MM-dd").alias("baseline_start"),
                         F.date_format(F.col("baseline_end"), "yyyy-MM-dd").alias("baseline_end"),
@@ -974,11 +1037,39 @@ class SparkRefreshRepository(ControlPlaneRepository):
             for row in rows
         }
 
+    def get_latest_published_generation_id(self, model_key: str) -> str | None:
+        try:
+            rows = list(_iter_local_rows(
+                self._read_table(self._table_names.refresh_runs)
+                .filter(
+                    (F.col("model_key") == F.lit(model_key))
+                    & F.col("generation_id").isNotNull()
+                    & (F.col("generation_id") != F.lit(""))
+                    & F.col("published_at").isNotNull()
+                )
+                .orderBy(F.col("published_at").desc(), F.col("completed_at").desc(), F.col("started_at").desc())
+                .select("generation_id")
+                .limit(1)
+            ))
+        except Exception:
+            return None
+        if not rows:
+            return None
+        generation_id = str(rows[0].get("generation_id") or "").strip()
+        return generation_id or None
+
     def get_performance_bin_specs(self, model_key: str) -> dict[str, tuple[float, ...]]:
+        generation_id = self.get_latest_published_generation_id(model_key)
         try:
             rows = list(_iter_local_rows(
                 self._read_table(self._table_names.performance_bin_specs)
-                .filter(F.col("model_key") == F.lit(model_key))
+                .filter(
+                    (F.col("model_key") == F.lit(model_key))
+                    & (
+                        F.lit(generation_id).isNull()
+                        | (F.col("source_run_id") == F.lit(generation_id))
+                    )
+                )
                 .select("feature_name", "edges_json")
                 .orderBy("feature_name")
             ))
@@ -1001,21 +1092,40 @@ class SparkRefreshRepository(ControlPlaneRepository):
             specs[feature_name] = edges
         return specs
 
-    def replace_performance_bin_specs(self, model_key: str, specs: dict[str, tuple[float, ...]]) -> None:
+    def replace_performance_bin_specs(
+        self,
+        model_key: str,
+        specs: dict[str, tuple[float, ...]],
+        *,
+        source_run_id: str | None = None,
+    ) -> None:
+        generation_id = source_run_id or ""
+        predicate = (
+            f"model_key = {_sql_string_literal(model_key)}"
+            + (f" AND source_run_id = {_sql_string_literal(generation_id)}" if generation_id else "")
+        )
         self._delete_where(
             self._table_names.performance_bin_specs,
-            f"model_key = {_sql_string_literal(model_key)}",
+            predicate,
         )
         self._append_df_to_table(
             self._table_names.performance_bin_specs,
-            self._performance_bin_spec_df_from_specs(model_key, specs),
+            self._performance_bin_spec_df_from_specs(model_key, specs, source_run_id=generation_id),
         )
 
     def get_current_incident_state(self, model_key: str) -> dict[tuple[str, str, str], dict[str, Any]]:
+        generation_id = self.get_latest_published_generation_id(model_key)
         try:
             rows = _iter_local_rows(
                 self._read_table(self._table_names.incidents)
-                .filter((F.col("model_key") == F.lit(model_key)) & (F.col("status") == F.lit("open")))
+                .filter(
+                    (F.col("model_key") == F.lit(model_key))
+                    & (F.col("status") == F.lit("open"))
+                    & (
+                        F.lit(generation_id).isNull()
+                        | (F.col("source_run_id") == F.lit(generation_id))
+                    )
+                )
                 .select(
                     "model_key",
                     "feature_name",
@@ -1312,248 +1422,20 @@ class SparkRefreshRepository(ControlPlaneRepository):
             )
         )
 
-    def _incident_threshold_columns(self) -> tuple[F.Column, F.Column]:
-        warning_threshold = (
-            F.when(F.col("metric_name") == F.lit("psi"), F.lit(float(DEFAULT_THRESHOLDS["psi"]["warning"])))
-            .when(F.col("metric_name") == F.lit("js_divergence"), F.lit(float(DEFAULT_THRESHOLDS["js_divergence"]["warning"])))
-            .when(F.col("metric_name") == F.lit("kl_divergence"), F.lit(float(DEFAULT_THRESHOLDS["kl_divergence"]["warning"])))
+    def _rewrite_quality_summary(self, model_key: str, *, source_run_id: str | None = None) -> None:
+        generation_id = source_run_id or ""
+        predicate = (
+            f"model_key = {_sql_string_literal(model_key)}"
+            + (f" AND source_run_id = {_sql_string_literal(generation_id)}" if generation_id else "")
         )
-        critical_threshold = (
-            F.when(F.col("metric_name") == F.lit("psi"), F.lit(float(DEFAULT_THRESHOLDS["psi"]["critical"])))
-            .when(F.col("metric_name") == F.lit("js_divergence"), F.lit(float(DEFAULT_THRESHOLDS["js_divergence"]["critical"])))
-            .when(F.col("metric_name") == F.lit("kl_divergence"), F.lit(float(DEFAULT_THRESHOLDS["kl_divergence"]["critical"])))
-        )
-        return warning_threshold, critical_threshold
-
-    def _incident_candidates_df_from_drift_df(self, drift_df: DataFrame) -> DataFrame:
-        warning_threshold, critical_threshold = self._incident_threshold_columns()
-        return (
-            drift_df
-            .withColumn("_warning_threshold", warning_threshold)
-            .withColumn("_critical_threshold", critical_threshold)
-            .withColumn(
-                "_severity_rank",
-                F.when(
-                    F.col("_critical_threshold").isNotNull() & (F.col("metric_value") >= F.col("_critical_threshold")),
-                    F.lit(2),
-                ).when(
-                    F.col("_warning_threshold").isNotNull() & (F.col("metric_value") >= F.col("_warning_threshold")),
-                    F.lit(1),
-                ).otherwise(F.lit(0)),
-            )
-            .filter(F.col("_severity_rank") > 0)
-            .withColumn(
-                "severity",
-                F.when(F.col("_severity_rank") >= F.lit(2), F.lit("critical")).otherwise(F.lit("warning")),
-            )
-            .withColumn("observed_at", F.col("computed_at").cast("string"))
-        )
-
-    def _derive_incident_rows_from_drift_rows(
-        self,
-        *,
-        drift_rows: list[dict[str, Any]],
-        latest_window_end: str,
-    ) -> list[dict[str, Any]]:
-        if not drift_rows or not latest_window_end:
-            return []
-        candidates = self._incident_candidates_df_from_drift_df(self._drift_df_from_rows(drift_rows)).filter(
-            F.col("window_end") == F.to_date(F.lit(latest_window_end))
-        )
-        if not candidates.take(1):
-            return []
-        selection_window = Window.partitionBy("model_key", "feature_name", "metric_name").orderBy(
-            F.col("_severity_rank").desc(),
-            F.col("metric_value").desc(),
-        )
-        rows = (
-            candidates
-            .withColumn("_incident_rank", F.row_number().over(selection_window))
-            .filter(F.col("_incident_rank") == F.lit(1))
-            .select(
-                "model_key",
-                "feature_name",
-                "metric_name",
-                "severity",
-                F.lit("open").alias("status"),
-                "metric_value",
-                F.date_format(F.col("window_end"), "yyyy-MM-dd").alias("window_end"),
-                "observed_at",
-            )
-        )
-        return [row.asDict() for row in _iter_local_rows(rows)]
-
-    def _derive_incident_history_rows_from_drift_rows(
-        self,
-        *,
-        drift_rows: list[dict[str, Any]],
-        window_rows: list[dict[str, Any]],
-        prior_open_incidents: dict[tuple[str, str, str], dict[str, Any]] | None = None,
-        computed_at: str,
-    ) -> list[dict[str, Any]]:
-        if not window_rows:
-            return []
-        candidates = self._incident_candidates_df_from_drift_df(self._drift_df_from_rows(drift_rows))
-        state_window = Window.partitionBy(
-            "window_id",
-            "model_key",
-            "feature_name",
-            "metric_name",
-        ).orderBy(
-            F.col("_severity_rank").desc(),
-            F.col("metric_value").desc(),
-        )
-        current_state_df = (
-            candidates
-            .withColumn("_state_rank", F.row_number().over(state_window))
-            .filter(F.col("_state_rank") == F.lit(1))
-            .select(
-                "window_id",
-                "model_key",
-                "feature_name",
-                "metric_name",
-                "severity",
-                F.col("_severity_rank").alias("severity_rank"),
-                "metric_value",
-            )
-        )
-        window_df = (
-            self._window_df_from_rows(window_rows)
-            .select("window_id", "window_start", "window_end", "baseline_start", "baseline_end", "created_at")
-        )
-        ordered_windows = (
-            window_df
-            .withColumn(
-                "window_order",
-                F.row_number().over(Window.orderBy("window_end", "window_start", "window_id")),
-            )
-            .withColumn("observed_at", F.coalesce(F.col("created_at").cast("string"), F.lit(computed_at)))
-        )
-        prior_payload = [
-            {
-                "model_key": key[0],
-                "feature_name": key[1],
-                "metric_name": key[2],
-                "prior_severity": str(value.get("severity") or ""),
-                "prior_metric_value": float(value.get("metric_value") or 0.0),
-                "prior_present": True,
-            }
-            for key, value in (prior_open_incidents or {}).items()
-        ]
-        prior_df = self._spark.createDataFrame(
-            prior_payload or [],
-            schema=StructType([
-                StructField("model_key", StringType(), False),
-                StructField("feature_name", StringType(), False),
-                StructField("metric_name", StringType(), False),
-                StructField("prior_severity", StringType(), False),
-                StructField("prior_metric_value", DoubleType(), False),
-                StructField("prior_present", BooleanType(), True),
-            ]),
-        )
-        if prior_payload:
-            prior_df = (
-                prior_df
-                .withColumn("prior_present", F.lit(True))
-                .withColumn(
-                    "prior_severity_rank",
-                    F.when(F.col("prior_severity") == F.lit("critical"), F.lit(2))
-                    .when(F.col("prior_severity") == F.lit("warning"), F.lit(1))
-                    .otherwise(F.lit(0)),
-                )
-            )
-        else:
-            prior_df = (
-                prior_df
-                .withColumn("prior_present", F.lit(False))
-                .withColumn("prior_severity_rank", F.lit(0))
-            )
-        key_df = current_state_df.select("model_key", "feature_name", "metric_name").distinct()
-        if prior_payload:
-            key_df = key_df.unionByName(
-                prior_df.select("model_key", "feature_name", "metric_name").distinct()
-            ).distinct()
-        timeline = (
-            key_df.crossJoin(ordered_windows)
-            .join(current_state_df, on=["window_id", "model_key", "feature_name", "metric_name"], how="left")
-            .join(prior_df, on=["model_key", "feature_name", "metric_name"], how="left")
-            .withColumn("current_present", F.col("severity_rank").isNotNull())
-        )
-        event_partition = Window.partitionBy("model_key", "feature_name", "metric_name").orderBy("window_order")
-        timeline = (
-            timeline
-            .withColumn(
-                "previous_present",
-                F.coalesce(
-                    F.lag("current_present").over(event_partition),
-                    F.col("prior_present"),
-                    F.lit(False),
-                ),
-            )
-            .withColumn(
-                "previous_severity",
-                F.coalesce(
-                    F.lag("severity").over(event_partition),
-                    F.col("prior_severity"),
-                ),
-            )
-            .withColumn(
-                "previous_severity_rank",
-                F.coalesce(
-                    F.lag("severity_rank").over(event_partition),
-                    F.col("prior_severity_rank"),
-                    F.lit(0),
-                ),
-            )
-            .withColumn(
-                "event_type",
-                F.when(
-                    F.col("current_present") & ~F.col("previous_present"),
-                    F.lit("opened"),
-                ).when(
-                    F.col("current_present") & F.col("previous_present") & (F.col("severity_rank") > F.col("previous_severity_rank")),
-                    F.lit("escalated"),
-                ).when(
-                    F.col("current_present") & F.col("previous_present") & (F.col("severity_rank") < F.col("previous_severity_rank")),
-                    F.lit("downgraded"),
-                ).when(
-                    F.col("current_present") & F.col("previous_present"),
-                    F.lit("ongoing"),
-                ).when(
-                    ~F.col("current_present") & F.col("previous_present"),
-                    F.lit("recovered"),
-                ),
-            )
-            .filter(F.col("event_type").isNotNull())
-            .select(
-                "model_key",
-                "feature_name",
-                "metric_name",
-                "event_type",
-                F.when(F.col("current_present"), F.col("severity")).otherwise(F.col("previous_severity")).alias("severity"),
-                F.when(F.col("event_type") == F.lit("recovered"), F.lit("closed")).otherwise(F.lit("open")).alias("status"),
-                F.when(F.col("current_present"), F.col("metric_value")).otherwise(F.lit(0.0)).alias("metric_value"),
-                "window_id",
-                F.date_format(F.col("window_start"), "yyyy-MM-dd").alias("window_start"),
-                F.date_format(F.col("window_end"), "yyyy-MM-dd").alias("window_end"),
-                F.date_format(F.col("baseline_start"), "yyyy-MM-dd").alias("baseline_start"),
-                F.date_format(F.col("baseline_end"), "yyyy-MM-dd").alias("baseline_end"),
-                "observed_at",
-            )
-            .orderBy("window_end", "window_start", "window_id", "feature_name", "metric_name")
-        )
-        return [row.asDict() for row in _iter_local_rows(timeline)]
-
-    def _rewrite_quality_summary(self, model_key: str) -> None:
         self._delete_where(
             self._table_names.quality_metrics,
-            f"model_key = {_sql_string_literal(model_key)}",
+            predicate,
         )
-        quality_df = (
-            self._read_table(self._table_names.daily_quality_profiles)
-            .filter(F.col("model_key") == F.lit(model_key))
-            .withColumn("_null_rates_map", F.from_json(F.col("null_rates"), _NULL_RATE_SCHEMA))
-        )
+        quality_df = self._read_table(self._table_names.daily_quality_profiles).filter(F.col("model_key") == F.lit(model_key))
+        if generation_id:
+            quality_df = quality_df.filter(F.col("source_run_id") == F.lit(generation_id))
+        quality_df = quality_df.withColumn("_null_rates_map", F.from_json(F.col("null_rates"), _NULL_RATE_SCHEMA))
         if not quality_df.take(1):
             return
         aggregate = (
@@ -1622,41 +1504,30 @@ class SparkRefreshRepository(ControlPlaneRepository):
             "daily_volume": json.dumps(daily_volume),
             "null_rates": json.dumps(null_rates),
             "computed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "source_run_id": generation_id,
         }]
         self._append_df_to_table(
             self._table_names.quality_metrics,
-            self._quality_metric_df_from_rows(summary_rows),
+            self._quality_metric_df_from_rows(summary_rows, source_run_id=generation_id),
         )
 
     def replace_all_refresh_results(self, model_key: str, result: RefreshResult, source_run_id: str | None = None) -> None:
-        for table_name in (
-            self._table_names.drift_metrics,
-            self._table_names.performance_metrics,
-            self._table_names.quality_metrics,
-            self._table_names.quality_history,
-            self._table_names.daily_quality_profiles,
-            self._table_names.daily_class_quality_profiles,
-            self._table_names.daily_feature_profiles,
-            self._table_names.daily_class_feature_profiles,
-            self._table_names.daily_performance_profiles,
-            self._table_names.daily_label_metrics,
-            self._table_names.performance_bin_specs,
-            self._table_names.incidents,
-            self._table_names.incident_history,
-            self._table_names.comparison_windows,
-        ):
-            self._delete_where(table_name, f"model_key = {_sql_string_literal(model_key)}")
+        generation_id = source_run_id or ""
         self._append_df_to_table(
             self._table_names.comparison_windows,
             self._window_df_from_rows(result.window_rows, source_run_id=source_run_id, default_model_key=model_key),
         )
         self._append_df_to_table(
             self._table_names.drift_metrics,
-            self._drift_df_from_rows(result.drift_rows, default_model_key=model_key),
+            self._drift_df_from_rows(result.drift_rows, source_run_id=generation_id, default_model_key=model_key),
         )
         self._append_df_to_table(
             self._table_names.quality_history,
-            self._quality_history_df_from_rows(result.quality_history_rows, default_model_key=model_key),
+            self._quality_history_df_from_rows(
+                result.quality_history_rows,
+                source_run_id=generation_id,
+                default_model_key=model_key,
+            ),
         )
         self._append_df_to_table(
             self._table_names.daily_quality_profiles,
@@ -1692,7 +1563,11 @@ class SparkRefreshRepository(ControlPlaneRepository):
         )
         self._append_df_to_table(
             self._table_names.performance_metrics,
-            self._performance_df_from_rows(result.performance_rows, default_model_key=model_key),
+            self._performance_df_from_rows(
+                result.performance_rows,
+                source_run_id=generation_id,
+                default_model_key=model_key,
+            ),
         )
         self._append_df_to_table(
             self._table_names.daily_performance_profiles,
@@ -1710,20 +1585,28 @@ class SparkRefreshRepository(ControlPlaneRepository):
                 default_model_key=model_key,
             ),
         )
-        self.replace_performance_bin_specs(model_key, result.performance_bin_specs)
+        self.replace_performance_bin_specs(model_key, result.performance_bin_specs, source_run_id=generation_id)
         self._append_df_to_table(
             self._table_names.incidents,
-            self._incident_df_from_rows(result.incident_rows, default_model_key=model_key),
+            self._incident_df_from_rows(result.incident_rows, source_run_id=generation_id, default_model_key=model_key),
         )
         self._append_df_to_table(
             self._table_names.incident_history,
-            self._incident_history_df_from_rows(result.incident_history_rows, default_model_key=model_key),
+            self._incident_history_df_from_rows(
+                result.incident_history_rows,
+                source_run_id=generation_id,
+                default_model_key=model_key,
+            ),
         )
-        self._rewrite_quality_summary(model_key)
+        self._rewrite_quality_summary(model_key, source_run_id=generation_id)
         self._sync_read_model()
 
     def append_refresh_result(self, model_key: str, result: RefreshResult, source_run_id: str | None = None) -> None:
-        model_key_predicate = f"model_key = {_sql_string_literal(model_key)}"
+        generation_id = source_run_id or self.get_latest_published_generation_id(model_key) or ""
+        model_key_predicate = (
+            f"model_key = {_sql_string_literal(model_key)}"
+            + (f" AND source_run_id = {_sql_string_literal(generation_id)}" if generation_id else "")
+        )
 
         def _delete_string_values(table_name: str, column_name: str, values: set[str]) -> None:
             cleaned = sorted(value for value in values if value)
@@ -1872,21 +1755,25 @@ class SparkRefreshRepository(ControlPlaneRepository):
 
         self._append_df_to_table(
             self._table_names.comparison_windows,
-            self._window_df_from_rows(result.window_rows, source_run_id=source_run_id, default_model_key=model_key),
+            self._window_df_from_rows(result.window_rows, source_run_id=generation_id, default_model_key=model_key),
         )
         self._append_df_to_table(
             self._table_names.drift_metrics,
-            self._drift_df_from_rows(result.drift_rows, default_model_key=model_key),
+            self._drift_df_from_rows(result.drift_rows, source_run_id=generation_id, default_model_key=model_key),
         )
         self._append_df_to_table(
             self._table_names.quality_history,
-            self._quality_history_df_from_rows(result.quality_history_rows, default_model_key=model_key),
+            self._quality_history_df_from_rows(
+                result.quality_history_rows,
+                source_run_id=generation_id,
+                default_model_key=model_key,
+            ),
         )
         self._append_df_to_table(
             self._table_names.daily_quality_profiles,
             self._daily_quality_profile_persist_df_from_rows(
                 result.daily_quality_profile_rows,
-                source_run_id=source_run_id,
+                source_run_id=generation_id,
                 default_model_key=model_key,
             ),
         )
@@ -1894,7 +1781,7 @@ class SparkRefreshRepository(ControlPlaneRepository):
             self._table_names.daily_class_quality_profiles,
             self._daily_class_quality_profile_persist_df_from_rows(
                 result.daily_class_quality_profile_rows,
-                source_run_id=source_run_id,
+                source_run_id=generation_id,
                 default_model_key=model_key,
             ),
         )
@@ -1902,7 +1789,7 @@ class SparkRefreshRepository(ControlPlaneRepository):
             self._table_names.daily_feature_profiles,
             self._daily_feature_profile_persist_df_from_rows(
                 result.daily_feature_profile_rows,
-                source_run_id=source_run_id,
+                source_run_id=generation_id,
                 default_model_key=model_key,
             ),
         )
@@ -1910,19 +1797,23 @@ class SparkRefreshRepository(ControlPlaneRepository):
             self._table_names.daily_class_feature_profiles,
             self._daily_class_feature_profile_persist_df_from_rows(
                 result.daily_class_feature_profile_rows,
-                source_run_id=source_run_id,
+                source_run_id=generation_id,
                 default_model_key=model_key,
             ),
         )
         self._append_df_to_table(
             self._table_names.performance_metrics,
-            self._performance_df_from_rows(result.performance_rows, default_model_key=model_key),
+            self._performance_df_from_rows(
+                result.performance_rows,
+                source_run_id=generation_id,
+                default_model_key=model_key,
+            ),
         )
         self._append_df_to_table(
             self._table_names.daily_performance_profiles,
             self._daily_performance_profile_persist_df_from_rows(
                 result.daily_performance_profile_rows,
-                source_run_id=source_run_id,
+                source_run_id=generation_id,
                 default_model_key=model_key,
             ),
         )
@@ -1930,23 +1821,27 @@ class SparkRefreshRepository(ControlPlaneRepository):
             self._table_names.daily_label_metrics,
             self._daily_label_metric_persist_df_from_rows(
                 result.daily_label_metric_rows,
-                source_run_id=source_run_id,
+                source_run_id=generation_id,
                 default_model_key=model_key,
             ),
         )
         if result.performance_bin_specs:
             persisted_specs = self.get_performance_bin_specs(model_key)
             persisted_specs.update(result.performance_bin_specs)
-            self.replace_performance_bin_specs(model_key, persisted_specs)
+            self.replace_performance_bin_specs(model_key, persisted_specs, source_run_id=generation_id)
         self._append_df_to_table(
             self._table_names.incidents,
-            self._incident_df_from_rows(result.incident_rows, default_model_key=model_key),
+            self._incident_df_from_rows(result.incident_rows, source_run_id=generation_id, default_model_key=model_key),
         )
         self._append_df_to_table(
             self._table_names.incident_history,
-            self._incident_history_df_from_rows(result.incident_history_rows, default_model_key=model_key),
+            self._incident_history_df_from_rows(
+                result.incident_history_rows,
+                source_run_id=generation_id,
+                default_model_key=model_key,
+            ),
         )
-        self._rewrite_quality_summary(model_key)
+        self._rewrite_quality_summary(model_key, source_run_id=generation_id)
         self._sync_read_model()
 
     def _derive_quality_history_rows_from_df(
@@ -2703,19 +2598,19 @@ class SparkRefreshRepository(ControlPlaneRepository):
         )
         latest_window_end = max((metadata["window_end"] for metadata in metadata_list), default="")
         incident_rows = (
-            self._derive_incident_rows_from_drift_rows(
-                drift_rows=drift_rows,
-                latest_window_end=latest_window_end,
+            build_incidents(
+                [row for row in drift_rows if str(row.get("window_end") or "") == latest_window_end],
+                thresholds=config.threshold_overrides,
             )
             if include_drift_quality
             else []
         )
         incident_history_rows = (
-            self._derive_incident_history_rows_from_drift_rows(
-                drift_rows=drift_rows,
-                window_rows=window_rows,
+            build_incident_history(
+                drift_rows,
+                window_rows,
                 prior_open_incidents=prior_open_incidents,
-                computed_at=computed_at,
+                thresholds=config.threshold_overrides,
             )
             if include_drift_quality
             else []
