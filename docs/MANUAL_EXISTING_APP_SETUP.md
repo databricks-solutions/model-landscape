@@ -634,6 +634,7 @@ If Setup should create missing objects from the UI, also grant:
 
 Important:
 
+- `CAN MANAGE` on the refresh workflow is recommended if you want full in-app job management, including shared schedule edits
 - `CAN MANAGE RUN` on the refresh workflow is required only if you want immediate bootstrap from the app UI
 - if `CAN MANAGE RUN` is intentionally unavailable, `scheduler_only` remains a supported operating mode as long as the shared job already exists, is scheduled, and the app is wired to it
 - if the generated `app.yaml` sets `REFRESH_JOB_ID`, grant `CAN_MANAGE_RUN` on that exact job ID; the Setup readiness card now points to that concrete grant when immediate bootstrap is unavailable
@@ -778,7 +779,8 @@ If you want the shortest robust path for the exact constrained-user case:
    - `CAN USE` on the warehouse
    - source-data `SELECT`
    - control-plane `SELECT` and `MODIFY`
-   - `CAN MANAGE RUN` on the job only if you want immediate UI-triggered bootstrap; otherwise leave the workspace in supported `scheduler_only` mode
+   - `CAN MANAGE` on the job if you want full in-app job management, including shared schedule edits
+   - `CAN MANAGE RUN` on the job is the minimum direct-trigger grant if you only want immediate UI-triggered bootstrap; otherwise leave the workspace in supported `scheduler_only` mode
 9. grant the refresh job identity the actual data/control-plane privileges
 
 That keeps the existing app identity, avoids app-resource management entirely, and still gives you the current non-blocking Model Lens onboarding flow.

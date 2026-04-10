@@ -28,8 +28,10 @@ Required:
 
 Optional:
 
+- `CAN_MANAGE` on the refresh workflow for the app service principal
+  - recommended if you want operators to edit the shared wake interval from the app and keep the full in-app job management path available
 - `CAN_MANAGE_RUN` on the refresh workflow for the app service principal
-  - needed only if you want immediate `Run First Refresh` / activation-time bootstrap from the UI
+  - minimum direct-trigger grant if you want immediate `Run First Refresh` / activation-time bootstrap from the UI but do not want to grant `CAN_MANAGE`
   - not required if `scheduler_only` mode is acceptable and the shared job is already scheduled
 
 ## Fastest Supported Path

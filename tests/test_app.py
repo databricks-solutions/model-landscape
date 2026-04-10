@@ -63,7 +63,7 @@ def _find_callback_by_input(app, input_id: str):
 
 def _find_callback_by_output(app, output_id: str):
     for key, meta in app.callback_map.items():
-        if key.startswith(f"{output_id}.") or f"...{output_id}." in key:
+        if key.startswith(f"{output_id}.") or f"{output_id}." in key:
             callback = meta["callback"]
             return getattr(callback, "__wrapped__", callback)
     raise AssertionError(f"callback with output {output_id!r} not found")
@@ -71,7 +71,7 @@ def _find_callback_by_output(app, output_id: str):
 
 def _find_callback_meta_by_output(app, output_id: str):
     for key, meta in app.callback_map.items():
-        if key.startswith(f"{output_id}.") or f"...{output_id}." in key:
+        if key.startswith(f"{output_id}.") or f"{output_id}." in key:
             return meta
     raise AssertionError(f"callback metadata with output {output_id!r} not found")
 
@@ -154,7 +154,7 @@ def test_app_layout_exposes_slimmed_onboarding_flow() -> None:
     layout_text = str(app.validation_layout)
     assert "Permission checklist" in layout_text
     assert "CAN_USE on the SQL warehouse" in layout_text
-    assert "CAN MANAGE RUN on the refresh workflow" in layout_text
+    assert "CAN MANAGE on the refresh workflow" in layout_text
     assert "Validate Workspace Wiring" in layout_text
     assert "Save Monitor And Trigger Refresh" in layout_text
 
@@ -1965,6 +1965,40 @@ def test_delete_reference_monitor_callback_deletes_selected_monitor(monkeypatch)
     assert repository.deleted == ["fraud_model_demo"]
     assert "Deleted Fraud Model Demo" in str(result[0])
     assert result[1]
+
+
+def test_reference_delete_modal_toggle_clears_confirmation_input() -> None:
+    app = create_app()
+    fn = _find_callback_by_output(app, "reference-delete-modal")
+
+    result = fn(1, None, None, False)
+
+    assert result == (True, "")
+
+
+def test_reference_delete_confirmation_enables_delete_only_on_exact_match() -> None:
+    app = create_app()
+    fn = _find_callback_by_output(app, "reference-delete-confirm-btn")
+
+    disabled, valid, invalid, status = fn("fraud_model_demo", "fraud_model_demo")
+
+    assert disabled is False
+    assert valid is True
+    assert invalid is False
+    assert "Delete is enabled" in str(status)
+
+    disabled, valid, invalid, status = fn("fraud_model_demo ", "fraud_model_demo")
+
+    assert disabled is False
+    assert valid is True
+    assert invalid is False
+
+    disabled, valid, invalid, status = fn("Fraud_Model_Demo", "fraud_model_demo")
+
+    assert disabled is True
+    assert valid is False
+    assert invalid is True
+    assert "does not match" in str(status)
 
 
 def test_sidebar_status_wraps_long_monitor_description(monkeypatch) -> None:

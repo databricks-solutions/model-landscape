@@ -60,9 +60,11 @@ def _workspace_step(form_style: dict) -> dbc.Row:
                                                         "control-plane USE CATALOG / USE SCHEMA / SELECT / MODIFY."
                                                     ),
                                                     html.Li(
-                                                        "App service principal: CAN MANAGE RUN on the refresh workflow "
+                                                        "App service principal: CAN MANAGE on the refresh workflow "
+                                                        "if you want full in-app job control, including shared schedule edits. "
+                                                        "If you only need activation-time bootstrap, CAN MANAGE RUN "
                                                         "(or CAN_MANAGE_RUN on REFRESH_JOB_ID when you wire by job ID) "
-                                                        "so activation can trigger the first refresh asynchronously."
+                                                        "is the minimum direct-trigger grant."
                                                     ),
                                                     html.Li(
                                                         "If setup should create objects: CREATE TABLE in the control-plane schema, "

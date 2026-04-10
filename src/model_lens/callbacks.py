@@ -3828,13 +3828,21 @@ def register_callbacks(app) -> None:
                                         id="reference-delete-confirm-input",
                                         placeholder=config.model_key,
                                         value="",
+                                        valid=False,
+                                        invalid=False,
+                                    ),
+                                    dcc.Store(id="reference-delete-model-key-store", data=config.model_key),
+                                    html.Div(
+                                        "Type the exact model key to enable delete.",
+                                        id="reference-delete-confirm-status",
+                                        className="text-muted small mt-2",
                                     ),
                                 ]
                             ),
                             dbc.ModalFooter(
                                 [
                                     dbc.Button("Cancel", id="reference-delete-cancel-btn", color="secondary", outline=True),
-                                    dbc.Button("Delete", id="reference-delete-confirm-btn", color="danger"),
+                                    dbc.Button("Delete", id="reference-delete-confirm-btn", color="danger", disabled=True),
                                 ]
                             ),
                         ],
@@ -4215,6 +4223,7 @@ def register_callbacks(app) -> None:
 
     @app.callback(
         Output("reference-delete-modal", "is_open"),
+        Output("reference-delete-confirm-input", "value"),
         Input("reference-delete-monitor-btn", "n_clicks"),
         Input("reference-delete-cancel-btn", "n_clicks"),
         Input("reference-delete-confirm-btn", "n_clicks"),
@@ -4223,8 +4232,64 @@ def register_callbacks(app) -> None:
     )
     def toggle_reference_delete_modal(open_clicks, cancel_clicks, confirm_clicks, is_open):
         if any((open_clicks, cancel_clicks, confirm_clicks)):
-            return not is_open
-        return is_open
+            return not is_open, ""
+        return is_open, no_update
+
+    @app.callback(
+        Output("reference-delete-confirm-btn", "disabled"),
+        Output("reference-delete-confirm-input", "valid"),
+        Output("reference-delete-confirm-input", "invalid"),
+        Output("reference-delete-confirm-status", "children"),
+        Input("reference-delete-confirm-input", "value"),
+        State("reference-delete-model-key-store", "data"),
+        prevent_initial_call=False,
+    )
+    def validate_reference_delete_confirmation(confirmation_text, expected_model_key):
+        expected = str(expected_model_key or "").strip()
+        typed = str(confirmation_text or "").strip()
+        if not expected:
+            return True, False, False, "Select a monitor before deleting it."
+        if not typed:
+            return (
+                True,
+                False,
+                False,
+                html.Span(
+                    [
+                        "Type ",
+                        html.Code(expected),
+                        " to enable delete.",
+                    ],
+                    className="text-muted small",
+                ),
+            )
+        if typed == expected:
+            return (
+                False,
+                True,
+                False,
+                html.Span(
+                    [
+                        html.I(className="fas fa-check-circle me-2"),
+                        "Model key matched. Delete is enabled.",
+                    ],
+                    className="text-success small",
+                ),
+            )
+        return (
+            True,
+            False,
+            True,
+            html.Span(
+                [
+                    html.I(className="fas fa-circle-exclamation me-2"),
+                    "Typed value does not match ",
+                    html.Code(expected),
+                    ".",
+                ],
+                className="text-warning small",
+            ),
+        )
 
     @app.callback(
         Output("reference-page-status", "children", allow_duplicate=True),

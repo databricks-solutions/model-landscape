@@ -61,8 +61,10 @@ Identity checklist for this smoke test:
   can deploy the bundle/app and has approved the control-plane namespace
 - app service principal:
   `CAN_USE` on the SQL warehouse; source data `USE CATALOG`, `USE SCHEMA`, `SELECT`; control plane `USE CATALOG`, `USE SCHEMA`, `SELECT`, `MODIFY`
+- app service principal, if you want full in-app job management:
+  `CAN MANAGE` on the shared refresh workflow
 - app service principal, if you want the app to accelerate onboarding with `Run now`:
-  `CAN MANAGE RUN` on the shared refresh workflow
+  `CAN MANAGE RUN` on the shared refresh workflow is the minimum direct-trigger grant if `CAN MANAGE` is not available
 - app service principal, if Setup should create missing objects:
   `CREATE TABLE` in the control-plane schema; `CREATE SCHEMA` if the schema is missing; `CREATE CATALOG` only if you plan to use the toggle
   If the control-plane schema and tables are already present, Setup now checks for them first and can succeed without those create grants.

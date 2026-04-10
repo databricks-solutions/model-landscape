@@ -283,7 +283,7 @@ Permission matrix by identity:
 - Deployer or platform operator, when adding app resources manually in the Databricks Apps UI:
   `Can manage` on the app and `Can manage` on the resource being attached, such as the SQL warehouse. This is required to add or update a `sql_warehouse` app resource manually.
 - App service principal:
-  `CAN_USE` on the SQL warehouse; `CAN MANAGE RUN` on the refresh workflow; source data `USE CATALOG`, `USE SCHEMA`, `SELECT`; control plane `USE CATALOG`, `USE SCHEMA`, `SELECT`, `MODIFY`.
+  `CAN_USE` on the SQL warehouse; source data `USE CATALOG`, `USE SCHEMA`, `SELECT`; control plane `USE CATALOG`, `USE SCHEMA`, `SELECT`, `MODIFY`. For full in-app job management, grant `CAN_MANAGE` on the shared refresh workflow. If you only need direct bootstrap acceleration, `CAN_MANAGE_RUN` is the minimum job grant.
 - App service principal, if Setup should create missing objects:
   `CREATE TABLE` in the control-plane schema; `CREATE SCHEMA` if the schema may not exist yet; `CREATE CATALOG` only if you want the `Create catalog if missing` toggle to work.
   If the target control-plane schema and tables are already present, Setup now checks for them first and can reuse them without `CREATE SCHEMA` / `CREATE TABLE`.

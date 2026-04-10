@@ -222,12 +222,11 @@ The existing app service principal needs:
 
 Optional:
 
-- `CAN_MANAGE_RUN` on the shared refresh job
-  - only needed if you want the app to trigger the first refresh immediately from the UI
-  - not required if `scheduler_only` mode is acceptable
 - `CAN_MANAGE` on the shared refresh job
-  - only needed if you want operators to change the shared wake interval from `Monitor Settings -> Admin`
-  - not required if the schedule will always be edited externally
+  - recommended if you want operators to change the shared wake interval from `Monitor Settings -> Admin` and keep full in-app job management available
+- `CAN_MANAGE_RUN` on the shared refresh job
+  - minimum direct-trigger grant if you only want the app to trigger the first refresh immediately from the UI
+  - not required if `scheduler_only` mode is acceptable
 
 ### Refresh Job Run As Identity
 

@@ -73,8 +73,10 @@ Treat permissions as identity-specific:
   `Can manage` on the app and `Can manage` on the resource being attached, such as the SQL warehouse.
 - App service principal:
   `CAN_USE` on the SQL warehouse; source data `USE CATALOG`, `USE SCHEMA`, `SELECT`; control plane `USE CATALOG`, `USE SCHEMA`, `SELECT`, `MODIFY`.
+- App service principal, if you want full in-app job management:
+  `CAN MANAGE` on the shared refresh workflow. This covers shared wake-interval edits from `Monitor Settings -> Admin` and also satisfies the weaker `Run now` permission requirement.
 - App service principal, if you want onboarding to accelerate the first run with `Run now`:
-  `CAN MANAGE RUN` on the shared refresh workflow.
+  `CAN MANAGE RUN` on the shared refresh workflow is the minimum direct-trigger grant if you do not want to grant `CAN_MANAGE`.
 - App service principal, if Setup should create missing objects:
   `CREATE TABLE` in the control-plane schema; `CREATE SCHEMA` if the schema may not exist yet; `CREATE CATALOG` only if you intend to use the `Create catalog if missing` toggle.
   If the schema and tables already exist, Setup now reuses them and does not require those create privileges just to pass the control-plane step.
