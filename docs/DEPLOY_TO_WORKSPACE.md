@@ -322,7 +322,7 @@ Verify:
 
 In the app `Setup` step, click `Setup Control Plane`.
 
-The wizard does not unlock the `Discover` step until setup succeeds for the current control-plane namespace. If setup fails, fix the underlying issue and click `Setup Control Plane` again to retry. After redeploying a newer Model Lens build into an existing workspace, rerun `Setup Control Plane` once so additive schema migrations are applied.
+The wizard does not unlock the `Discover` step until setup succeeds for the current control-plane namespace. If setup fails, fix the underlying issue and click `Setup Control Plane` again to retry. After redeploying a newer Model Lens build into an existing workspace, rerun `Setup Control Plane` once so additive schema migrations are applied. That rerun is intentionally idempotent: existing columns/tables are checked before additive `ALTER TABLE` migrations are attempted.
 
 Then click `Validate Workspace Wiring`.
 

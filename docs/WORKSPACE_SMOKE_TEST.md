@@ -210,7 +210,7 @@ Check immediately:
 
 In the app `Setup` step, click `Setup Control Plane`.
 
-The wizard should keep `Continue to Discover` disabled until setup succeeds for the current control-plane namespace. If setup fails, fix the underlying issue and click `Setup Control Plane` again to retry. After redeploying a newer Model Lens build into an existing workspace, rerun `Setup Control Plane` once so additive schema migrations are applied before smoke testing.
+The wizard should keep `Continue to Discover` disabled until setup succeeds for the current control-plane namespace. If setup fails, fix the underlying issue and click `Setup Control Plane` again to retry. After redeploying a newer Model Lens build into an existing workspace, rerun `Setup Control Plane` once so additive schema migrations are applied before smoke testing. That rerun should now be safe on already-migrated workspaces because the setup path checks existing columns/tables before issuing additive `ALTER TABLE` migrations.
 
 Then click `Validate Workspace Wiring`.
 

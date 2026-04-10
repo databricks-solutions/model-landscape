@@ -445,7 +445,7 @@ After deploy:
 2. If compute is stopped, run `databricks apps start model-lens`.
 3. In the `Setup` step, confirm the `Control Plane Catalog` and `Control Plane Schema` fields match your deployment target.
 4. Open `Advanced workspace options` only if you want Lakebase-backed reads or need catalog creation during setup.
-5. Click `Setup Control Plane`. The `Setup` step only unlocks after setup succeeds for the current namespace values. If setup fails, fix the issue and click `Setup Control Plane` again to retry. After redeploying a newer Model Lens build into an existing workspace, run `Setup Control Plane` once so additive table migrations are applied.
+5. Click `Setup Control Plane`. The `Setup` step only unlocks after setup succeeds for the current namespace values. If setup fails, fix the issue and click `Setup Control Plane` again to retry. After redeploying a newer Model Lens build into an existing workspace, run `Setup Control Plane` once so additive table migrations are applied; rerunning it is safe because existing columns/tables are checked before additive migrations are issued.
 6. Click `Validate Workspace Wiring`.
 7. Confirm the `Workspace Readiness` card shows one of these supported modes:
    - `Fully ready`: the shared workflow resolves and the app can trigger bootstrap immediately

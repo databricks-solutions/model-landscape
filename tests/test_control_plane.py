@@ -37,6 +37,7 @@ class FakeWarehouse:
         self.alter_field_already_exists = False
         self.schema_exists = False
         self.existing_tables: set[str] = set()
+        self.table_schemas: dict[str, list[dict[str, str]]] = {}
         self.fail_create_schema = False
         self.fail_create_table = False
         self.comparison_window_rows: list[dict[str, object]] = []
@@ -89,6 +90,14 @@ class FakeWarehouse:
             self.existing_tables.add(table_name)
         if self.alter_field_already_exists and "ALTER TABLE" in sql and "ADD COLUMNS" in sql:
             raise Exception("[FIELD_ALREADY_EXISTS] Column already exists")
+        if "ALTER TABLE" in sql and "ADD COLUMNS" in sql:
+            table_name = sql.split("ALTER TABLE", 1)[1].split("ADD COLUMNS", 1)[0].strip()
+            payload = sql.split("ADD COLUMNS", 1)[1].strip()
+            payload = payload.removeprefix("(").removesuffix(")")
+            column_name, data_type = payload.split(None, 1)
+            schema = list(self.table_schemas.get(table_name, []))
+            schema.append({"col_name": column_name.strip("`"), "data_type": data_type.strip()})
+            self.table_schemas[table_name] = schema
         self.executed.append(sql)
 
     def execute_params(self, sql: str, params: tuple) -> None:
@@ -264,8 +273,10 @@ class FakeWarehouse:
             }
         ])
 
-    def describe_table(self, table_name: str) -> pd.DataFrame:
-        del table_name
+    def describe_table(self, table_name: str, *, cache: bool = True) -> pd.DataFrame:
+        del cache
+        if table_name in self.table_schemas:
+            return pd.DataFrame(self.table_schemas[table_name])
         return pd.DataFrame([
             {"col_name": "event_ts", "data_type": "timestamp"},
             {"col_name": "model_id", "data_type": "string"},
@@ -757,6 +768,39 @@ def test_ensure_control_plane_ignores_field_already_exists_during_migration() ->
     assert any("CREATE TABLE IF NOT EXISTS" in sql for sql in warehouse.executed)
 
 
+def test_ensure_table_columns_skips_alter_when_column_already_exists() -> None:
+    warehouse = FakeWarehouse()
+    table_name = "model_observability.control_plane.refresh_runs"
+    warehouse.table_schemas[table_name] = [
+        {"col_name": "run_id", "data_type": "STRING"},
+        {"col_name": "scope", "data_type": "STRING"},
+        {"col_name": "generation_id", "data_type": "STRING"},
+    ]
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    repository._ensure_table_columns(table_name, {"scope": "STRING", "generation_id": "STRING"})
+
+    assert not any("ALTER TABLE model_observability.control_plane.refresh_runs" in sql for sql in warehouse.executed)
+
+
+def test_ensure_table_columns_is_idempotent_across_repeated_runs() -> None:
+    warehouse = FakeWarehouse()
+    table_name = "model_observability.control_plane.refresh_runs"
+    warehouse.table_schemas[table_name] = [
+        {"col_name": "run_id", "data_type": "STRING"},
+    ]
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    repository._ensure_table_columns(table_name, {"scope": "STRING"})
+    repository._ensure_table_columns(table_name, {"scope": "STRING"})
+
+    alters = [
+        sql for sql in warehouse.executed
+        if "ALTER TABLE model_observability.control_plane.refresh_runs" in sql
+    ]
+    assert len(alters) == 1
+
+
 def test_ensure_control_plane_skips_create_when_schema_and_tables_already_exist() -> None:
     warehouse = FakeWarehouse()
     warehouse.schema_exists = True
@@ -834,6 +878,29 @@ def test_ensure_control_plane_adds_window_id_to_drift_and_performance_metrics() 
         and "window_id" in sql.lower()
         for sql in warehouse.executed
     )
+
+
+def test_ensure_control_plane_adds_source_run_id_to_daily_and_window_tables() -> None:
+    warehouse = FakeWarehouse()
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    repository.ensure_control_plane()
+
+    expected_tables = (
+        "daily_quality_profiles",
+        "daily_class_quality_profiles",
+        "daily_feature_profiles",
+        "daily_class_feature_profiles",
+        "daily_performance_profiles",
+        "daily_label_metrics",
+        "comparison_windows",
+    )
+    for table_name in expected_tables:
+        assert any(
+            f"ALTER TABLE model_observability.control_plane.{table_name}" in sql
+            and "source_run_id" in sql.lower()
+            for sql in warehouse.executed
+        )
 
 
 def test_get_existing_window_keys_falls_back_to_drift_metrics_when_comparison_windows_are_empty() -> None:

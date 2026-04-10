@@ -20,7 +20,13 @@ from model_lens.domain.models import (
 from model_lens.services.inference_contracts import build_inference_contract
 from model_lens.services.lakebase import LakebaseConnection, LakebaseReadModel
 from model_lens.services.schema import (
+    comparison_window_migration_columns,
+    daily_class_feature_profile_migration_columns,
+    daily_class_quality_profile_migration_columns,
+    daily_feature_profile_migration_columns,
+    daily_label_metric_migration_columns,
     daily_performance_profile_migration_columns,
+    daily_quality_profile_migration_columns,
     ddl,
     drift_metric_migration_columns,
     incident_history_migration_columns,
@@ -243,7 +249,13 @@ class ControlPlaneRepository:
         self._ensure_performance_bin_spec_columns()
         self._ensure_incident_columns()
         self._ensure_incident_history_columns()
+        self._ensure_daily_quality_profile_columns()
+        self._ensure_daily_class_quality_profile_columns()
+        self._ensure_daily_feature_profile_columns()
+        self._ensure_daily_class_feature_profile_columns()
         self._ensure_daily_performance_profile_columns()
+        self._ensure_daily_label_metric_columns()
+        self._ensure_comparison_window_columns()
         if self._read_model and self._read_model.configured:
             self._read_model.ensure_schema()
 
@@ -294,18 +306,34 @@ class ControlPlaneRepository:
                 return
             raise
 
-    def _ensure_table_columns(self, table_name: str, migration_columns: dict[str, str]) -> None:
+    def _describe_table(self, table_name: str, *, cache: bool = True) -> pd.DataFrame:
+        describe = getattr(self._warehouse, "describe_table")
         try:
-            schema = self._warehouse.describe_table(table_name)
-        except Exception:
-            return
-        existing = {
+            return describe(table_name, cache=cache)
+        except TypeError:
+            return describe(table_name)
+
+    def _existing_table_columns(self, table_name: str, *, cache: bool = True) -> set[str]:
+        schema = self._describe_table(table_name, cache=cache)
+        return {
             str(value).strip().lower()
             for value in schema.get("col_name", pd.Series(dtype=str)).tolist()
             if str(value).strip()
         }
+
+    def _ensure_table_columns(self, table_name: str, migration_columns: dict[str, str]) -> None:
+        try:
+            existing = self._existing_table_columns(table_name, cache=False)
+        except Exception:
+            return
         for column_name, data_type in migration_columns.items():
             normalized_name = column_name.strip().lower()
+            if normalized_name in existing:
+                continue
+            try:
+                existing = self._existing_table_columns(table_name, cache=False)
+            except Exception:
+                pass
             if normalized_name in existing:
                 continue
             try:
@@ -314,10 +342,15 @@ class ControlPlaneRepository:
                     f"ADD COLUMNS ({validate_identifier(column_name)} {data_type})"
                 )
             except Exception as error:
-                if _is_field_already_exists_error(error):
+                try:
+                    existing = self._existing_table_columns(table_name, cache=False)
+                except Exception:
+                    pass
+                if normalized_name in existing or _is_field_already_exists_error(error):
                     existing.add(normalized_name)
                     continue
                 raise
+            existing.add(normalized_name)
 
     def _ensure_monitor_config_columns(self) -> None:
         self._ensure_table_columns(self._table_names.monitor_configs, monitor_config_migration_columns())
@@ -344,6 +377,42 @@ class ControlPlaneRepository:
         self._ensure_table_columns(
             self._table_names.daily_performance_profiles,
             daily_performance_profile_migration_columns(),
+        )
+
+    def _ensure_daily_quality_profile_columns(self) -> None:
+        self._ensure_table_columns(
+            self._table_names.daily_quality_profiles,
+            daily_quality_profile_migration_columns(),
+        )
+
+    def _ensure_daily_class_quality_profile_columns(self) -> None:
+        self._ensure_table_columns(
+            self._table_names.daily_class_quality_profiles,
+            daily_class_quality_profile_migration_columns(),
+        )
+
+    def _ensure_daily_feature_profile_columns(self) -> None:
+        self._ensure_table_columns(
+            self._table_names.daily_feature_profiles,
+            daily_feature_profile_migration_columns(),
+        )
+
+    def _ensure_daily_class_feature_profile_columns(self) -> None:
+        self._ensure_table_columns(
+            self._table_names.daily_class_feature_profiles,
+            daily_class_feature_profile_migration_columns(),
+        )
+
+    def _ensure_daily_label_metric_columns(self) -> None:
+        self._ensure_table_columns(
+            self._table_names.daily_label_metrics,
+            daily_label_metric_migration_columns(),
+        )
+
+    def _ensure_comparison_window_columns(self) -> None:
+        self._ensure_table_columns(
+            self._table_names.comparison_windows,
+            comparison_window_migration_columns(),
         )
 
     def _ensure_quality_metric_columns(self) -> None:
@@ -379,7 +448,7 @@ class ControlPlaneRepository:
     def scan_source_table(self, table_name: str, preview_rows: int = 5) -> tuple[list[str], pd.DataFrame, pd.DataFrame]:
         validate_identifier(table_name)
         preview_rows = max(1, min(preview_rows, 20))
-        schema = self._warehouse.describe_table(table_name)
+        schema = self._describe_table(table_name)
         columns = [str(value) for value in schema.get("col_name", pd.Series(dtype=str)).tolist()]
         preview = self._warehouse.query(f"SELECT * FROM {table_name} LIMIT {preview_rows}")
         return columns, preview, schema

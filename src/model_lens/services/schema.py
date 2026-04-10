@@ -49,6 +49,43 @@ def runtime_state_migration_columns() -> dict[str, str]:
 def daily_performance_profile_migration_columns() -> dict[str, str]:
     return {
         "volume_pct": "DOUBLE",
+        "source_run_id": "STRING",
+    }
+
+
+def daily_quality_profile_migration_columns() -> dict[str, str]:
+    return {
+        "source_run_id": "STRING",
+    }
+
+
+def daily_class_quality_profile_migration_columns() -> dict[str, str]:
+    return {
+        "source_run_id": "STRING",
+    }
+
+
+def daily_feature_profile_migration_columns() -> dict[str, str]:
+    return {
+        "source_run_id": "STRING",
+    }
+
+
+def daily_class_feature_profile_migration_columns() -> dict[str, str]:
+    return {
+        "source_run_id": "STRING",
+    }
+
+
+def daily_label_metric_migration_columns() -> dict[str, str]:
+    return {
+        "source_run_id": "STRING",
+    }
+
+
+def comparison_window_migration_columns() -> dict[str, str]:
+    return {
+        "source_run_id": "STRING",
     }
 
 

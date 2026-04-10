@@ -25,6 +25,9 @@ class WarehouseConnection:
         self._conn = None
         self._cache: dict[str, pd.DataFrame] = {}
 
+    def _invalidate_cache(self) -> None:
+        self._cache.clear()
+
     @property
     def configured(self) -> bool:
         return bool(self._warehouse_id)
@@ -123,10 +126,12 @@ class WarehouseConnection:
 
     def execute(self, sql: str) -> None:
         self._retry(lambda cursor: cursor.execute(sql))
+        self._invalidate_cache()
 
     def execute_params(self, sql: str, params: tuple) -> None:
         resolved_sql, resolved = self._resolve_params(sql, params)
         self._retry(lambda cursor: cursor.execute(resolved_sql, parameters=resolved))
+        self._invalidate_cache()
 
     def execute_batch(self, insert_template: str, rows: list[tuple], batch_size: int = 200) -> None:
         if not rows:
@@ -144,10 +149,11 @@ class WarehouseConnection:
                 placeholders.append("(" + ", ".join(names) + ")")
             sql = f"{insert_template} {', '.join(placeholders)}"
             self._retry(lambda cursor, statement=sql, parameters=param_dict: cursor.execute(statement, parameters=parameters))
+        self._invalidate_cache()
 
-    def describe_table(self, table_name: str) -> pd.DataFrame:
+    def describe_table(self, table_name: str, *, cache: bool = True) -> pd.DataFrame:
         validate_identifier(table_name)
-        frame = self.query(f"DESCRIBE TABLE {table_name}", cache=True)
+        frame = self.query(f"DESCRIBE TABLE {table_name}", cache=cache)
         if frame.empty or "col_name" not in frame.columns:
             return pd.DataFrame(columns=["col_name", "data_type"])
         frame = frame[~frame["col_name"].astype(str).str.startswith("#", na=False)].copy()
@@ -155,8 +161,8 @@ class WarehouseConnection:
         keep = [column for column in ("col_name", "data_type", "comment") if column in frame.columns]
         return frame[keep].reset_index(drop=True)
 
-    def get_columns(self, table_name: str) -> list[str]:
-        frame = self.describe_table(table_name)
+    def get_columns(self, table_name: str, *, cache: bool = True) -> list[str]:
+        frame = self.describe_table(table_name, cache=cache)
         if frame.empty:
             return []
         return [str(value) for value in frame["col_name"].tolist()]
