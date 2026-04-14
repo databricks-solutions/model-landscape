@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import accuracy_score, f1_score, mean_absolute_error, mean_squared_error, precision_score, recall_score
+from sklearn.metrics import accuracy_score, mean_absolute_error, mean_squared_error
 
 from model_lens.domain.performance_metrics import default_performance_metric_names, normalize_performance_metric_names
 from model_lens.services.class_filters import normalized_binary_series, resolved_prediction_binary_series
@@ -39,7 +39,7 @@ def compute_classification_metrics(
     prediction_col: str,
     label_col: str,
     prediction_score_col: str | None = None,
-) -> dict[str, float]:
+) -> dict[str, float | None]:
     pred_binary, truth_binary = _resolved_binary_arrays(
         df,
         prediction_col=prediction_col,
@@ -48,11 +48,21 @@ def compute_classification_metrics(
     )
     if len(pred_binary) == 0:
         return {}
+    tp = int(((pred_binary == 1) & (truth_binary == 1)).sum())
+    fp = int(((pred_binary == 1) & (truth_binary == 0)).sum())
+    fn = int(((pred_binary == 0) & (truth_binary == 1)).sum())
+    tn = int(((pred_binary == 0) & (truth_binary == 0)).sum())
+    precision = (tp / (tp + fp)) if (tp + fp) > 0 else None
+    recall = (tp / (tp + fn)) if (tp + fn) > 0 else None
+    f1 = None
+    if precision is not None and recall is not None and (precision + recall) > 0:
+        f1 = (2.0 * precision * recall) / (precision + recall)
+    accuracy = float(accuracy_score(truth_binary, pred_binary)) if len(pred_binary) > 0 else None
     return {
-        "f1": round(float(f1_score(truth_binary, pred_binary, zero_division=0)), 4),
-        "precision": round(float(precision_score(truth_binary, pred_binary, zero_division=0)), 4),
-        "recall": round(float(recall_score(truth_binary, pred_binary, zero_division=0)), 4),
-        "accuracy": round(float(accuracy_score(truth_binary, pred_binary)), 4),
+        "f1": round(float(f1), 4) if f1 is not None else None,
+        "precision": round(float(precision), 4) if precision is not None else None,
+        "recall": round(float(recall), 4) if recall is not None else None,
+        "accuracy": round(float(accuracy), 4) if accuracy is not None else None,
     }
 
 
@@ -190,6 +200,8 @@ def rank_degradation_contributors(
                     continue
                 baseline_metric = base_metrics[metric_name]
                 current_metric = cur_metrics[metric_name]
+                if baseline_metric is None or current_metric is None:
+                    continue
                 delta = (
                     baseline_metric - current_metric
                     if regression_mode

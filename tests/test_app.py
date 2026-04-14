@@ -1045,11 +1045,16 @@ def test_render_performance_callback_surfaces_zero_delta_state(monkeypatch) -> N
 
     class _FakeBackend:
         def get_monitor_config(self, model_id):
-            return SimpleNamespace(contract=SimpleNamespace(label_col="label"))
+            return SimpleNamespace(
+                contract=SimpleNamespace(label_col="label"),
+                problem_type="classification",
+                performance_metric_names=("f1", "precision", "recall"),
+            )
 
         def get_performance_summary(self, model_id, metric_name="f1"):
+            value_map = {"f1": 0.84, "precision": 0.9, "recall": 0.78}
             return {
-                "timeline": [{"period": "2026-01-21", "f1": 0.84}],
+                "timeline": [{"period": "2026-01-21", metric_name: value_map.get(metric_name)}],
                 "contributors": pd.DataFrame([{"feature": "amount", "weighted_delta": 0.0}]),
                 "latest_bins": latest_bins,
                 "all_bins": latest_bins,
@@ -1058,6 +1063,14 @@ def test_render_performance_callback_surfaces_zero_delta_state(monkeypatch) -> N
                 "timeline_unavailable_reason": "",
             }
 
+        def get_drift_results(self, model_id, granularity="daily"):
+            assert granularity == "daily"
+            return pd.DataFrame(
+                [
+                    {"feature": "amount", "period": "2026-01-21", "psi": 0.12},
+                ]
+            )
+
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
     app = create_app()
     callback = app.callback_map[RENDER_PERFORMANCE_CALLBACK]["callback"]
@@ -1065,8 +1078,10 @@ def test_render_performance_callback_surfaces_zero_delta_state(monkeypatch) -> N
 
     result = fn("/performance", "fraud_model_demo", "f1", 0, {}, None)
 
-    assert "Viewing metric: F1 Score" in str(result[0])
+    assert "Feature impact metric: F1 Score" in str(result[0])
     assert "no significant degradation" in str(result[0]).lower()
+    assert "Performance Metrics Over Time" in str(result[2])
+    assert "PSI Over Time (Top Drifting Features)" in str(result[3])
     assert "Latest Bin Metrics" in str(result[3])
     assert "Only one comparison window is available" in str(result[6])
 
@@ -1089,18 +1104,38 @@ def test_render_performance_callback_handles_partial_window_note_and_missing_met
 
     class _FakeBackend:
         def get_monitor_config(self, model_id):
-            return SimpleNamespace(contract=SimpleNamespace(label_col="label"))
+            return SimpleNamespace(
+                contract=SimpleNamespace(label_col="label"),
+                problem_type="classification",
+                performance_metric_names=("f1", "precision", "recall"),
+            )
 
         def get_performance_summary(self, model_id, metric_name="precision"):
+            timeline_map = {
+                "f1": [{"period": "2026-01-21", "f1": 0.84}],
+                "precision": [{"period": "2026-01-21", "precision": None}],
+                "recall": [{"period": "2026-01-21", "recall": 0.73}],
+            }
+            reason_map = {
+                "precision": "PRECISION over time is unavailable until daily labeled facts are populated for this monitor.",
+            }
             return {
-                "timeline": [{"period": "2026-01-21", "f1": 0.84}],
+                "timeline": timeline_map.get(metric_name, []),
                 "contributors": pd.DataFrame([{"feature": "amount", "weighted_delta": 0.0}]),
                 "latest_bins": latest_bins,
                 "all_bins": latest_bins,
                 "has_significant_degradation": False,
                 "worst_weighted_delta": 0.0,
-                "timeline_unavailable_reason": "PRECISION over time is unavailable until daily labeled facts are populated for this monitor.",
+                "timeline_unavailable_reason": reason_map.get(metric_name, ""),
             }
+
+        def get_drift_results(self, model_id, granularity="daily"):
+            assert granularity == "daily"
+            return pd.DataFrame(
+                [
+                    {"feature": "amount", "period": "2026-01-21", "psi": 0.12},
+                ]
+            )
 
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
     app = create_app()
@@ -1111,7 +1146,8 @@ def test_render_performance_callback_handles_partial_window_note_and_missing_met
 
     assert "unavailable until daily labeled facts are populated" in str(result[0]).lower()
     assert "Latest comparison window end: 2026-01-21" in str(result[6])
-    assert "No PRECISION values are available yet" in str(result[2])
+    assert "Performance Metrics Over Time" in str(result[2])
+    assert "Chart gaps mean the metric was undefined on those days, not zero." in str(result[6])
 
 
 def test_render_quality_callback_surfaces_history_and_latest_snapshot(monkeypatch) -> None:

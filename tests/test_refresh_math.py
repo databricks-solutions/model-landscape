@@ -100,7 +100,8 @@ def test_refresh_monitor_backfill_produces_all_window_rows() -> None:
 
     assert len({row["window_end"] for row in result.drift_rows}) == 8
     assert len(result.drift_rows) == 8 * 2 * 3
-    assert len({row["window_end"] for row in result.performance_rows}) == 8
+    assert len({row["window_end"] for row in result.performance_rows}) == 7
+    assert {row["metric_name"] for row in result.performance_rows} == {"precision"}
     assert len(result.window_rows) == 8
     assert isinstance(result.incident_history_rows, list)
     assert all(row["window_id"] for row in result.incident_history_rows)
@@ -412,6 +413,6 @@ def test_daily_profiles_can_derive_window_history_without_raw_window_reloads() -
     assert len(result.quality_history_rows) == 8
     assert len({row["window_end"] for row in result.drift_rows}) == 8
     assert any(row["feature_name"] == "segment" and row["metric_name"] == "psi" for row in result.drift_rows)
-    assert {row["metric_name"] for row in result.performance_rows} == {"f1", "precision", "recall"}
+    assert {row["metric_name"] for row in result.performance_rows} == {"precision"}
     assert all(row["window_id"] for row in result.performance_rows)
     assert all(row["window_id"] for row in result.incident_history_rows)

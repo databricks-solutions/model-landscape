@@ -109,6 +109,8 @@ Current engine behavior:
 - model/version inference now uses preview rows plus a hard-capped bounded source sample; if that evidence still cannot prove a single scope cheaply, discovery marks the draft `requires_review` instead of escalating into an open-ended distinct scan
 - discovery keeps the full numeric feature set by default; Model Lens does not silently trim the first run to a top-N subset
 - binary-classification analytics now prefer `prediction_score_col` when it is configured; otherwise they only use `prediction_col` when it is probability-like or already binary-like, so separate score columns no longer silently degrade Performance and class-filter semantics
+- the Performance page now stacks the classification-metric timeline above a PSI-over-time chart on the same screen so operators can compare metric drops against drift spikes without tab-hopping
+- undefined classification metrics now stay null through the daily/window performance pipeline, so Precision / Recall / F1 render as chart gaps on unsupported days instead of false zeroes
 - the drift/performance path now avoids redundant per-feature numeric coercion during backfills so wide numeric schemas are cheaper to process than the earlier implementation
 - the review step now stores per-monitor cadence presets plus per-monitor performance metrics, and the Monitor Settings page can edit those settings later without creating new Databricks jobs
 - classification monitors now track `f1`, `precision`, and `recall` by default, with optional `accuracy`; regression monitors track `rmse` and `mae` by default

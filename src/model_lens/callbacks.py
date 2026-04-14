@@ -3273,6 +3273,36 @@ def register_callbacks(app) -> None:
                     None,
                     html.Div(),
                 )
+            timeline_metric_names = _configured_performance_metric_names(config)
+            classification_timeline_metrics = [
+                current_metric
+                for current_metric in timeline_metric_names
+                if current_metric in {"precision", "recall", "f1"}
+            ]
+            if classification_timeline_metrics and str(getattr(config, "problem_type", "classification") or "classification").strip().lower() == "classification":
+                timeline_metric_names = classification_timeline_metrics
+            else:
+                timeline_metric_names = [resolved_metric]
+            timeline_summaries = {resolved_metric: performance}
+            for current_metric in timeline_metric_names:
+                if current_metric == resolved_metric:
+                    continue
+                timeline_summaries[current_metric] = backend.get_performance_summary(model_id, metric_name=current_metric)
+            timeline_map: dict[str, dict[str, object]] = {}
+            for current_metric, summary in timeline_summaries.items():
+                for row in summary.get("timeline", []):
+                    period = str(row.get("period") or "").strip()
+                    if not period:
+                        continue
+                    entry = timeline_map.setdefault(period, {"period": period})
+                    entry[current_metric] = row.get(current_metric)
+            combined_timeline = [
+                timeline_map[period]
+                for period in sorted(
+                    timeline_map,
+                    key=lambda value: pd.to_datetime(value, errors="coerce"),
+                )
+            ]
             contributors = performance["contributors"]
             feature_frame = latest_bins if not latest_bins.empty else all_bins
             features = sorted(
@@ -3288,13 +3318,17 @@ def register_callbacks(app) -> None:
             degradation_detected = bool(performance.get("has_significant_degradation"))
             alert_children: list[object] = [
                 html.Small(
-                    f"Viewing metric: {performance_metric_label(resolved_metric)}",
+                    f"Feature impact metric: {performance_metric_label(resolved_metric)}",
                     className="text-muted d-block mb-2",
                 )
             ]
-            timeline_unavailable_reason = str(performance.get("timeline_unavailable_reason") or "").strip()
-            if timeline_unavailable_reason:
-                alert_children.append(_status_alert(timeline_unavailable_reason, "warning"))
+            timeline_reasons: list[str] = []
+            for current_metric in timeline_metric_names:
+                current_reason = str(timeline_summaries.get(current_metric, {}).get("timeline_unavailable_reason") or "").strip()
+                if current_reason and current_reason not in timeline_reasons:
+                    timeline_reasons.append(current_reason)
+            for current_reason in timeline_reasons:
+                alert_children.append(_status_alert(current_reason, "warning"))
             if not degradation_detected:
                 alert_children.append(
                     _status_alert(
@@ -3338,8 +3372,18 @@ def register_callbacks(app) -> None:
                     ),
                     md=4,
                 ),
-                dbc.Col(make_metric_card("Windows", str(len(performance["timeline"])), "Historical performance snapshots"), md=4),
+                dbc.Col(make_metric_card("Windows", str(len(combined_timeline)), "Historical performance snapshots"), md=4),
             ]
+            drift = backend.get_drift_results(model_id, granularity="daily") if hasattr(backend, "get_drift_results") else pd.DataFrame()
+            drift_ranking = (
+                drift.assign(_psi_rank=pd.to_numeric(drift.get("psi", pd.Series(dtype=float)), errors="coerce").fillna(0.0))
+                .groupby("feature", as_index=False)["_psi_rank"]
+                .max()
+                .sort_values("_psi_rank", ascending=False)
+                if isinstance(drift, pd.DataFrame) and not drift.empty
+                else pd.DataFrame(columns=["feature", "_psi_rank"])
+            )
+            drift_features = drift_ranking["feature"].head(5).astype(str).tolist() if not drift_ranking.empty else []
             note_source = latest_bins if not latest_bins.empty else all_bins
             note = note_source[[column for column in ("window_start", "window_end") if column in note_source.columns]].drop_duplicates().astype(str)
             note_row = note.to_dict("records")[0] if not note.empty else {}
@@ -3353,22 +3397,48 @@ def register_callbacks(app) -> None:
                 note_text = f"Latest comparison window start: {note_row['window_start']}"
             if note_text:
                 note_parts.append(html.Small(note_text, className="text-muted d-block"))
-            history_message = _comparison_history_message(len(performance["timeline"]), "daily")
+            history_message = _comparison_history_message(len(combined_timeline), "daily")
             if history_message:
                 note_parts.append(html.Small(history_message, className="text-muted d-block"))
-            if any(row.get(resolved_metric) is None for row in performance["timeline"]):
+            if any(
+                pd.isna(row.get(current_metric))
+                for row in combined_timeline
+                for current_metric in timeline_metric_names
+                if current_metric in row
+            ):
                 note_parts.append(
                     html.Small(
-                        "Chart gaps mean the selected metric was undefined on those days, not zero.",
+                        "Chart gaps mean the metric was undefined on those days, not zero.",
                         className="text-muted d-block",
                     )
                 )
             return (
                 alert,
                 kpi_cards,
-                make_chart_card(charts.build_performance_timeline(performance["timeline"], metric_name=resolved_metric)),
+                make_chart_card(
+                    charts.build_performance_timeline(
+                        combined_timeline,
+                        metric_name=resolved_metric,
+                        metric_names=timeline_metric_names,
+                    )
+                ),
                 html.Div(
                     [
+                        html.H6("Drift vs Time", className="text-light mt-3 mb-2"),
+                        html.P(
+                            "Compare the PSI trend below with the performance metrics above to spot time-aligned drift and metric shifts.",
+                            className="text-muted",
+                            style={"fontSize": "0.8rem"},
+                        ),
+                        make_chart_card(
+                            charts.build_drift_timeline(
+                                drift,
+                                drift_features,
+                                metric="psi",
+                                title="PSI Over Time (Top Drifting Features)",
+                            ),
+                            class_name="mb-3",
+                        ),
                         make_chart_card(charts.build_feature_bin_impact(feature_frame, contributors)),
                         html.H6("Latest Bin Metrics", className="text-light mt-3 mb-2"),
                         _render_frame(latest_bin_table, "No bin-level performance data available."),

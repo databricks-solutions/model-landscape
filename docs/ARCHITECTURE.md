@@ -66,6 +66,7 @@ Responsibilities:
 - show recent incident lifecycle rows in `Monitor Settings` from persisted `incident_history`, so warehouse history is visible in-app even without a dedicated incident-timeline page
 - show a dedicated `Incidents` page that reads cross-monitor open incidents from `incidents` and recent lifecycle rows from `incident_history`
 - show `Refresh Diagnostics` in `Monitor Settings`, interpreting recent `refresh_runs` telemetry into bottleneck categories, trend guidance, and an advisory compute-footprint label
+- keep the Performance page correlation-friendly by rendering the performance-metric trend above a PSI-over-time chart for the same monitor
 - split `Monitor Settings` into `Contract`, `Settings`, and `Admin` tabs so the contract view, editable cadence/metric controls, and lifecycle/runtime actions are separated without changing the underlying route or data model
 - rank Overview severity and Drift top-feature callouts from historical max drift across persisted comparison windows instead of only the latest window
 - keep Drift threshold guides optional in the page UI while leaving the shared thresholds active for status and incident semantics
@@ -130,6 +131,8 @@ For binary classification monitors, the new class-aware daily tables stay additi
 - `daily_class_quality_profiles` stores per-day quality facts split by `actual` / `predicted` positive-or-negative class slices
 - `daily_class_feature_profiles` stores the matching per-day feature distributions for those same slices
 - `daily_label_metrics` stores raw daily `precision`, `recall`, `f1`, and `accuracy` plus the underlying class counts
+
+Undefined classification metrics are preserved as nulls instead of being coerced to zero. That keeps Precision / Recall / F1 gaps visible on the Performance page when the metric is mathematically undefined for a given day.
 
 Those tables are not required for the unfiltered pages. The unfiltered Drift and Data Quality views continue to read the stable window/history tables, while class-filtered views and the raw daily Performance timeline can switch to these daily facts after the next refresh populates them.
 

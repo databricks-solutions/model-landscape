@@ -6,6 +6,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from model_lens.domain.performance_metrics import performance_metric_label
 from model_lens.services.thresholds import drift_severity, get_thresholds
 from model_lens.ui.styles import COLORS
 
@@ -584,33 +585,58 @@ def build_dimension_breakdown(breakdown_df: pd.DataFrame, feature_name: str, dim
     )
 
 
-def build_performance_timeline(metrics_over_time: list[dict], metric_name: str = "f1"):
+def build_performance_timeline(
+    metrics_over_time: list[dict],
+    metric_name: str = "f1",
+    *,
+    metric_names: list[str] | tuple[str, ...] | None = None,
+):
     if not metrics_over_time:
         fig = go.Figure()
         fig.add_annotation(text="No performance data available", showarrow=False)
         return _apply_layout(fig, title=f"{metric_name.upper()} Over Time")
 
     frame = pd.DataFrame(metrics_over_time)
-    if metric_name not in frame.columns:
+    requested_metrics = [
+        str(value).strip().lower()
+        for value in (metric_names or [metric_name])
+        if str(value).strip()
+    ]
+    available_metrics = [value for value in requested_metrics if value in frame.columns]
+    if not available_metrics:
         fig = go.Figure()
         fig.add_annotation(text=f"No {metric_name.upper()} values are available yet", showarrow=False)
         return _apply_layout(fig, title=f"{metric_name.upper()} Over Time")
-    if pd.to_numeric(frame[metric_name], errors="coerce").dropna().empty:
+    if not any(not pd.to_numeric(frame[current_metric], errors="coerce").dropna().empty for current_metric in available_metrics):
         fig = go.Figure()
-        fig.add_annotation(text=f"{metric_name.upper()} is undefined for the available days", showarrow=False)
-        return _apply_layout(fig, title=f"{metric_name.upper()} Over Time")
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=frame["period"].astype(str),
-            y=frame[metric_name],
-            mode="markers" if len(frame) < 2 else "lines+markers",
-            line=dict(color=COLORS["cyan"], width=3),
-            marker=dict(size=10 if len(frame) < 2 else 8),
-            name=metric_name.upper(),
-            connectgaps=False,
+        title = "Performance Metrics Over Time" if len(available_metrics) > 1 else f"{metric_name.upper()} Over Time"
+        fig.add_annotation(
+            text=(
+                "Performance metrics are undefined for the available days"
+                if len(available_metrics) > 1
+                else f"{metric_name.upper()} is undefined for the available days"
+            ),
+            showarrow=False,
         )
-    )
+        return _apply_layout(fig, title=title)
+    fig = go.Figure()
+    colors = [COLORS["cyan"], COLORS["high"], COLORS["highlight"], COLORS["blue"]]
+    for index, current_metric in enumerate(available_metrics):
+        current_values = pd.to_numeric(frame[current_metric], errors="coerce")
+        if current_values.dropna().empty:
+            continue
+        fig.add_trace(
+            go.Scatter(
+                x=frame["period"].astype(str),
+                y=current_values,
+                mode="markers" if len(frame) < 2 else "lines+markers",
+                line=dict(color=colors[index % len(colors)], width=3 if index == 0 else 2),
+                marker=dict(size=10 if len(frame) < 2 else 8),
+                name=performance_metric_label(current_metric),
+                connectgaps=False,
+            )
+        )
+    chart_title = "Performance Metrics Over Time" if len(available_metrics) > 1 else f"{metric_name.upper()} Over Time"
     if len(frame) < 2:
         fig.add_annotation(
             text="Only one comparison window is available. Run more refreshes to see trends over time.",
@@ -622,7 +648,13 @@ def build_performance_timeline(metrics_over_time: list[dict], metric_name: str =
             showarrow=False,
             font=dict(size=12, color=COLORS["muted"]),
         )
-    return _apply_layout(fig, title=f"{metric_name.upper()} Over Time", xaxis_title="Period", yaxis_title=metric_name.upper(), height=350)
+    return _apply_layout(
+        fig,
+        title=chart_title,
+        xaxis_title="Period",
+        yaxis_title="Metric Value" if len(available_metrics) > 1 else metric_name.upper(),
+        height=350,
+    )
 
 
 def build_feature_bin_impact(degradation_df: pd.DataFrame, feature_contributors: pd.DataFrame):

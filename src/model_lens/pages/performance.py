@@ -21,7 +21,7 @@ def layout():
                             [
                                 dbc.Col(
                                     [
-                                        dbc.Label("Primary Metric", className="text-muted"),
+                                        dbc.Label("Primary Metric (Feature Impact)", className="text-muted"),
                                         dbc.Select(
                                             id="perf-metric-select",
                                             options=performance_metric_options("classification"),

@@ -88,6 +88,48 @@ def test_daily_performance_profiles_include_optional_accuracy_when_configured() 
     assert {row["metric_name"] for row in rows} == {"f1", "precision", "recall", "accuracy"}
 
 
+def test_daily_performance_profiles_skip_undefined_classification_metrics() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "event_ts": datetime(2026, 1, 1) + timedelta(hours=offset),
+                "model_id": "m1",
+                "prediction": 0.1,
+                "label": 0,
+                "amount": float(offset + 1),
+            }
+            for offset in range(12)
+        ]
+    )
+    contract = build_contract(
+        columns=list(frame.columns),
+        timestamp_col="event_ts",
+        model_id_col="model_id",
+        prediction_col="prediction",
+        label_col="label",
+        feature_columns=["amount"],
+    )
+    config = MonitorConfig(
+        model_key="m1",
+        display_name="Model 1",
+        source_table="cat.sch.logs",
+        contract=contract,
+        baseline=build_default_baseline(),
+        problem_type="classification",
+        performance_metric_names=("f1", "precision", "recall", "accuracy"),
+        default_performance_metric="accuracy",
+    )
+
+    rows = build_daily_performance_profile_rows(
+        config=config,
+        inference_df=frame,
+        computed_at="2026-01-02T00:00:00Z",
+    )
+
+    assert rows
+    assert {row["metric_name"] for row in rows} == {"accuracy"}
+
+
 def test_classification_metrics_prefer_prediction_score_col_over_discrete_prediction_labels() -> None:
     frame = pd.DataFrame(
         [
@@ -112,3 +154,21 @@ def test_classification_metrics_prefer_prediction_score_col_over_discrete_predic
 
     assert with_score == {"precision": 1.0, "recall": 1.0, "f1": 1.0, "accuracy": 1.0}
     assert without_score == {"precision": 0.5, "recall": 0.5, "f1": 0.5, "accuracy": 0.5}
+
+
+def test_classification_metrics_return_nulls_for_undefined_precision_recall_and_f1() -> None:
+    frame = pd.DataFrame(
+        [
+            {"prediction": 0.1, "label": 0},
+            {"prediction": 0.2, "label": 0},
+            {"prediction": 0.3, "label": 0},
+        ]
+    )
+
+    metrics = compute_classification_metrics(
+        frame,
+        prediction_col="prediction",
+        label_col="label",
+    )
+
+    assert metrics == {"precision": None, "recall": None, "f1": None, "accuracy": 1.0}
