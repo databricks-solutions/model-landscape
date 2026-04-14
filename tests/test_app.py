@@ -302,6 +302,99 @@ def test_save_monitor_allows_table_scoped_monitor_without_model_id_column(monkey
     assert result[1]
 
 
+def test_save_monitor_rejects_duplicate_model_key(monkeypatch) -> None:
+    existing = SimpleNamespace(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        status="inactive",
+    )
+
+    class _Repository:
+        def list_monitor_configs(self, status=None):
+            assert status is None
+            return [existing]
+
+        def validate_monitor_source(self, config):
+            raise AssertionError("duplicate-key save should not validate source")
+
+        def upsert_monitor_config(self, config):
+            raise AssertionError("duplicate-key save should not upsert")
+
+        def mark_monitor_bootstrap_pending(self, config):
+            raise AssertionError("duplicate-key save should not queue bootstrap")
+
+    class _FakeBackend:
+        def __init__(self):
+            self.repository = _Repository()
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_input_and_output(app, "save-monitor-btn", "action-status")
+
+    scan_data = {
+        "table_name": "main.demo.inference",
+        "columns": ["event_ts", "prediction", "label", "amount"],
+        "schema": [
+            {"col_name": "event_ts", "data_type": "timestamp"},
+            {"col_name": "prediction", "data_type": "double"},
+            {"col_name": "label", "data_type": "int"},
+            {"col_name": "amount", "data_type": "double"},
+        ],
+        "discovery": {},
+    }
+
+    result = fn(
+        1,
+        scan_data,
+        "Fraud Model Demo",
+        "fraud_model_demo",
+        "event_ts",
+        None,
+        "prediction",
+        "",
+        "",
+        None,
+        None,
+        None,
+        "label",
+        "",
+        "",
+        "",
+        "",
+        ["amount"],
+        [],
+        [],
+        "classification",
+        "rolling",
+        7,
+        None,
+        None,
+        "6h",
+        "daily_7d_repair",
+        ["enabled"],
+        ["f1", "precision", "recall"],
+        "f1",
+        "model_observability",
+        "control_plane",
+        "",
+        "",
+        "",
+        {
+            "control_plane_catalog": "model_observability",
+            "control_plane_schema": "control_plane",
+        },
+        {
+            "overall_mode": "scheduler_only",
+            "blocking_issues": [],
+            "warnings": [],
+        },
+    )
+
+    assert "A monitor with this model key already exists" in str(result[0])
+    assert "Fraud Model Demo (fraud_model_demo, Archived)" in str(result[0])
+    assert result[1] is no_update
+
+
 def test_save_monitor_blocks_when_workspace_wiring_is_not_ready(monkeypatch) -> None:
     saved = {"validated": None}
 
@@ -781,6 +874,25 @@ def test_populate_model_selector_returns_empty_when_no_monitors_exist(monkeypatc
     assert value is None
 
 
+def test_populate_model_selector_labels_include_model_key(monkeypatch) -> None:
+    class _FakeBackend:
+        def list_models(self):
+            return [
+                {"id": "fraud_model_demo", "name": "Fraud Model Demo"},
+                {"id": "spoof_detection_ios_v1", "name": "Spoof Detection iOS V1"},
+            ]
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_output(app, "global-model-select")
+
+    options, value = fn("/", "", None, {}, None)
+
+    assert options[0]["label"] == "Fraud Model Demo (fraud_model_demo)"
+    assert options[1]["label"] == "Spoof Detection iOS V1 (spoof_detection_ios_v1)"
+    assert value == "fraud_model_demo"
+
+
 def test_performance_metric_selector_uses_monitor_configured_metrics(monkeypatch) -> None:
     class _FakeBackend:
         def get_monitor_config(self, model_id):
@@ -799,6 +911,33 @@ def test_performance_metric_selector_uses_monitor_configured_metrics(monkeypatch
 
     assert [option["value"] for option in options] == ["f1", "precision", "recall"]
     assert value == "precision"
+
+
+def test_populate_monitor_form_suggests_unique_model_key_when_default_exists(monkeypatch) -> None:
+    class _FakeBackend:
+        def list_reference_models(self, status=None):
+            assert status is None
+            return [{"id": "fraud_model_demo", "name": "Fraud Model Demo", "status": "active"}]
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_output(app, "display-name-input")
+
+    scan_data = {
+        "table_name": "main.demo.fraud_model_demo",
+        "columns": ["event_ts", "prediction", "amount"],
+        "schema": [
+            {"col_name": "event_ts", "data_type": "timestamp"},
+            {"col_name": "prediction", "data_type": "double"},
+            {"col_name": "amount", "data_type": "double"},
+        ],
+        "discovery": {},
+    }
+
+    result = fn(scan_data, {})
+
+    assert result[0] == "Fraud Model Demo"
+    assert result[1] == "fraud_model_demo_2"
 
 
 def test_render_drift_callback_reports_when_only_one_window_exists(monkeypatch) -> None:
@@ -1410,6 +1549,8 @@ def test_render_reference_callback_shows_archive_and_delete_actions(monkeypatch)
     assert "Contract" in str(result)
     assert "Settings" in str(result)
     assert "Admin" in str(result)
+    assert "Source: main.demo.inference" in str(result)
+    assert "Model ID Value: fraud_model_v1" in str(result)
     assert "Archive Monitor" in str(result)
     assert "Restore Monitor" not in str(result)
     assert "Delete Monitor And History" in str(result)
@@ -1760,6 +1901,8 @@ def test_reference_model_selector_prefers_sidebar_selection_over_stale_page_valu
     options, value = fn("/reference", "active", "spoof_model_demo", 0, {}, "fraud_model_demo")
 
     assert len(options) == 2
+    assert options[0]["label"] == "Fraud Model Demo (fraud_model_demo, Active)"
+    assert options[1]["label"] == "Spoof Detection Ios V1 (spoof_model_demo, Active)"
     assert value == "spoof_model_demo"
 
 
@@ -1963,8 +2106,38 @@ def test_delete_reference_monitor_callback_deletes_selected_monitor(monkeypatch)
     result = fn(1, "fraud_model_demo", None, "fraud_model_demo", {})
 
     assert repository.deleted == ["fraud_model_demo"]
-    assert "Deleted Fraud Model Demo" in str(result[0])
+    assert "Deleted Fraud Model Demo (fraud_model_demo)" in str(result[0])
     assert result[1]
+
+
+def test_delete_reference_monitor_callback_blocks_when_model_key_is_ambiguous(monkeypatch) -> None:
+    repository = SimpleNamespace(deleted=[])
+
+    def delete_monitor(model_id):
+        repository.deleted.append(model_id)
+
+    repository.delete_monitor = delete_monitor
+    repository.list_monitor_configs = lambda status=None: [
+        SimpleNamespace(model_key="fraud_model_demo", display_name="Fraud Model Demo A", status="active"),
+        SimpleNamespace(model_key="fraud_model_demo", display_name="Fraud Model Demo B", status="inactive"),
+    ]
+
+    class _FakeBackend:
+        def __init__(self):
+            self.repository = repository
+
+        def get_monitor_config(self, model_id):
+            return SimpleNamespace(display_name="Fraud Model Demo", model_key="fraud_model_demo")
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_input_and_output(app, "reference-delete-confirm-btn", "reference-page-status")
+
+    result = fn(1, "fraud_model_demo", None, "fraud_model_demo", {})
+
+    assert repository.deleted == []
+    assert "Multiple monitors currently share model key fraud_model_demo" in str(result[0])
+    assert result[1] is no_update
 
 
 def test_reference_delete_modal_toggle_clears_confirmation_input() -> None:

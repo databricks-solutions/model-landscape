@@ -35,6 +35,7 @@ MODEL_ID_PATTERNS = ("model_id", "model_identifier", "model_name", "model")
 MODEL_VERSION_PATTERNS = ("model_version", "version")
 TIMESTAMP_PATTERNS = ("event_ts", "timestamp", "datetime", "event_time", "date", "time", "_ts")
 LABEL_PATTERNS = ("label", "target", "actual", "ground_truth")
+DISCOVERY_SAMPLE_MAX_ROWS = 2000
 
 
 def _normalize(value: object) -> str:
@@ -281,6 +282,34 @@ class MonitorDiscoveryService:
         self._repository = repository
         self._mlflow = mlflow or MLflowDiscoveryService()
 
+    def _bounded_distinct_values(
+        self,
+        *,
+        source_table: str,
+        column_name: str | None,
+        preview: pd.DataFrame,
+        limit: int,
+    ) -> list[str]:
+        if not column_name:
+            return []
+        distinct = _preview_distinct_values(preview, column_name, limit=limit)
+        if len(distinct) >= limit:
+            return distinct[:limit]
+        sampler = getattr(self._repository, "sample_bounded_rows", None)
+        if callable(sampler):
+            sampled_frame = sampler(
+                source_table,
+                [column_name],
+                max_total_rows=DISCOVERY_SAMPLE_MAX_ROWS,
+            )
+            sampled_values = _preview_distinct_values(sampled_frame, column_name, limit=limit)
+            for value in sampled_values:
+                if value not in distinct:
+                    distinct.append(value)
+                if len(distinct) >= limit:
+                    break
+        return distinct[:limit]
+
     def discover(
         self,
         *,
@@ -310,12 +339,23 @@ class MonitorDiscoveryService:
             schema_types,
             preferred_types=NUMERIC_TYPE_TOKENS,
         )
+        prediction_score_candidates = [
+            column
+            for column in _rank_columns(
+                columns,
+                ("prediction_proba", "prediction_score", "probability", "prob", "score"),
+                schema_types,
+                preferred_types=NUMERIC_TYPE_TOKENS,
+            )
+            if column != (prediction_candidates[0] if prediction_candidates else None)
+        ]
         entity_id_candidates = _rank_columns(columns, ENTITY_KEY_PATTERNS, schema_types, preferred_types=STRING_TYPE_TOKENS)
         label_candidates = _rank_columns(columns, LABEL_PATTERNS, schema_types)
 
         timestamp_col = timestamp_candidates[0] if timestamp_candidates else _fallback_column(columns, schema_types, TIMESTAMP_TYPE_TOKENS)
         model_id_col = model_id_candidates[0] if model_id_candidates else None
         prediction_col = prediction_candidates[0] if prediction_candidates else _fallback_column(columns, schema_types, NUMERIC_TYPE_TOKENS)
+        prediction_score_col = prediction_score_candidates[0] if prediction_score_candidates else None
         version_candidates = [
             column
             for column in _rank_columns(columns, MODEL_VERSION_PATTERNS, schema_types, preferred_types=STRING_TYPE_TOKENS)
@@ -341,6 +381,7 @@ class MonitorDiscoveryService:
             timestamp_col,
             model_id_col,
             prediction_col,
+            prediction_score_col,
             model_version_col,
             entity_id_col,
             source_label_col,
@@ -479,30 +520,34 @@ class MonitorDiscoveryService:
                     )
                     requires_review = True
 
-        model_id_value, model_scope_requires_review = self._infer_model_scope(
+        sampled_model_ids = self._bounded_distinct_values(
             source_table=source_table,
-            model_id_col=model_id_col,
+            column_name=model_id_col,
+            preview=preview,
+            limit=5,
+        )
+        sampled_versions = self._bounded_distinct_values(
+            source_table=source_table,
+            column_name=model_version_col,
+            preview=preview,
+            limit=10,
+        )
+
+        model_id_value, model_scope_requires_review = self._infer_model_scope(
+            sampled_values=sampled_model_ids,
             mlflow=mlflow,
             warnings=warnings,
         )
         requires_review = requires_review or model_scope_requires_review
-        if model_id_col and not model_id_value:
-            sampled_model_ids = self._repository.sample_distinct_values(source_table, model_id_col, limit=5)
-            if len(sampled_model_ids) > 1:
-                warnings.append("Source table contains multiple model IDs; review the monitored model scope.")
-                requires_review = True
 
         model_version_value = self._infer_model_version_scope(
-            source_table=source_table,
-            model_version_col=model_version_col,
+            sampled_values=sampled_versions,
             mlflow=mlflow,
         )
 
-        if model_version_col and not model_version_value:
-            sampled_versions = self._repository.sample_distinct_values(source_table, model_version_col, limit=5)
-            if len(sampled_versions) > 1:
-                warnings.append("Source table contains multiple model versions; review the monitored version scope.")
-                requires_review = True
+        if model_version_col and not model_version_value and len(sampled_versions) > 1:
+            warnings.append("Could not confirm a single model version from the bounded source sample; review the monitored version scope.")
+            requires_review = True
 
         problem_type = mlflow.problem_type or self._infer_problem_type(
             prediction_col=prediction_col,
@@ -519,6 +564,7 @@ class MonitorDiscoveryService:
             timestamp_col=timestamp_col,
             model_id_col=model_id_col,
             prediction_col=prediction_col,
+            prediction_score_col=prediction_score_col,
             feature_columns=selected_features,
             slice_columns=low_cardinality_slices,
             model_version_col=model_version_col,
@@ -569,43 +615,37 @@ class MonitorDiscoveryService:
     def _infer_model_scope(
         self,
         *,
-        source_table: str,
-        model_id_col: str | None,
+        sampled_values: list[str],
         mlflow: MLflowDiscovery,
         warnings: list[str],
     ) -> tuple[str | None, bool]:
-        if not model_id_col:
+        if not sampled_values:
             return None, False
-        sampled = self._repository.sample_distinct_values(source_table, model_id_col, limit=5)
-        if len(sampled) == 1:
-            return sampled[0], False
-        if len(sampled) <= 1:
-            return None, False
+        if len(sampled_values) == 1:
+            return sampled_values[0], False
         candidates = {
             _normalize(mlflow.lineage.registered_model_name).lower(),
             _normalize(mlflow.lineage.experiment_name).split("/")[-1].lower(),
         }
-        normalized = {value.lower(): value for value in sampled}
+        normalized = {value.lower(): value for value in sampled_values}
         for candidate in candidates:
             if candidate and candidate in normalized:
                 return normalized[candidate], False
-        warnings.append("Could not infer a single monitored model_id value from source data and MLflow metadata.")
+        warnings.append("Could not confirm a single monitored model ID from the bounded source sample and MLflow metadata.")
         return None, True
 
     def _infer_model_version_scope(
         self,
         *,
-        source_table: str,
-        model_version_col: str | None,
+        sampled_values: list[str],
         mlflow: MLflowDiscovery,
     ) -> str | None:
-        if not model_version_col:
+        if not sampled_values:
             return None
-        sampled = self._repository.sample_distinct_values(source_table, model_version_col, limit=10)
-        if len(sampled) == 1:
-            return sampled[0]
+        if len(sampled_values) == 1:
+            return sampled_values[0]
         version_hint = _normalize(mlflow.lineage.model_version)
-        if version_hint and version_hint in sampled:
+        if version_hint and version_hint in sampled_values:
             return version_hint
         return None
 

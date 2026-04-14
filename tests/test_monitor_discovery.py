@@ -52,9 +52,13 @@ class FakeRepository:
             ]
         )
         self.labels_preview = pd.DataFrame([{"entity_id": "ent-1", "label": 1, "label_timestamp": "2026-01-03T00:00:00"}])
-        self.distinct_values = {
-            ("main.demo.inference_logs", "model_id"): ["fraud_model_demo"],
-            ("main.demo.inference_logs", "model_version"): ["7"],
+        self.bounded_samples = {
+            "main.demo.inference_logs": pd.DataFrame(
+                [
+                    {"model_id": "fraud_model_demo", "model_version": "7"},
+                    {"model_id": "fraud_model_demo", "model_version": "7"},
+                ]
+            )
         }
         self.labels_validation = {
             "matched_rows": 1,
@@ -73,9 +77,11 @@ class FakeRepository:
         columns = [str(value) for value in self.source_schema["col_name"].tolist()]
         return columns, self.source_preview.copy(), self.source_schema.copy()
 
-    def sample_distinct_values(self, table_name: str, column_name: str, limit: int = 20) -> list[str]:
-        del limit
-        return list(self.distinct_values.get((table_name, column_name), []))
+    def sample_bounded_rows(self, table_name: str, columns: list[str] | tuple[str, ...], *, max_total_rows: int = 2000):
+        del max_total_rows
+        frame = self.bounded_samples.get(table_name, pd.DataFrame())
+        selected = [column for column in columns if column in frame.columns]
+        return frame[selected].copy() if selected else pd.DataFrame(columns=list(columns))
 
     def profile_labels_mapping(
         self,
@@ -219,8 +225,12 @@ def test_discovery_supports_table_scoped_monitor_without_model_id_column() -> No
 
 def test_discovery_uses_mlflow_and_labels_to_fill_scope_and_lineage() -> None:
     repository = FakeRepository()
-    repository.distinct_values[("main.demo.inference_logs", "model_id")] = ["fraud_model_demo", "other_model"]
-    repository.distinct_values[("main.demo.inference_logs", "model_version")] = ["7", "8"]
+    repository.bounded_samples["main.demo.inference_logs"] = pd.DataFrame(
+        [
+            {"model_id": "fraud_model_demo", "model_version": "7"},
+            {"model_id": "other_model", "model_version": "8"},
+        ]
+    )
     mlflow = FakeMLflow(
         MLflowDiscovery(
             lineage=MLflowLineage(
@@ -262,15 +272,19 @@ def test_discovery_uses_mlflow_and_labels_to_fill_scope_and_lineage() -> None:
 
 def test_discovery_marks_multi_model_tables_for_review_without_mlflow_scope_hint() -> None:
     repository = FakeRepository()
-    repository.distinct_values[("main.demo.inference_logs", "model_id")] = ["fraud_model_demo", "other_model"]
-    repository.distinct_values[("main.demo.inference_logs", "model_version")] = ["7", "8"]
+    repository.bounded_samples["main.demo.inference_logs"] = pd.DataFrame(
+        [
+            {"model_id": "fraud_model_demo", "model_version": "7"},
+            {"model_id": "other_model", "model_version": "8"},
+        ]
+    )
     service = MonitorDiscoveryService(repository, mlflow=FakeMLflow(MLflowDiscovery()))
 
     result = service.discover(source_table="main.demo.inference_logs")
 
     assert result.config.model_id_value is None
     assert result.requires_review is True
-    assert any("model_id" in warning for warning in result.warnings)
+    assert any("single monitored model ID" in warning for warning in result.warnings)
 
 
 def test_discovery_prefers_shared_string_join_key_and_string_timestamps() -> None:
@@ -328,9 +342,9 @@ def test_discovery_prefers_shared_string_join_key_and_string_timestamps() -> Non
                     }
                 ]
             )
-            self.distinct_values = {
-                ("main.demo.inference_logs", "model_version"): ["gc_prod_aiguardian.ios.ali_ios@5"],
-            }
+            self.bounded_samples["main.demo.inference_logs"] = pd.DataFrame(
+                [{"model_version": "gc_prod_aiguardian.ios.ali_ios@5"}]
+            )
             self.labels_validation = {
                 "inference_rows": 2,
                 "matched_rows": 0,
@@ -389,9 +403,9 @@ def test_discovery_keeps_all_numeric_features_for_wide_schemas() -> None:
                     }
                 ]
             )
-            self.distinct_values = {
-                ("main.demo.inference_logs", "model_id"): ["fraud_model_demo"],
-            }
+            self.bounded_samples["main.demo.inference_logs"] = pd.DataFrame(
+                [{"model_id": "fraud_model_demo"}]
+            )
 
     repository = _WideRepository()
     service = MonitorDiscoveryService(repository, mlflow=FakeMLflow(MLflowDiscovery()))

@@ -323,6 +323,13 @@ class ControlPlaneRepository:
             if str(value).strip()
         }
 
+    def _get_table_columns(self, table_name: str, *, cache: bool = True) -> list[str]:
+        get_columns = getattr(self._warehouse, "get_columns")
+        try:
+            return [str(value) for value in get_columns(table_name, cache=cache)]
+        except TypeError:
+            return [str(value) for value in get_columns(table_name)]
+
     def _ensure_table_columns(self, table_name: str, migration_columns: dict[str, str]) -> None:
         try:
             existing = self._existing_table_columns(table_name, cache=False)
@@ -565,6 +572,35 @@ class ControlPlaneRepository:
         preview = self._warehouse.query(f"SELECT * FROM {table_name} LIMIT {preview_rows}")
         return columns, preview, schema
 
+    def sample_bounded_rows(
+        self,
+        table_name: str,
+        columns: list[str] | tuple[str, ...],
+        *,
+        max_total_rows: int = 2000,
+    ) -> pd.DataFrame:
+        validate_identifier(table_name)
+        selected_columns = [
+            validate_identifier(str(column).strip())
+            for column in dict.fromkeys(columns)
+            if str(column).strip()
+        ]
+        if not selected_columns or max_total_rows <= 0:
+            return pd.DataFrame(columns=selected_columns)
+        projection_sql = ", ".join(quote_column(column) for column in selected_columns)
+        hash_order_terms = ", ".join(
+            f"COALESCE(CAST({quote_column(column)} AS STRING), '')"
+            for column in selected_columns
+        )
+        return self._warehouse.query(
+            f"""
+            SELECT {projection_sql}
+            FROM {table_name}
+            ORDER BY xxhash64({hash_order_terms})
+            LIMIT {int(max_total_rows)}
+            """
+        )
+
     def sample_distinct_values(self, table_name: str, column_name: str, limit: int = 20) -> list[str]:
         validate_identifier(table_name)
         column_name = validate_identifier(column_name)
@@ -700,12 +736,90 @@ class ControlPlaneRepository:
         categorical_columns = array_literal(list(config.contract.categorical_columns))
         performance_metric_names = array_literal(list(config.performance_metric_names))
         self._warehouse.execute_params(
-            f"DELETE FROM {self._table_names.monitor_configs} WHERE model_key = %s",
-            (config.model_key,),
-        )
-        self._warehouse.execute_params(
             f"""
-            INSERT INTO {self._table_names.monitor_configs} (
+            MERGE INTO {self._table_names.monitor_configs} AS target
+            USING (
+                SELECT
+                    %s AS model_key,
+                    %s AS display_name,
+                    %s AS source_table,
+                    %s AS timestamp_col,
+                    %s AS model_id_col,
+                    %s AS model_id_value,
+                    %s AS prediction_col,
+                    %s AS model_version_col,
+                    %s AS model_version_value,
+                    %s AS prediction_score_col,
+                    %s AS label_col,
+                    %s AS entity_id_col,
+                    {feature_columns} AS feature_columns,
+                    {slice_columns} AS slice_columns,
+                    {categorical_columns} AS categorical_columns,
+                    %s AS baseline_kind,
+                    %s AS baseline_n_days,
+                    CAST(%s AS DATE) AS baseline_start,
+                    CAST(%s AS DATE) AS baseline_end,
+                    %s AS baseline_max_comparison_days,
+                    %s AS problem_type,
+                    %s AS labels_table,
+                    %s AS labels_join_col,
+                    %s AS labels_order_col,
+                    {performance_metric_names} AS performance_metric_names,
+                    %s AS default_performance_metric,
+                    %s AS drift_cadence_preset,
+                    %s AS performance_cadence_preset,
+                    %s AS schedule_enabled,
+                    %s AS threshold_overrides,
+                    %s AS mlflow_experiment_name,
+                    %s AS mlflow_experiment_id,
+                    %s AS mlflow_run_id,
+                    %s AS mlflow_registered_model_name,
+                    %s AS mlflow_model_version,
+                    %s AS created_by,
+                    %s AS status,
+                    CAST(%s AS TIMESTAMP) AS created_at,
+                    CAST(%s AS TIMESTAMP) AS updated_at
+            ) AS source
+            ON target.model_key = source.model_key
+            WHEN MATCHED THEN UPDATE SET
+                display_name = source.display_name,
+                source_table = source.source_table,
+                timestamp_col = source.timestamp_col,
+                model_id_col = source.model_id_col,
+                model_id_value = source.model_id_value,
+                prediction_col = source.prediction_col,
+                model_version_col = source.model_version_col,
+                model_version_value = source.model_version_value,
+                prediction_score_col = source.prediction_score_col,
+                label_col = source.label_col,
+                entity_id_col = source.entity_id_col,
+                feature_columns = source.feature_columns,
+                slice_columns = source.slice_columns,
+                categorical_columns = source.categorical_columns,
+                baseline_kind = source.baseline_kind,
+                baseline_n_days = source.baseline_n_days,
+                baseline_start = source.baseline_start,
+                baseline_end = source.baseline_end,
+                baseline_max_comparison_days = source.baseline_max_comparison_days,
+                problem_type = source.problem_type,
+                labels_table = source.labels_table,
+                labels_join_col = source.labels_join_col,
+                labels_order_col = source.labels_order_col,
+                performance_metric_names = source.performance_metric_names,
+                default_performance_metric = source.default_performance_metric,
+                drift_cadence_preset = source.drift_cadence_preset,
+                performance_cadence_preset = source.performance_cadence_preset,
+                schedule_enabled = source.schedule_enabled,
+                threshold_overrides = source.threshold_overrides,
+                mlflow_experiment_name = source.mlflow_experiment_name,
+                mlflow_experiment_id = source.mlflow_experiment_id,
+                mlflow_run_id = source.mlflow_run_id,
+                mlflow_registered_model_name = source.mlflow_registered_model_name,
+                mlflow_model_version = source.mlflow_model_version,
+                created_by = source.created_by,
+                status = source.status,
+                updated_at = source.updated_at
+            WHEN NOT MATCHED THEN INSERT (
                 model_key, display_name, source_table,
                 timestamp_col, model_id_col, model_id_value, prediction_col,
                 model_version_col, model_version_value, prediction_score_col, label_col, entity_id_col,
@@ -719,16 +833,18 @@ class ControlPlaneRepository:
                 created_by, status,
                 created_at, updated_at
             ) VALUES (
-                %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s, %s,
-                {feature_columns}, {slice_columns}, {categorical_columns},
-                %s, %s, CAST(%s AS DATE), CAST(%s AS DATE), %s,
-                %s, %s, %s, %s,
-                {performance_metric_names}, %s,
-                %s, %s, %s, %s,
-                %s, %s, %s, %s, %s,
-                %s, %s,
-                CAST(%s AS TIMESTAMP), CAST(%s AS TIMESTAMP)
+                source.model_key, source.display_name, source.source_table,
+                source.timestamp_col, source.model_id_col, source.model_id_value, source.prediction_col,
+                source.model_version_col, source.model_version_value, source.prediction_score_col, source.label_col, source.entity_id_col,
+                source.feature_columns, source.slice_columns, source.categorical_columns,
+                source.baseline_kind, source.baseline_n_days, source.baseline_start, source.baseline_end, source.baseline_max_comparison_days,
+                source.problem_type, source.labels_table, source.labels_join_col, source.labels_order_col,
+                source.performance_metric_names, source.default_performance_metric,
+                source.drift_cadence_preset, source.performance_cadence_preset, source.schedule_enabled, source.threshold_overrides,
+                source.mlflow_experiment_name, source.mlflow_experiment_id, source.mlflow_run_id,
+                source.mlflow_registered_model_name, source.mlflow_model_version,
+                source.created_by, source.status,
+                source.created_at, source.updated_at
             )
             """,
             (
@@ -1410,11 +1526,12 @@ class ControlPlaneRepository:
 
     def get_existing_window_keys(self, model_key: str) -> set[tuple[str, str, str, str]]:
         generation_id = self.get_latest_published_generation_id(model_key)
+        if not generation_id:
+            return set()
         comparison_filters = ["model_key = %s"]
         comparison_params: list[object] = [model_key]
-        if generation_id:
-            comparison_filters.append("source_run_id = %s")
-            comparison_params.append(generation_id)
+        comparison_filters.append("source_run_id = %s")
+        comparison_params.append(generation_id)
         try:
             frame = self._warehouse.query_params(
                 f"""
@@ -1433,9 +1550,8 @@ class ControlPlaneRepository:
         if frame.empty:
             drift_filters = ["model_key = %s"]
             drift_params: list[object] = [model_key]
-            if generation_id:
-                drift_filters.append("source_run_id = %s")
-                drift_params.append(generation_id)
+            drift_filters.append("source_run_id = %s")
+            drift_params.append(generation_id)
             frame = self._warehouse.query_params(
                 f"""
                 SELECT DISTINCT
@@ -1478,6 +1594,111 @@ class ControlPlaneRepository:
             return None
         generation_id = _as_text(frame.iloc[0].get("generation_id")).strip()
         return generation_id or None
+
+    def _generation_scoped_tables(self, *, include_quality_metrics: bool = False) -> tuple[str, ...]:
+        tables = [
+            self._table_names.comparison_windows,
+            self._table_names.drift_metrics,
+            self._table_names.quality_history,
+            self._table_names.daily_quality_profiles,
+            self._table_names.daily_class_quality_profiles,
+            self._table_names.daily_feature_profiles,
+            self._table_names.daily_class_feature_profiles,
+            self._table_names.performance_metrics,
+            self._table_names.daily_performance_profiles,
+            self._table_names.daily_label_metrics,
+            self._table_names.performance_bin_specs,
+            self._table_names.incidents,
+            self._table_names.incident_history,
+        ]
+        if include_quality_metrics:
+            tables.append(self._table_names.quality_metrics)
+        return tuple(tables)
+
+    def _copy_generation_rows(
+        self,
+        table_name: str,
+        *,
+        model_key: str,
+        from_generation_id: str,
+        to_generation_id: str,
+    ) -> None:
+        if not from_generation_id or not to_generation_id or from_generation_id == to_generation_id:
+            return
+        columns = self._get_table_columns(table_name, cache=False)
+        source_run_column = next(
+            (column for column in columns if str(column).strip().lower() == "source_run_id"),
+            None,
+        )
+        if not source_run_column:
+            return
+        value_columns = [column for column in columns if column != source_run_column]
+        insert_columns = ", ".join(quote_column(column) for column in value_columns + [source_run_column])
+        select_columns = ", ".join([
+            *(quote_column(column) for column in value_columns),
+            f"CAST(%s AS STRING) AS {quote_column(source_run_column)}",
+        ])
+        self._warehouse.execute_params(
+            f"""
+            INSERT INTO {table_name} ({insert_columns})
+            SELECT {select_columns}
+            FROM {table_name}
+            WHERE model_key = %s
+              AND {quote_column(source_run_column)} = %s
+            """,
+            (to_generation_id, model_key, from_generation_id),
+        )
+
+    def _copy_generation_state(
+        self,
+        model_key: str,
+        *,
+        from_generation_id: str,
+        to_generation_id: str,
+    ) -> None:
+        if not from_generation_id or not to_generation_id or from_generation_id == to_generation_id:
+            return
+        for table_name in self._generation_scoped_tables():
+            self._copy_generation_rows(
+                table_name,
+                model_key=model_key,
+                from_generation_id=from_generation_id,
+                to_generation_id=to_generation_id,
+            )
+
+    def prune_published_generations(self, model_key: str, *, keep: int = 2) -> None:
+        keep = max(1, int(keep))
+        frame = self._warehouse.query_params(
+            f"""
+            SELECT generation_id
+            FROM {self._table_names.refresh_runs}
+            WHERE model_key = %s
+              AND generation_id IS NOT NULL
+              AND generation_id <> ''
+              AND published_at IS NOT NULL
+            ORDER BY published_at DESC, completed_at DESC, started_at DESC
+            LIMIT {keep}
+            """,
+            (model_key,),
+        )
+        generation_ids = [
+            _as_text(row.get("generation_id")).strip()
+            for _, row in frame.iterrows()
+            if _as_text(row.get("generation_id")).strip()
+        ]
+        if not generation_ids:
+            return
+        placeholders = ", ".join(["%s"] * len(generation_ids))
+        params = (model_key, *generation_ids)
+        for table_name in self._generation_scoped_tables(include_quality_metrics=True):
+            self._warehouse.execute_params(
+                f"""
+                DELETE FROM {table_name}
+                WHERE model_key = %s
+                  AND COALESCE(source_run_id, '') NOT IN ({placeholders})
+                """,
+                params,
+            )
 
     def replace_refresh_result(self, model_key: str, result: RefreshResult) -> None:
         self.append_refresh_result(model_key, result)
@@ -1643,11 +1864,12 @@ class ControlPlaneRepository:
 
     def get_recent_incident_history(self, model_key: str, limit: int = 10) -> list[dict[str, Any]]:
         generation_id = self.get_latest_published_generation_id(model_key)
+        if not generation_id:
+            return []
         filters = ["model_key = %s"]
         params: list[object] = [model_key]
-        if generation_id:
-            filters.append("source_run_id = %s")
-            params.append(generation_id)
+        filters.append("source_run_id = %s")
+        params.append(generation_id)
         frame = self._warehouse.query_params(
             f"""
             SELECT *
@@ -1684,9 +1906,9 @@ class ControlPlaneRepository:
             )
             SELECT history.*
             FROM {self._table_names.incident_history} history
-            LEFT JOIN latest_published published
+            INNER JOIN latest_published published
                 ON history.model_key = published.model_key
-            WHERE published.generation_id IS NULL OR history.source_run_id = published.generation_id
+               AND history.source_run_id = published.generation_id
             ORDER BY observed_at DESC, window_end DESC
             LIMIT {max(1, limit)}
             """
@@ -1742,9 +1964,10 @@ class ControlPlaneRepository:
         filters = ["model_key = %s"]
         params: list[object] = [model_key]
         generation_id = self.get_latest_published_generation_id(model_key)
-        if generation_id:
-            filters.append("source_run_id = %s")
-            params.append(generation_id)
+        if not generation_id:
+            return []
+        filters.append("source_run_id = %s")
+        params.append(generation_id)
         if start_date:
             filters.append("profile_date >= CAST(%s AS DATE)")
             params.append(start_date)
@@ -1786,9 +2009,10 @@ class ControlPlaneRepository:
         filters = ["model_key = %s"]
         params: list[object] = [model_key]
         generation_id = self.get_latest_published_generation_id(model_key)
-        if generation_id:
-            filters.append("source_run_id = %s")
-            params.append(generation_id)
+        if not generation_id:
+            return []
+        filters.append("source_run_id = %s")
+        params.append(generation_id)
         if start_date:
             filters.append("profile_date >= CAST(%s AS DATE)")
             params.append(start_date)
@@ -1834,9 +2058,10 @@ class ControlPlaneRepository:
         filters = ["model_key = %s"]
         params: list[object] = [model_key]
         generation_id = self.get_latest_published_generation_id(model_key)
-        if generation_id:
-            filters.append("source_run_id = %s")
-            params.append(generation_id)
+        if not generation_id:
+            return []
+        filters.append("source_run_id = %s")
+        params.append(generation_id)
         if start_date:
             filters.append("profile_date >= CAST(%s AS DATE)")
             params.append(start_date)
@@ -1878,9 +2103,10 @@ class ControlPlaneRepository:
         filters = ["model_key = %s"]
         params: list[object] = [model_key]
         generation_id = self.get_latest_published_generation_id(model_key)
-        if generation_id:
-            filters.append("source_run_id = %s")
-            params.append(generation_id)
+        if not generation_id:
+            return []
+        filters.append("source_run_id = %s")
+        params.append(generation_id)
         if start_date:
             filters.append("profile_date >= CAST(%s AS DATE)")
             params.append(start_date)
@@ -1926,9 +2152,10 @@ class ControlPlaneRepository:
         filters = ["model_key = %s"]
         params: list[object] = [model_key]
         generation_id = self.get_latest_published_generation_id(model_key)
-        if generation_id:
-            filters.append("source_run_id = %s")
-            params.append(generation_id)
+        if not generation_id:
+            return []
+        filters.append("source_run_id = %s")
+        params.append(generation_id)
         if start_date:
             filters.append("profile_date >= CAST(%s AS DATE)")
             params.append(start_date)
@@ -1968,9 +2195,10 @@ class ControlPlaneRepository:
         filters = ["model_key = %s"]
         params: list[object] = [model_key]
         generation_id = self.get_latest_published_generation_id(model_key)
-        if generation_id:
-            filters.append("source_run_id = %s")
-            params.append(generation_id)
+        if not generation_id:
+            return []
+        filters.append("source_run_id = %s")
+        params.append(generation_id)
         if start_date:
             filters.append("profile_date >= CAST(%s AS DATE)")
             params.append(start_date)
@@ -2004,9 +2232,10 @@ class ControlPlaneRepository:
         filters = ["model_key = %s"]
         params: list[object] = [model_key]
         generation_id = self.get_latest_published_generation_id(model_key)
-        if generation_id:
-            filters.append("source_run_id = %s")
-            params.append(generation_id)
+        if not generation_id:
+            return False
+        filters.append("source_run_id = %s")
+        params.append(generation_id)
         frame = self._warehouse.query_params(
             f"""
             SELECT 1 AS has_rows
@@ -2020,11 +2249,12 @@ class ControlPlaneRepository:
 
     def get_performance_bin_specs(self, model_key: str) -> dict[str, tuple[float, ...]]:
         generation_id = self.get_latest_published_generation_id(model_key)
+        if not generation_id:
+            return {}
         filters = ["model_key = %s"]
         params: list[object] = [model_key]
-        if generation_id:
-            filters.append("source_run_id = %s")
-            params.append(generation_id)
+        filters.append("source_run_id = %s")
+        params.append(generation_id)
         frame = self._warehouse.query_params(
             f"""
             SELECT feature_name, edges_json
@@ -2147,7 +2377,14 @@ class ControlPlaneRepository:
         self._sync_read_model()
 
     def append_refresh_result(self, model_key: str, result: RefreshResult, source_run_id: str | None = None) -> None:
-        generation_id = source_run_id or self.get_latest_published_generation_id(model_key) or ""
+        previous_generation_id = self.get_latest_published_generation_id(model_key)
+        generation_id = source_run_id or previous_generation_id or ""
+        if previous_generation_id and generation_id and previous_generation_id != generation_id:
+            self._copy_generation_state(
+                model_key,
+                from_generation_id=previous_generation_id,
+                to_generation_id=generation_id,
+            )
         drift_windows = {
             (
                 _as_text(row.get("baseline_start")),
@@ -2698,11 +2935,12 @@ class ControlPlaneRepository:
 
     def get_current_incident_state(self, model_key: str) -> dict[tuple[str, str, str], dict[str, Any]]:
         generation_id = self.get_latest_published_generation_id(model_key)
+        if not generation_id:
+            return {}
         filters = ["model_key = %s", "status = 'open'"]
         params: list[object] = [model_key]
-        if generation_id:
-            filters.append("source_run_id = %s")
-            params.append(generation_id)
+        filters.append("source_run_id = %s")
+        params.append(generation_id)
         frame = self._warehouse.query_params(
             f"""
             SELECT model_key, feature_name, metric_name, severity, status, metric_value, window_end, observed_at
@@ -2759,35 +2997,35 @@ class ControlPlaneRepository:
                     COUNT(DISTINCT CASE WHEN metric_name = 'psi' THEN feature_name END) AS feature_count,
                     MAX(window_end) AS latest_window_end
                 FROM {self._table_names.drift_metrics} d
-                LEFT JOIN latest_published published
+                INNER JOIN latest_published published
                     ON d.model_key = published.model_key
-                WHERE published.generation_id IS NULL OR d.source_run_id = published.generation_id
+                   AND d.source_run_id = published.generation_id
                 GROUP BY d.model_key
             ),
             latest_quality AS (
                 SELECT q.*
                 FROM {self._table_names.quality_metrics} q
-                LEFT JOIN latest_published published
+                INNER JOIN latest_published published
                     ON q.model_key = published.model_key
+                   AND q.source_run_id = published.generation_id
                 INNER JOIN (
                     SELECT quality.model_key, MAX(quality.computed_at) AS latest_computed_at
                     FROM {self._table_names.quality_metrics} quality
-                    LEFT JOIN latest_published published_quality
+                    INNER JOIN latest_published published_quality
                         ON quality.model_key = published_quality.model_key
-                    WHERE published_quality.generation_id IS NULL OR quality.source_run_id = published_quality.generation_id
+                       AND quality.source_run_id = published_quality.generation_id
                     GROUP BY quality.model_key
                 ) latest
                     ON q.model_key = latest.model_key
                    AND q.computed_at = latest.latest_computed_at
-                WHERE published.generation_id IS NULL OR q.source_run_id = published.generation_id
             ),
             open_incidents AS (
                 SELECT incidents.model_key, COUNT(*) AS open_incident_count
                 FROM {self._table_names.incidents} incidents
-                LEFT JOIN latest_published published
+                INNER JOIN latest_published published
                     ON incidents.model_key = published.model_key
+                   AND incidents.source_run_id = published.generation_id
                 WHERE incidents.status = 'open'
-                  AND (published.generation_id IS NULL OR incidents.source_run_id = published.generation_id)
                 GROUP BY incidents.model_key
             )
             SELECT
@@ -2834,10 +3072,10 @@ class ControlPlaneRepository:
             )
             SELECT incidents.model_key, feature_name, metric_name, severity, metric_value, window_end, observed_at
             FROM {self._table_names.incidents} incidents
-            LEFT JOIN latest_published published
+            INNER JOIN latest_published published
                 ON incidents.model_key = published.model_key
+               AND incidents.source_run_id = published.generation_id
             WHERE incidents.status = 'open'
-              AND (published.generation_id IS NULL OR incidents.source_run_id = published.generation_id)
             ORDER BY
                 CASE severity WHEN 'critical' THEN 0 ELSE 1 END,
                 observed_at DESC

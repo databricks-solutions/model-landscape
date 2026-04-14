@@ -40,6 +40,7 @@ class FakeWarehouse:
         self.table_schemas: dict[str, list[dict[str, str]]] = {}
         self.fail_create_schema = False
         self.fail_create_table = False
+        self.latest_published_generation = "published-1"
         self.comparison_window_rows: list[dict[str, object]] = []
         self.drift_window_rows: list[dict[str, object]] = []
         self.monitor_row = {
@@ -102,7 +103,7 @@ class FakeWarehouse:
 
     def execute_params(self, sql: str, params: tuple) -> None:
         self.executed_params.append((sql, params))
-        if "INSERT INTO" in sql and "monitor_configs" in sql:
+        if ("INSERT INTO" in sql and "monitor_configs" in sql) or ("MERGE INTO" in sql and "monitor_configs" in sql):
             array_literals = re.findall(r"ARRAY\\(([^)]*)\\)", sql)
             performance_metric_names = '[]'
             if len(array_literals) >= 4:
@@ -245,6 +246,10 @@ class FakeWarehouse:
             ])
         if "ROUND(AVG(CASE WHEN s.`amount` IS NULL" in sql:
             return pd.DataFrame([{"amount": 1.25, "segment": 0.0}])
+        if "FROM model_observability.control_plane.refresh_runs" in sql and "SELECT generation_id" in sql:
+            if not self.latest_published_generation:
+                return pd.DataFrame(columns=["generation_id"])
+            return pd.DataFrame([{"generation_id": self.latest_published_generation}])
         if "FROM model_observability.control_plane.comparison_windows" in sql:
             return pd.DataFrame(self.comparison_window_rows)
         if "FROM model_observability.control_plane.incidents" in sql and "status = 'open'" in sql:
@@ -339,11 +344,11 @@ def test_upsert_monitor_config_keeps_full_feature_and_categorical_metadata() -> 
     repository.upsert_monitor_config(_monitor_config())
 
     insert_sql, insert_params = warehouse.executed_params[-1]
+    assert "MERGE INTO model_observability.control_plane.monitor_configs AS target" in insert_sql
     assert "ARRAY('amount', 'segment')" in insert_sql
     assert "ARRAY('segment')" in insert_sql
     assert "ARRAY('f1', 'precision', 'recall')" in insert_sql
-    assert "CAST(%s AS DATE), CAST(%s AS DATE)" in insert_sql
-    assert "VALUES (\n                %s, %s, %s, %s, %s," in insert_sql
+    assert "CAST(%s AS DATE) AS baseline_start" in insert_sql
     assert insert_params[0] == "payments_risk_v1"
     assert insert_params[1] == "Payments Risk"
     assert insert_params[12] == "rolling"
@@ -477,7 +482,7 @@ def test_get_daily_quality_profile_rows_limits_to_recent_dates() -> None:
     data_query, params = warehouse.query_param_calls[-1]
     assert "recent_dates" in data_query
     assert "LIMIT 400" in data_query
-    assert params == ("payments_risk_v1",)
+    assert params == ("payments_risk_v1", "published-1")
 
 
 def test_get_daily_label_metric_rows_limits_to_recent_dates() -> None:
@@ -489,7 +494,7 @@ def test_get_daily_label_metric_rows_limits_to_recent_dates() -> None:
     data_query, params = warehouse.query_param_calls[-1]
     assert "recent_dates" in data_query
     assert "LIMIT 400" in data_query
-    assert params == ("payments_risk_v1",)
+    assert params == ("payments_risk_v1", "published-1")
 
 
 def test_load_monitor_frame_uses_shared_labels_join_when_entity_id_is_absent() -> None:

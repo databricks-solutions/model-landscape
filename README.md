@@ -106,7 +106,9 @@ Current engine behavior:
 - if a source table has no explicit `model_id` field but `model_version` carries identifier-like values, discovery can use that column as the monitored model scope
 - if a source table truly has no model-id-like column and already represents one model, discovery now keeps that as a normal table-scoped monitor path instead of downgrading the draft just because `model_id` is absent
 - an optional MLflow experiment or registered model can contribute feature ordering, model/version hints, and lineage metadata during onboarding
+- model/version inference now uses preview rows plus a hard-capped bounded source sample; if that evidence still cannot prove a single scope cheaply, discovery marks the draft `requires_review` instead of escalating into an open-ended distinct scan
 - discovery keeps the full numeric feature set by default; Model Lens does not silently trim the first run to a top-N subset
+- binary-classification analytics now prefer `prediction_score_col` when it is configured; otherwise they only use `prediction_col` when it is probability-like or already binary-like, so separate score columns no longer silently degrade Performance and class-filter semantics
 - the drift/performance path now avoids redundant per-feature numeric coercion during backfills so wide numeric schemas are cheaper to process than the earlier implementation
 - the review step now stores per-monitor cadence presets plus per-monitor performance metrics, and the Monitor Settings page can edit those settings later without creating new Databricks jobs
 - classification monitors now track `f1`, `precision`, and `recall` by default, with optional `accuracy`; regression monitors track `rmse` and `mae` by default
@@ -145,8 +147,8 @@ Current protections:
 - Feature Deep Dive now labels whether the distribution came from persisted daily-profile samples / histogram reconstruction or from a bounded source-window read, together with the active baseline/current window dates
 - non-bootstrap refreshes now merge the current run’s daily profiles with already-persisted daily facts for the affected derivation span inside the Spark repository layer, so recomputed windows no longer depend on Python-side list merges of those daily rows
 - when the Spark repository is active, the workflow also persists `comparison_windows`, `drift_metrics`, `quality_history`, `performance_metrics`, `daily_*` facts, `performance_bin_specs`, `incidents`, and `incident_history` through Spark/Delta writes instead of row-batch warehouse inserts
-- full bootstrap replacement now writes a new refresh generation first and only switches reads to it after the run is marked published, so a mid-bootstrap crash no longer blanks the monitor by deleting the previously visible metrics up front
-- incremental append refreshes stay within the active published generation and only rewrite the affected windows/dates; they reduce query fan-out and preserve the current generation pointer, but they are still scoped in-place swaps rather than full copy-on-write publishes
+- all refresh scopes now write into a new `generation_id = run_id`, publish that generation only after every affected result table has been written, and keep readers pinned to the latest published generation so neither first bootstrap nor incremental repair leaks partial rows
+- after publish, the repositories keep the latest two published generations per monitor and prune older ones, which leaves one rollback/debug generation available without letting fact tables grow without bound
 - before those strict Spark/Delta writes, the repository now backfills required metadata fields like `model_key`, `window_id`, and `computed_at` so bootstrap runs do not fail on nullability-only contract gaps
 - numeric drift now keeps finite PSI / JS / KL values even when the current distribution moves completely outside the reference-derived range, and those histogram calculations now run in Spark from persisted daily numeric histogram edges/counts instead of flattened sample arrays
 - incident open/recovered/escalated lifecycle rows for the Spark workflow are now also derived inside the Spark repository layer before persistence, so the shared refresh job no longer needs the old Python incident helper on the hot path
@@ -265,6 +267,8 @@ Current control-plane tables:
 - `refresh_runs`
 - `comparison_windows`
 - `monitor_runtime_state`
+
+`monitor_configs` is updated atomically by `model_key` with a Delta `MERGE`, so editing or re-saving a monitor no longer relies on a transient delete-then-insert window.
 
 `incidents` is the current open-incident projection. Historical openings, escalations, downgrades, and recoveries live in `incident_history`, so a monitor can show severe historical drift even when the latest window has already recovered and no open incidents remain.
 
@@ -452,15 +456,16 @@ After deploy:
    - `Scheduler only`: the shared workflow resolves and is scheduled, but immediate `Run now` could not be confirmed
 8. Continue to `Discover`. If the readiness card stays `not ready`, onboarding remains blocked until you fix the workflow wiring.
 9. In the `Discover` step, enter the inference table. Optionally add a labels table and MLflow experiment or registered model, then click `Discover`.
-10. In the `Confirm` step, review the inferred display name, model key, problem type, and feature set. Use `Advanced` only if the draft needs overrides.
+10. In the `Confirm` step, review the inferred display name, model key, problem type, and feature set. Use `Advanced` only if the draft needs overrides. Model Lens now treats `model_key` as the canonical monitor identity, so it must be unique. If the inferred key would collide with an existing monitor, the form auto-suggests a suffixed key and blocks save until the key is unique.
 11. If the table contains more than one `model_id`, confirm or fill in `Monitored Model ID Value`.
 12. If external labels are not unique on the join key, confirm or fill in `External Labels Order Column`.
 13. Continue to `Activate`, then save the monitor.
 14. Confirm the app acknowledges that the monitor was saved. If `CAN MANAGE RUN` is configured, it should also say the shared refresh job was triggered for bootstrap; otherwise the shared hourly job can pick it up on its next run only if that workflow already exists and the app is wired to it through `REFRESH_JOB_ID` or `REFRESH_JOB_NAME`.
-15. If the monitor is still `pending bootstrap`, open `Monitor Settings` and use `Run First Refresh` after fixing job wiring or permissions. That retry path triggers the shared workflow again for the selected monitor only, using bootstrap scope.
+15. If the monitor is still `pending bootstrap` or `Computing/Pending`, that can be normal during a long first bootstrap on large tables. If you need to retry after fixing job wiring or permissions, open `Monitor Settings` and use `Run Initial Refresh Now`. That retry path triggers the shared workflow again for the selected monitor only, using bootstrap scope.
 16. Open `Monitor Settings` after a few runs and review `Refresh Diagnostics` plus `Compute Guidance`. Model Lens now shows recent bottlenecks, compute-footprint tier (`Low`, `Elevated`, `High`), and the practical effect of the current shared wake interval plus per-monitor cadence.
 17. If the app identity has `CAN_MANAGE` on the shared refresh job, use `Monitor Settings -> Admin -> Shared Workflow Schedule` to change the shared wake interval without redeploying the app. If not, the same section stays read-only and tells you to update the job externally.
 18. Open the overview and analysis pages after the workflow finishes to confirm the new monitor appears and the initial refresh populated historical readback immediately.
+19. If the shared refresh job already ran successfully after redeploy, do not manually reinstall the wheel again. Reinstall or restart cluster-scoped libraries only when the workspace is explicitly using cluster-level library installs or the job cannot resolve the updated workspace wheel.
 
 ## Full Docs
 

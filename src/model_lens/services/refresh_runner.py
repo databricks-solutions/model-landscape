@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import timedelta, timezone
+import logging
 from typing import Literal
 
 import pandas as pd
@@ -26,6 +27,7 @@ from model_lens.services.spark_refresh import SparkDailyProfiles
 
 
 RefreshScope = Literal["scheduler", "bootstrap", "drift_quality", "performance_repair"]
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -1229,13 +1231,10 @@ def _execute_target(
             performance_bin_specs=performance_bin_specs,
         )
 
+        generation_id = run_id
         if target.scope == "bootstrap":
-            generation_id = run_id
             repository.replace_all_refresh_results(config.model_key, result, source_run_id=generation_id)
         else:
-            generation_getter = getattr(repository, "get_latest_published_generation_id", None)
-            generation_id = generation_getter(config.model_key) if callable(generation_getter) else None
-            generation_id = generation_id or run_id
             repository.append_refresh_result(config.model_key, result, source_run_id=generation_id)
 
         repository.complete_refresh_run(
@@ -1249,6 +1248,12 @@ def _execute_target(
             generation_id=generation_id,
             publish=True,
         )
+        prune_generations = getattr(repository, "prune_published_generations", None)
+        if callable(prune_generations):
+            try:
+                prune_generations(config.model_key, keep=2)
+            except Exception as error:
+                logger.warning("Failed to prune older published generations for %s: %s", config.model_key, error)
         completed_at = _utc_now()
         _upsert_runtime_state(
             repository,

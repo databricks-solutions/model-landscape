@@ -477,9 +477,10 @@ class DashboardBackend:
         filters = ["model_key = %s"]
         params: list[object] = [model_id]
         generation_id = self._published_generation_id(model_id)
-        if generation_id:
-            filters.append("source_run_id = %s")
-            params.append(generation_id)
+        if not generation_id:
+            return []
+        filters.append("source_run_id = %s")
+        params.append(generation_id)
         if start_date:
             filters.append("window_end >= CAST(%s AS DATE)")
             params.append(start_date)
@@ -570,9 +571,10 @@ class DashboardBackend:
         filters = ["model_key = %s"]
         params: list[object] = [model_id]
         generation_id = self._published_generation_id(model_id)
-        if generation_id:
-            filters.append("source_run_id = %s")
-            params.append(generation_id)
+        if not generation_id:
+            return pd.DataFrame()
+        filters.append("source_run_id = %s")
+        params.append(generation_id)
         if start_date:
             filters.append("window_end >= CAST(%s AS DATE)")
             params.append(start_date)
@@ -697,9 +699,10 @@ class DashboardBackend:
         generation_id = self._published_generation_id(model_id)
         filters = ["model_key = %s"]
         params: list[object] = [model_id]
-        if generation_id:
-            filters.append("source_run_id = %s")
-            params.append(generation_id)
+        if not generation_id:
+            return {}
+        filters.append("source_run_id = %s")
+        params.append(generation_id)
         frame = self._warehouse.query_params(
             f"""
             SELECT *
@@ -749,9 +752,10 @@ class DashboardBackend:
         generation_id = self._published_generation_id(model_id)
         filters = ["model_key = %s"]
         params: list[object] = [model_id]
-        if generation_id:
-            filters.append("source_run_id = %s")
-            params.append(generation_id)
+        if not generation_id:
+            return pd.DataFrame()
+        filters.append("source_run_id = %s")
+        params.append(generation_id)
         frame = self._warehouse.query_params(
             f"""
             WITH recent_history AS (
@@ -773,9 +777,8 @@ class DashboardBackend:
                 return pd.DataFrame()
             daily_filters = ["model_key = %s"]
             daily_params: list[object] = [model_id]
-            if generation_id:
-                daily_filters.append("source_run_id = %s")
-                daily_params.append(generation_id)
+            daily_filters.append("source_run_id = %s")
+            daily_params.append(generation_id)
             daily_frame = self._warehouse.query_params(
                 f"""
                 WITH recent_profiles AS (
@@ -900,7 +903,7 @@ class DashboardBackend:
                     LEFT JOIN latest_published published
                         ON quality.model_key = published.model_key
                     WHERE quality.model_key IN ({placeholders})
-                      AND (published.generation_id IS NULL OR quality.source_run_id = published.generation_id)
+                      AND quality.source_run_id = published.generation_id
                 ) latest_quality
                 WHERE row_num = 1
                 """,
@@ -987,7 +990,7 @@ class DashboardBackend:
                     LEFT JOIN latest_published published
                         ON drift.model_key = published.model_key
                     WHERE drift.model_key IN ({placeholders})
-                      AND (published.generation_id IS NULL OR drift.source_run_id = published.generation_id)
+                      AND drift.source_run_id = published.generation_id
                     GROUP BY drift.model_key, drift.feature_name, drift.metric_name
                 )
                 SELECT model_key, feature_name, metric_name, metric_value
@@ -1206,9 +1209,10 @@ class DashboardBackend:
         filters = ["model_key = %s"]
         params: list[object] = [model_id]
         generation_id = self._published_generation_id(model_id)
-        if generation_id:
-            filters.append("source_run_id = %s")
-            params.append(generation_id)
+        if not generation_id:
+            return None
+        filters.append("source_run_id = %s")
+        params.append(generation_id)
         frame = self._warehouse.query_params(
             f"""
             SELECT baseline_start, baseline_end, window_start, window_end
@@ -1263,9 +1267,10 @@ class DashboardBackend:
         ]
         params: list[object] = [model_id, feature, min_profile_date, max_profile_date]
         generation_id = self._published_generation_id(model_id)
-        if generation_id:
-            filters.append("source_run_id = %s")
-            params.append(generation_id)
+        if not generation_id:
+            return pd.Series(dtype=float), pd.Series(dtype=float), False
+        filters.append("source_run_id = %s")
+        params.append(generation_id)
         frame = self._warehouse.query_params(
             f"""
             SELECT profile_date, distribution_json
@@ -1585,9 +1590,10 @@ class DashboardBackend:
         filters = ["model_key = %s", "metric_name = %s"]
         params: list[object] = [model_id, metric_name]
         generation_id = self._published_generation_id(model_id)
-        if generation_id:
-            filters.append("source_run_id = %s")
-            params.append(generation_id)
+        if not generation_id:
+            return pd.DataFrame()
+        filters.append("source_run_id = %s")
+        params.append(generation_id)
         frame = self._warehouse.query_params(
             f"""
             WITH filtered_metrics AS (

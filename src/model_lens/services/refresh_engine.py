@@ -23,7 +23,7 @@ from model_lens.analytics.performance import (
 )
 from model_lens.domain.models import BaselinePolicy, MonitorConfig, RefreshResult
 from model_lens.domain.performance_metrics import default_performance_metric_names
-from model_lens.services.class_filters import supports_binary_class_filters
+from model_lens.services.class_filters import normalized_binary_series, resolved_prediction_binary_series, supports_binary_class_filters
 from model_lens.services.incidents import build_incident_history, build_incidents
 
 
@@ -738,13 +738,24 @@ def _aggregate_performance_metric_rows(rows: list[dict[str, Any]]) -> dict[tuple
     return totals
 
 
-def _class_mask(day_frame: pd.DataFrame, class_basis: str, class_value: str, prediction_col: str, label_col: str) -> pd.Series:
+def _class_mask(
+    day_frame: pd.DataFrame,
+    class_basis: str,
+    class_value: str,
+    prediction_col: str,
+    label_col: str,
+    prediction_score_col: str | None = None,
+) -> pd.Series:
     if class_basis == "predicted":
-        predictions = pd.to_numeric(day_frame[prediction_col], errors="coerce")
+        predictions = resolved_prediction_binary_series(
+            day_frame,
+            prediction_col=prediction_col,
+            prediction_score_col=prediction_score_col,
+        )
         if class_value == "positive":
-            return predictions >= 0.5
-        return predictions < 0.5
-    labels = pd.to_numeric(day_frame[label_col], errors="coerce")
+            return predictions == 1
+        return predictions == 0
+    labels = normalized_binary_series(day_frame[label_col])
     if class_value == "positive":
         return labels == 1
     return labels == 0
@@ -884,7 +895,14 @@ def build_daily_class_quality_profile_rows(
     for profile_date, day_frame in _daily_profile_groups(inference_df, config.contract.timestamp_col):
         for class_basis in ("actual", "predicted"):
             for class_value in ("positive", "negative"):
-                mask = _class_mask(day_frame, class_basis, class_value, prediction_col, label_col)
+                mask = _class_mask(
+                    day_frame,
+                    class_basis,
+                    class_value,
+                    prediction_col,
+                    label_col,
+                    config.contract.prediction_score_col,
+                )
                 filtered = day_frame[mask.fillna(False)]
                 if filtered.empty:
                     continue
@@ -973,7 +991,14 @@ def build_daily_class_feature_profile_rows(
     for profile_date, day_frame in _daily_profile_groups(inference_df, config.contract.timestamp_col):
         for class_basis in ("actual", "predicted"):
             for class_value in ("positive", "negative"):
-                mask = _class_mask(day_frame, class_basis, class_value, prediction_col, label_col)
+                mask = _class_mask(
+                    day_frame,
+                    class_basis,
+                    class_value,
+                    prediction_col,
+                    label_col,
+                    config.contract.prediction_score_col,
+                )
                 filtered = day_frame[mask.fillna(False)]
                 if filtered.empty:
                     continue
@@ -1033,7 +1058,12 @@ def build_daily_label_metric_rows(
         return []
     rows: list[dict[str, Any]] = []
     for profile_date, day_frame in _daily_profile_groups(inference_df, config.contract.timestamp_col):
-        metrics = compute_daily_classification_metrics(day_frame, config.contract.prediction_col, config.contract.label_col)
+        metrics = compute_daily_classification_metrics(
+            day_frame,
+            config.contract.prediction_col,
+            config.contract.label_col,
+            prediction_score_col=config.contract.prediction_score_col,
+        )
         rows.append({
             "model_key": config.model_key,
             "profile_date": profile_date,
@@ -1099,7 +1129,12 @@ def build_daily_performance_profile_rows(
                 metrics = (
                     compute_regression_metrics(day_slice, config.contract.prediction_col, config.contract.label_col)
                     if regression_mode
-                    else compute_classification_metrics(day_slice, config.contract.prediction_col, config.contract.label_col)
+                    else compute_classification_metrics(
+                        day_slice,
+                        config.contract.prediction_col,
+                        config.contract.label_col,
+                        prediction_score_col=config.contract.prediction_score_col,
+                    )
                 )
                 if not metrics:
                     continue
@@ -1202,6 +1237,7 @@ def refresh_monitor_backfill(
                 feature_columns=list(config.contract.feature_columns),
                 prediction_col=config.contract.prediction_col,
                 label_col=config.contract.label_col,
+                prediction_score_col=config.contract.prediction_score_col,
                 metric_names=config.performance_metric_names,
                 problem_type=config.problem_type,
             )
@@ -1406,6 +1442,7 @@ def refresh_monitor_window_frames(
             feature_columns=list(config.contract.feature_columns),
             prediction_col=config.contract.prediction_col,
             label_col=config.contract.label_col,
+            prediction_score_col=config.contract.prediction_score_col,
             metric_names=config.performance_metric_names,
             problem_type=config.problem_type,
         )

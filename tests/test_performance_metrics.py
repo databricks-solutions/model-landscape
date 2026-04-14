@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import pytest
 import pandas as pd
 
+from model_lens.analytics.performance import compute_classification_metrics
 from model_lens.domain.models import MonitorConfig
 from model_lens.services.inference_contracts import build_inference_contract as build_contract
 from model_lens.services.onboarding import build_default_baseline
@@ -85,3 +86,29 @@ def test_daily_performance_profiles_include_optional_accuracy_when_configured() 
     )
 
     assert {row["metric_name"] for row in rows} == {"f1", "precision", "recall", "accuracy"}
+
+
+def test_classification_metrics_prefer_prediction_score_col_over_discrete_prediction_labels() -> None:
+    frame = pd.DataFrame(
+        [
+            {"prediction": "negative", "prediction_score": 0.9, "label": 1},
+            {"prediction": "positive", "prediction_score": 0.1, "label": 0},
+            {"prediction": "positive", "prediction_score": 0.8, "label": 1},
+            {"prediction": "negative", "prediction_score": 0.2, "label": 0},
+        ]
+    )
+
+    with_score = compute_classification_metrics(
+        frame,
+        prediction_col="prediction",
+        label_col="label",
+        prediction_score_col="prediction_score",
+    )
+    without_score = compute_classification_metrics(
+        frame,
+        prediction_col="prediction",
+        label_col="label",
+    )
+
+    assert with_score == {"precision": 1.0, "recall": 1.0, "f1": 1.0, "accuracy": 1.0}
+    assert without_score == {"precision": 0.5, "recall": 0.5, "f1": 0.5, "accuracy": 0.5}

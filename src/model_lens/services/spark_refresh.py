@@ -22,7 +22,7 @@ from pyspark.sql.types import (
 from model_lens.config import settings
 from model_lens.domain.models import MonitorConfig, RefreshResult
 from model_lens.domain.performance_metrics import default_performance_metric_names
-from model_lens.services.class_filters import supports_binary_class_filters
+from model_lens.services.class_filters import NEGATIVE_CLASS_TOKENS, POSITIVE_CLASS_TOKENS, supports_binary_class_filters
 from model_lens.services.control_plane import (
     ControlPlaneRepository,
     _resolve_source_labels_join_col,
@@ -40,6 +40,48 @@ from model_lens.analytics.drift import (
 CATEGORICAL_TOP_N = 100
 PERFORMANCE_BIN_COUNT = 10
 NUMERIC_DRIFT_BIN_COUNT = 20
+
+
+def _spark_binary_indicator(column) -> Any:
+    text = F.lower(F.trim(column.cast("string")))
+    numeric = column.cast("double")
+    return (
+        F.when(text.isin(*sorted(POSITIVE_CLASS_TOKENS)), F.lit(1))
+        .when(text.isin(*sorted(NEGATIVE_CLASS_TOKENS)), F.lit(0))
+        .when(numeric == F.lit(1.0), F.lit(1))
+        .when(numeric == F.lit(0.0), F.lit(0))
+        .otherwise(F.lit(None).cast("int"))
+    )
+
+
+def _spark_binary_prediction_column(source_df: DataFrame, *, config: MonitorConfig) -> Any:
+    score_col = str(config.contract.prediction_score_col or "").strip()
+    if score_col and score_col in source_df.columns:
+        scores = _spark_col(score_col).cast("double")
+        return (
+            F.when(
+                scores.isNotNull() & scores.between(0.0, 1.0),
+                F.when(scores >= F.lit(0.5), F.lit(1)).otherwise(F.lit(0)),
+            )
+            .otherwise(F.lit(None).cast("int"))
+        )
+    prediction = _spark_col(config.contract.prediction_col)
+    discrete = _spark_binary_indicator(prediction)
+    numeric = prediction.cast("double")
+    return (
+        F.when(discrete.isNotNull(), discrete)
+        .when(
+            numeric.isNotNull() & numeric.between(0.0, 1.0),
+            F.when(numeric >= F.lit(0.5), F.lit(1)).otherwise(F.lit(0)),
+        )
+        .otherwise(F.lit(None).cast("int"))
+    )
+
+
+def _spark_binary_label_column(config: MonitorConfig) -> Any:
+    return _spark_binary_indicator(_spark_col(config.contract.label_col))
+
+
 def _class_filtered_df(
     source_df: DataFrame,
     *,
@@ -49,18 +91,18 @@ def _class_filtered_df(
 ) -> DataFrame:
     if not config.contract.label_col:
         return source_df.limit(0)
-    prediction_col = _spark_col(config.contract.prediction_col).cast("double")
-    label_col = _spark_col(config.contract.label_col).cast("double")
+    prediction_col = _spark_binary_prediction_column(source_df, config=config)
+    label_col = _spark_binary_label_column(config)
     if class_basis == "predicted":
         if class_value == "positive":
-            predicate = prediction_col >= F.lit(0.5)
+            predicate = prediction_col == F.lit(1)
         else:
-            predicate = prediction_col < F.lit(0.5)
+            predicate = prediction_col == F.lit(0)
         return source_df.filter(prediction_col.isNotNull() & predicate)
     if class_value == "positive":
-        predicate = label_col == F.lit(1.0)
+        predicate = label_col == F.lit(1)
     else:
-        predicate = label_col == F.lit(0.0)
+        predicate = label_col == F.lit(0)
     return source_df.filter(label_col.isNotNull() & predicate)
 
 
@@ -985,15 +1027,14 @@ class SparkRefreshRepository(ControlPlaneRepository):
 
     def get_existing_window_keys(self, model_key: str) -> set[tuple[str, str, str, str]]:
         generation_id = self.get_latest_published_generation_id(model_key)
+        if not generation_id:
+            return set()
         try:
             frame = (
                 self._read_table(self._table_names.comparison_windows)
                 .filter(
                     (F.col("model_key") == F.lit(model_key))
-                    & (
-                        F.lit(generation_id).isNull()
-                        | (F.col("source_run_id") == F.lit(generation_id))
-                    )
+                    & (F.col("source_run_id") == F.lit(generation_id))
                 )
                 .select(
                     F.date_format(F.col("baseline_start"), "yyyy-MM-dd").alias("baseline_start"),
@@ -1012,10 +1053,7 @@ class SparkRefreshRepository(ControlPlaneRepository):
                     self._read_table(self._table_names.drift_metrics)
                     .filter(
                         (F.col("model_key") == F.lit(model_key))
-                        & (
-                            F.lit(generation_id).isNull()
-                            | (F.col("source_run_id") == F.lit(generation_id))
-                        )
+                        & (F.col("source_run_id") == F.lit(generation_id))
                     )
                     .select(
                         F.date_format(F.col("baseline_start"), "yyyy-MM-dd").alias("baseline_start"),
@@ -1058,17 +1096,90 @@ class SparkRefreshRepository(ControlPlaneRepository):
         generation_id = str(rows[0].get("generation_id") or "").strip()
         return generation_id or None
 
+    def _generation_scoped_tables(self, *, include_quality_metrics: bool = False) -> tuple[str, ...]:
+        tables = [
+            self._table_names.comparison_windows,
+            self._table_names.drift_metrics,
+            self._table_names.quality_history,
+            self._table_names.daily_quality_profiles,
+            self._table_names.daily_class_quality_profiles,
+            self._table_names.daily_feature_profiles,
+            self._table_names.daily_class_feature_profiles,
+            self._table_names.performance_metrics,
+            self._table_names.daily_performance_profiles,
+            self._table_names.daily_label_metrics,
+            self._table_names.performance_bin_specs,
+            self._table_names.incidents,
+            self._table_names.incident_history,
+        ]
+        if include_quality_metrics:
+            tables.append(self._table_names.quality_metrics)
+        return tuple(tables)
+
+    def _copy_generation_state(
+        self,
+        model_key: str,
+        *,
+        from_generation_id: str,
+        to_generation_id: str,
+    ) -> None:
+        if not from_generation_id or not to_generation_id or from_generation_id == to_generation_id:
+            return
+        for table_name in self._generation_scoped_tables():
+            frame = (
+                self._read_table(table_name)
+                .filter(
+                    (F.col("model_key") == F.lit(model_key))
+                    & (F.col("source_run_id") == F.lit(from_generation_id))
+                )
+            )
+            if not frame.take(1):
+                continue
+            copied = frame.withColumn("source_run_id", F.lit(to_generation_id))
+            self._append_df_to_table(table_name, copied)
+
+    def prune_published_generations(self, model_key: str, *, keep: int = 2) -> None:
+        keep = max(1, int(keep))
+        try:
+            rows = list(_iter_local_rows(
+                self._read_table(self._table_names.refresh_runs)
+                .filter(
+                    (F.col("model_key") == F.lit(model_key))
+                    & F.col("generation_id").isNotNull()
+                    & (F.col("generation_id") != F.lit(""))
+                    & F.col("published_at").isNotNull()
+                )
+                .orderBy(F.col("published_at").desc(), F.col("completed_at").desc(), F.col("started_at").desc())
+                .select("generation_id")
+                .limit(keep)
+            ))
+        except Exception:
+            return
+        generation_ids = [
+            str(row.get("generation_id") or "").strip()
+            for row in rows
+            if str(row.get("generation_id") or "").strip()
+        ]
+        if not generation_ids:
+            return
+        literals = ", ".join(_sql_string_literal(generation_id) for generation_id in generation_ids)
+        predicate = (
+            f"model_key = {_sql_string_literal(model_key)} "
+            f"AND COALESCE(source_run_id, '') NOT IN ({literals})"
+        )
+        for table_name in self._generation_scoped_tables(include_quality_metrics=True):
+            self._delete_where(table_name, predicate)
+
     def get_performance_bin_specs(self, model_key: str) -> dict[str, tuple[float, ...]]:
         generation_id = self.get_latest_published_generation_id(model_key)
+        if not generation_id:
+            return {}
         try:
             rows = list(_iter_local_rows(
                 self._read_table(self._table_names.performance_bin_specs)
                 .filter(
                     (F.col("model_key") == F.lit(model_key))
-                    & (
-                        F.lit(generation_id).isNull()
-                        | (F.col("source_run_id") == F.lit(generation_id))
-                    )
+                    & (F.col("source_run_id") == F.lit(generation_id))
                 )
                 .select("feature_name", "edges_json")
                 .orderBy("feature_name")
@@ -1115,16 +1226,15 @@ class SparkRefreshRepository(ControlPlaneRepository):
 
     def get_current_incident_state(self, model_key: str) -> dict[tuple[str, str, str], dict[str, Any]]:
         generation_id = self.get_latest_published_generation_id(model_key)
+        if not generation_id:
+            return {}
         try:
             rows = _iter_local_rows(
                 self._read_table(self._table_names.incidents)
                 .filter(
                     (F.col("model_key") == F.lit(model_key))
                     & (F.col("status") == F.lit("open"))
-                    & (
-                        F.lit(generation_id).isNull()
-                        | (F.col("source_run_id") == F.lit(generation_id))
-                    )
+                    & (F.col("source_run_id") == F.lit(generation_id))
                 )
                 .select(
                     "model_key",
@@ -1602,7 +1712,14 @@ class SparkRefreshRepository(ControlPlaneRepository):
         self._sync_read_model()
 
     def append_refresh_result(self, model_key: str, result: RefreshResult, source_run_id: str | None = None) -> None:
-        generation_id = source_run_id or self.get_latest_published_generation_id(model_key) or ""
+        previous_generation_id = self.get_latest_published_generation_id(model_key)
+        generation_id = source_run_id or previous_generation_id or ""
+        if previous_generation_id and generation_id and previous_generation_id != generation_id:
+            self._copy_generation_state(
+                model_key,
+                from_generation_id=previous_generation_id,
+                to_generation_id=generation_id,
+            )
         model_key_predicate = (
             f"model_key = {_sql_string_literal(model_key)}"
             + (f" AND source_run_id = {_sql_string_literal(generation_id)}" if generation_id else "")
@@ -3184,13 +3301,13 @@ class SparkRefreshRepository(ControlPlaneRepository):
     ) -> list[dict[str, Any]]:
         if not supports_binary_class_filters(config):
             return []
-        prediction = _spark_col(config.contract.prediction_col).cast("double")
-        label = _spark_col(config.contract.label_col).cast("double")
+        prediction = _spark_binary_prediction_column(source_df, config=config)
+        label = _spark_binary_label_column(config)
         metrics_df = (
             source_df
             .select("_model_lens_profile_date", prediction.alias("_model_lens_prediction"), label.alias("_model_lens_label"))
             .filter(F.col("_model_lens_prediction").isNotNull() & F.col("_model_lens_label").isNotNull())
-            .withColumn("_model_lens_pred_binary", F.when(F.col("_model_lens_prediction") >= F.lit(0.5), F.lit(1)).otherwise(F.lit(0)))
+            .withColumn("_model_lens_pred_binary", F.col("_model_lens_prediction").cast("int"))
             .withColumn("_model_lens_truth_binary", F.col("_model_lens_label").cast("int"))
             .groupBy("_model_lens_profile_date")
             .agg(
@@ -3270,8 +3387,8 @@ class SparkRefreshRepository(ControlPlaneRepository):
             .select(
                 "_model_lens_profile_date",
                 _spark_col(feature).cast("double").alias("_model_lens_feature_value"),
-                _spark_col(config.contract.prediction_col).cast("double").alias("_model_lens_prediction"),
-                _spark_col(config.contract.label_col).cast("double").alias("_model_lens_label"),
+                _spark_binary_prediction_column(source_df, config=config).alias("_model_lens_prediction"),
+                _spark_binary_label_column(config).alias("_model_lens_label"),
             )
             .filter(
                 F.col("_model_lens_feature_value").isNotNull()
@@ -3289,7 +3406,7 @@ class SparkRefreshRepository(ControlPlaneRepository):
         )
         bucketed = (
             bucketizer.transform(feature_df)
-            .withColumn("_model_lens_pred_binary", F.when(F.col("_model_lens_prediction") >= F.lit(0.5), F.lit(1)).otherwise(F.lit(0)))
+            .withColumn("_model_lens_pred_binary", F.col("_model_lens_prediction").cast("int"))
             .withColumn("_model_lens_truth_binary", F.col("_model_lens_label").cast("int"))
         )
         metric_df = (
@@ -3301,14 +3418,14 @@ class SparkRefreshRepository(ControlPlaneRepository):
                 F.sum(F.when((F.col("_model_lens_pred_binary") == 0) & (F.col("_model_lens_truth_binary") == 1), F.lit(1)).otherwise(F.lit(0))).alias("fn"),
                 F.sum(F.when((F.col("_model_lens_pred_binary") == 0) & (F.col("_model_lens_truth_binary") == 0), F.lit(1)).otherwise(F.lit(0))).alias("tn"),
             )
-            .withColumn("precision", F.when(F.col("tp") + F.col("fp") > 0, F.col("tp") / (F.col("tp") + F.col("fp"))).otherwise(F.lit(0.0)))
-            .withColumn("recall", F.when(F.col("tp") + F.col("fn") > 0, F.col("tp") / (F.col("tp") + F.col("fn"))).otherwise(F.lit(0.0)))
+            .withColumn("precision", F.when(F.col("tp") + F.col("fp") > 0, F.col("tp") / (F.col("tp") + F.col("fp"))).otherwise(F.lit(None).cast("double")))
+            .withColumn("recall", F.when(F.col("tp") + F.col("fn") > 0, F.col("tp") / (F.col("tp") + F.col("fn"))).otherwise(F.lit(None).cast("double")))
             .withColumn(
                 "f1",
                 F.when(
-                    F.col("precision") + F.col("recall") > 0,
+                    F.col("precision").isNotNull() & F.col("recall").isNotNull() & ((F.col("precision") + F.col("recall")) > 0),
                     (F.lit(2.0) * F.col("precision") * F.col("recall")) / (F.col("precision") + F.col("recall")),
-                ).otherwise(F.lit(0.0)),
+                ).otherwise(F.lit(None).cast("double")),
             )
             .withColumn("accuracy", (F.col("tp") + F.col("tn")) / F.col("row_count"))
             .withColumn("_model_lens_bin_index", F.col("_model_lens_bin_index").cast("int"))

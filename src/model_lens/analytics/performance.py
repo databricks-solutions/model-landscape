@@ -5,22 +5,49 @@ import pandas as pd
 from sklearn.metrics import accuracy_score, f1_score, mean_absolute_error, mean_squared_error, precision_score, recall_score
 
 from model_lens.domain.performance_metrics import default_performance_metric_names, normalize_performance_metric_names
+from model_lens.services.class_filters import normalized_binary_series, resolved_prediction_binary_series
 
 
 def compute_bin_edges(values: np.ndarray, n_bins: int = 10) -> np.ndarray:
     return np.histogram_bin_edges(values[~np.isnan(values)], bins=n_bins)
 
 
-def compute_classification_metrics(df: pd.DataFrame, prediction_col: str, label_col: str) -> dict[str, float]:
-    pred = pd.to_numeric(df[prediction_col], errors="coerce").to_numpy()
-    truth = pd.to_numeric(df[label_col], errors="coerce").to_numpy()
-    mask = ~(np.isnan(pred) | np.isnan(truth))
-    pred = pred[mask]
-    truth = truth[mask]
-    if len(pred) == 0:
+def _resolved_binary_arrays(
+    df: pd.DataFrame,
+    *,
+    prediction_col: str,
+    label_col: str,
+    prediction_score_col: str | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    pred = resolved_prediction_binary_series(
+        df,
+        prediction_col=prediction_col,
+        prediction_score_col=prediction_score_col,
+    )
+    truth = normalized_binary_series(df[label_col])
+    mask = pred.notna() & truth.notna()
+    if not mask.any():
+        return np.array([], dtype=int), np.array([], dtype=int)
+    return (
+        pred.loc[mask].astype(int).to_numpy(),
+        truth.loc[mask].astype(int).to_numpy(),
+    )
+
+
+def compute_classification_metrics(
+    df: pd.DataFrame,
+    prediction_col: str,
+    label_col: str,
+    prediction_score_col: str | None = None,
+) -> dict[str, float]:
+    pred_binary, truth_binary = _resolved_binary_arrays(
+        df,
+        prediction_col=prediction_col,
+        label_col=label_col,
+        prediction_score_col=prediction_score_col,
+    )
+    if len(pred_binary) == 0:
         return {}
-    pred_binary = (pred >= 0.5).astype(int)
-    truth_binary = truth.astype(int)
     return {
         "f1": round(float(f1_score(truth_binary, pred_binary, zero_division=0)), 4),
         "precision": round(float(precision_score(truth_binary, pred_binary, zero_division=0)), 4),
@@ -29,13 +56,19 @@ def compute_classification_metrics(df: pd.DataFrame, prediction_col: str, label_
     }
 
 
-def compute_daily_classification_metrics(df: pd.DataFrame, prediction_col: str, label_col: str) -> dict[str, float | int | None]:
-    pred = pd.to_numeric(df[prediction_col], errors="coerce").to_numpy()
-    truth = pd.to_numeric(df[label_col], errors="coerce").to_numpy()
-    mask = ~(np.isnan(pred) | np.isnan(truth))
-    pred = pred[mask]
-    truth = truth[mask]
-    if len(pred) == 0:
+def compute_daily_classification_metrics(
+    df: pd.DataFrame,
+    prediction_col: str,
+    label_col: str,
+    prediction_score_col: str | None = None,
+) -> dict[str, float | int | None]:
+    pred_binary, truth_binary = _resolved_binary_arrays(
+        df,
+        prediction_col=prediction_col,
+        label_col=label_col,
+        prediction_score_col=prediction_score_col,
+    )
+    if len(pred_binary) == 0:
         return {
             "actual_positive_count": 0,
             "actual_negative_count": 0,
@@ -50,8 +83,6 @@ def compute_daily_classification_metrics(df: pd.DataFrame, prediction_col: str, 
             "f1": None,
             "accuracy": None,
         }
-    pred_binary = (pred >= 0.5).astype(int)
-    truth_binary = truth.astype(int)
     tp = int(((pred_binary == 1) & (truth_binary == 1)).sum())
     fp = int(((pred_binary == 1) & (truth_binary == 0)).sum())
     fn = int(((pred_binary == 0) & (truth_binary == 1)).sum())
@@ -106,6 +137,7 @@ def rank_degradation_contributors(
     feature_columns: list[str],
     prediction_col: str,
     label_col: str,
+    prediction_score_col: str | None = None,
     metric_names: tuple[str, ...] | list[str] | None = None,
     n_bins: int = 10,
     problem_type: str = "classification",
@@ -138,8 +170,18 @@ def rank_degradation_contributors(
                 base_metrics = compute_regression_metrics(base_slice, prediction_col, label_col)
                 cur_metrics = compute_regression_metrics(cur_slice, prediction_col, label_col)
             else:
-                base_metrics = compute_classification_metrics(base_slice, prediction_col, label_col)
-                cur_metrics = compute_classification_metrics(cur_slice, prediction_col, label_col)
+                base_metrics = compute_classification_metrics(
+                    base_slice,
+                    prediction_col,
+                    label_col,
+                    prediction_score_col=prediction_score_col,
+                )
+                cur_metrics = compute_classification_metrics(
+                    cur_slice,
+                    prediction_col,
+                    label_col,
+                    prediction_score_col=prediction_score_col,
+                )
             if not base_metrics or not cur_metrics:
                 continue
             volume_pct = round(float(len(cur_slice) / total_current * 100), 2)

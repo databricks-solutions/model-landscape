@@ -231,6 +231,12 @@ class _FakeWarehouse:
         raise AssertionError(f"Unexpected query: {sql}")
 
 
+def _with_published_generation(repository, generation_id: str = "published-1"):
+    if not callable(getattr(repository, "get_latest_published_generation_id", None)):
+        repository.get_latest_published_generation_id = lambda model_key: generation_id
+    return repository
+
+
 def _make_backend() -> DashboardBackend:
     config = MonitorConfig(
         model_key="fraud_model_demo",
@@ -278,7 +284,7 @@ def _make_backend() -> DashboardBackend:
         get_open_incidents=lambda: pd.DataFrame(),
         load_monitor_frame=lambda config: pd.DataFrame(),
     )
-    return DashboardBackend(repository=repository)
+    return DashboardBackend(repository=_with_published_generation(repository))
 
 
 def test_list_models_merges_monitor_configs_with_summary() -> None:
@@ -317,6 +323,15 @@ def test_get_drift_results_pivots_long_metrics_into_feature_period_rows() -> Non
     assert drift.iloc[1]["psi"] == 0.21
     assert drift.iloc[1]["js_divergence"] == 0.11
     assert drift.iloc[1]["kl_divergence"] == 0.0
+
+
+def test_get_drift_results_requires_a_published_generation() -> None:
+    backend = _make_backend()
+    backend.repository.get_latest_published_generation_id = lambda model_id: None
+
+    drift = backend.get_drift_results("fraud_model_demo", granularity="daily")
+
+    assert drift.empty
 
 
 def test_get_drift_results_aggregates_weekly_history_with_latest_overlay_and_summed_counts() -> None:
@@ -429,7 +444,7 @@ def test_get_quality_history_falls_back_to_daily_profiles_when_window_history_is
         list_monitor_configs=lambda status="active": [config],
         get_monitor_summary=lambda: pd.DataFrame(),
     )
-    backend = DashboardBackend(repository=repository)
+    backend = DashboardBackend(repository=_with_published_generation(repository))
 
     history = backend.get_quality_history("fraud_model_demo")
 
@@ -556,7 +571,7 @@ def test_get_performance_summary_prefers_daily_label_metrics_and_keeps_null_gaps
             },
         ],
     )
-    backend = DashboardBackend(repository=repository)
+    backend = DashboardBackend(repository=_with_published_generation(repository))
 
     performance = backend.get_performance_summary("fraud_model_demo", metric_name="precision")
 
@@ -625,7 +640,7 @@ def test_get_performance_summary_falls_back_to_daily_performance_profiles_when_d
             },
         ],
     )
-    backend = DashboardBackend(repository=repository)
+    backend = DashboardBackend(repository=_with_published_generation(repository))
 
     performance = backend.get_performance_summary("fraud_model_demo", metric_name="precision")
 
@@ -699,7 +714,7 @@ def test_get_latest_window_metrics_aggregates_latest_daily_label_facts() -> None
             },
         ],
     )
-    backend = DashboardBackend(repository=repository)
+    backend = DashboardBackend(repository=_with_published_generation(repository))
 
     snapshot = backend.get_latest_window_metrics("fraud_model_demo")
 
@@ -798,7 +813,7 @@ def test_get_latest_window_metrics_falls_back_to_daily_performance_profiles() ->
             },
         ],
     )
-    backend = DashboardBackend(repository=repository)
+    backend = DashboardBackend(repository=_with_published_generation(repository))
 
     snapshot = backend.get_latest_window_metrics("fraud_model_demo")
 
@@ -858,7 +873,7 @@ def test_get_quality_stats_and_history_support_class_filters_from_daily_profiles
             },
         ],
     )
-    backend = DashboardBackend(repository=repository)
+    backend = DashboardBackend(repository=_with_published_generation(repository))
 
     quality = backend.get_quality_stats(
         "fraud_model_demo",
@@ -983,7 +998,7 @@ def test_get_drift_results_supports_class_filtered_daily_feature_profiles() -> N
             },
         ],
     )
-    backend = DashboardBackend(repository=repository)
+    backend = DashboardBackend(repository=_with_published_generation(repository))
 
     drift = backend.get_drift_results(
         "fraud_model_demo",
@@ -1043,7 +1058,7 @@ def test_feature_detail_load_uses_bounded_sampled_frame() -> None:
         get_monitor_summary=lambda: pd.DataFrame(),
         load_monitor_frame=load_monitor_frame,
     )
-    backend = DashboardBackend(repository=repository)
+    backend = DashboardBackend(repository=_with_published_generation(repository))
 
     baseline, current = backend.get_feature_distribution("fraud_model_demo", "amount")
 
@@ -1087,7 +1102,7 @@ def test_feature_detail_returns_empty_when_only_unbounded_load_is_supported() ->
         get_monitor_summary=lambda: pd.DataFrame(),
         load_monitor_frame=lambda config_arg: pd.DataFrame([{"event_ts": "2026-01-20T00:00:00", "amount": 10.0}]),
     )
-    backend = DashboardBackend(repository=repository)
+    backend = DashboardBackend(repository=_with_published_generation(repository))
 
     details = backend.get_feature_distribution_details("fraud_model_demo", "amount")
 
@@ -1142,7 +1157,7 @@ def test_feature_detail_skips_raw_fallback_without_hard_row_cap() -> None:
         get_monitor_summary=lambda: pd.DataFrame(),
         load_monitor_frame=load_monitor_frame,
     )
-    backend = DashboardBackend(repository=repository)
+    backend = DashboardBackend(repository=_with_published_generation(repository))
 
     details = backend.get_feature_distribution_details("fraud_model_demo", "amount")
 
@@ -1209,7 +1224,7 @@ def test_current_window_detail_reads_use_current_window_bounds_only() -> None:
         get_monitor_summary=lambda: pd.DataFrame(),
         load_monitor_frame=load_monitor_frame,
     )
-    backend = DashboardBackend(repository=repository)
+    backend = DashboardBackend(repository=_with_published_generation(repository))
 
     breakdown = backend.get_dimension_breakdown("fraud_model_demo", "amount", "region")
     prediction = backend.get_prediction_distribution("fraud_model_demo")
@@ -1283,7 +1298,7 @@ def test_current_window_returns_empty_when_only_unbounded_load_is_supported() ->
         get_monitor_summary=lambda: pd.DataFrame(),
         load_monitor_frame=load_monitor_frame,
     )
-    backend = DashboardBackend(repository=repository)
+    backend = DashboardBackend(repository=_with_published_generation(repository))
 
     prediction = backend.get_prediction_distribution("fraud_model_demo")
 
@@ -1351,7 +1366,7 @@ def test_feature_distribution_daily_profile_query_is_bounded_to_latest_window_da
         list_monitor_configs=lambda status="active": [config],
         get_monitor_summary=lambda: pd.DataFrame(),
     )
-    backend = DashboardBackend(repository=repository)
+    backend = DashboardBackend(repository=_with_published_generation(repository))
 
     baseline, current = backend.get_feature_distribution("fraud_model_demo", "amount")
 
@@ -1360,7 +1375,7 @@ def test_feature_distribution_daily_profile_query_is_bounded_to_latest_window_da
     profile_query = next(sql for sql, _ in queries if "FROM daily_feature_profiles" in sql)
     profile_params = next(params for sql, params in queries if "FROM daily_feature_profiles" in sql)
     assert "profile_date BETWEEN CAST(%s AS DATE) AND CAST(%s AS DATE)" in profile_query
-    assert profile_params == ("fraud_model_demo", "amount", "2026-01-07", "2026-01-21")
+    assert profile_params == ("fraud_model_demo", "amount", "2026-01-07", "2026-01-21", "published-1")
 
 
 def test_get_overview_rows_uses_bulk_historical_snapshot_queries() -> None:
@@ -1510,7 +1525,7 @@ def test_get_overview_rows_uses_bulk_historical_snapshot_queries() -> None:
         ),
         get_open_incidents=lambda: pd.DataFrame(),
     )
-    backend = DashboardBackend(repository=repository)
+    backend = DashboardBackend(repository=_with_published_generation(repository))
 
     rows = backend.get_overview_rows()
 
@@ -1611,7 +1626,7 @@ def test_get_overview_rows_marks_models_without_drift_as_computing() -> None:
         get_monitor_summary=lambda: pd.DataFrame(),
         list_monitor_runtime_states=lambda keys: {},
     )
-    backend = DashboardBackend(repository=repository)
+    backend = DashboardBackend(repository=_with_published_generation(repository))
 
     rows = backend.get_overview_rows(metric="psi")
     rows_by_id = {row["model_id"]: row for row in rows}
@@ -1679,7 +1694,7 @@ def test_get_overview_rows_uses_monitor_threshold_overrides_for_drifting_feature
         get_monitor_summary=lambda: pd.DataFrame(),
         list_monitor_runtime_states=lambda keys: {},
     )
-    backend = DashboardBackend(repository=repository)
+    backend = DashboardBackend(repository=_with_published_generation(repository))
 
     rows = backend.get_overview_rows(metric="psi")
 
@@ -1693,7 +1708,7 @@ def test_get_overview_rows_returns_empty_without_active_monitors() -> None:
         list_monitor_configs=lambda status="active": [],
         get_monitor_summary=lambda: (_ for _ in ()).throw(AssertionError("summary should not be queried")),
     )
-    backend = DashboardBackend(repository=repository)
+    backend = DashboardBackend(repository=_with_published_generation(repository))
 
     assert backend.list_models() == []
     assert backend.get_overview_rows() == []
@@ -1809,7 +1824,7 @@ def test_get_reference_data_includes_recent_incident_history_when_available(monk
             }
         ],
     )
-    backend = DashboardBackend(repository=repository)
+    backend = DashboardBackend(repository=_with_published_generation(repository))
 
     reference = backend.get_reference_data("fraud_model_demo")
 
@@ -1877,7 +1892,7 @@ def test_get_incidents_data_enriches_rows_with_monitor_names() -> None:
             }
         ],
     )
-    backend = DashboardBackend(repository=repository)
+    backend = DashboardBackend(repository=_with_published_generation(repository))
 
     incidents = backend.get_incidents_data(limit_history=20)
 

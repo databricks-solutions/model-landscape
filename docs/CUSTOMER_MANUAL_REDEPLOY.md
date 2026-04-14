@@ -270,12 +270,15 @@ Expected outcomes:
 - if the app service principal has `CAN_MANAGE_RUN`, the app can trigger bootstrap immediately
 - if it does not, the monitor can still be saved and remain `pending bootstrap`
 - in `scheduler_only` mode, the shared scheduled refresh job is the supported pickup path
+- for large tables, `pending bootstrap` / `Computing/Pending` can persist until the first refresh job actually finishes; that is expected during the initial run
 
 ## Important Notes
 
 - After redeploying a newer Model Lens build into an existing workspace, run `Setup Control Plane` once so additive schema migrations are applied.
 - If you reuse an existing shared refresh job, do not assume an older job definition is still compatible. Reset it to the generated `refresh-job.json` contract if there is any doubt.
 - Prefer `REFRESH_JOB_ID` over workflow name lookup.
+- if the shared refresh job already ran successfully after redeploy, do not manually reinstall the wheel again; do that only when the workspace relies on cluster-scoped libraries or the job cannot resolve the uploaded workspace wheel.
+- delete and archive actions in the app operate by `model_key`, so verify the displayed `model_key` before using monitor lifecycle actions.
 
 ## Troubleshooting
 

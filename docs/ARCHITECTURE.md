@@ -134,6 +134,7 @@ For binary classification monitors, the new class-aware daily tables stay additi
 Those tables are not required for the unfiltered pages. The unfiltered Drift and Data Quality views continue to read the stable window/history tables, while class-filtered views and the raw daily Performance timeline can switch to these daily facts after the next refresh populates them.
 
 `monitor_configs` now also stores the monitor's configured performance metric set and default Performance-tab metric. The persisted performance tables stay generic on `metric_name`, so refresh and readback can handle different built-in metric combinations per monitor without changing the warehouse schema again.
+Monitor config writes are now atomic Delta `MERGE` operations keyed by `model_key`, so app-side saves no longer rely on a delete-then-insert gap.
 
 ### 4. Lakebase Read Model
 
@@ -192,8 +193,8 @@ Responsibilities:
 - materialize daily quality, feature, and performance profiles from the Spark range load, then derive the persisted comparison-window history from those daily profiles in the same refresh pass
 - for non-bootstrap runs, read the affected persisted daily facts back through the Spark repository, merge them with the current run’s daily facts there, and derive the window/history tables from that Spark-side union instead of a Python list merge
 - when the Spark repository is active, persist the affected derived/fact tables back into Delta through Spark writes instead of row-batch warehouse inserts
-- publish full bootstrap replacements as a new refresh generation only after every affected result table has been written, so a crash mid-bootstrap leaves the previously published generation visible instead of blanking the monitor
-- keep incremental append refreshes inside the currently published generation and rewrite only the affected windows/dates there; that preserves the active generation pointer but is still a scoped in-place swap rather than a full copy-on-write publish
+- publish every refresh scope as a new `generation_id = run_id` only after every affected result table has been written, so both first bootstrap and later repair runs stay invisible until a complete published generation exists
+- keep readers pinned to published generations only and prune each monitor back to the latest two published generations after a successful publish
 - before those strict Spark writes, normalize required metadata fields such as `model_key`, `window_id`, and `computed_at` at the repository boundary so nullability-only row-contract gaps do not abort bootstrap persistence
 - with the Spark repository active, numeric drift histogram aggregation and incident lifecycle derivation also stay inside the Spark refresh layer rather than dropping back to Python helpers on the hot path
 - stream the final derived rows that still need Python-side packaging with iterator-based reads rather than whole-frame `collect()` calls, so the driver sees only already-aggregated outputs
@@ -233,7 +234,7 @@ Primary code:
 1. The operator enters a source inference table and can optionally add a labels table plus an MLflow experiment or registered model.
 2. The app loads schema metadata and sample rows through the SQL warehouse.
 3. The discovery service infers the monitoring contract, feature set, slices, model scope candidates, and optional MLflow lineage. It accepts timestamp-like ISO strings, can use a true-label column directly from the inference table when one exists, prioritizes shared-name shared-type join keys for external labels, reuses that shared join column on the inference side even when no explicit `entity_id`-style column exists, and can fall back to identifier-like `model_version` values when a dedicated `model_id` column is absent.
-   It also treats a 0-row labels join as a review-blocking warning and keeps the full numeric feature set selected by default rather than silently shrinking the first refresh to a small subset.
+   It now proves model/version scope from preview rows plus a bounded source sample instead of repeated unbounded `SELECT DISTINCT` scans, and it marks ambiguous scopes `requires_review` rather than escalating into a larger scan. It also treats a 0-row labels join as a review-blocking warning, preserves the full numeric feature set selected by default rather than silently shrinking the first refresh to a small subset, and persists `prediction_score_col` so binary analytics can use the correct score signal when one exists.
 4. In the contract step, the operator reviews the inferred draft and only opens `Advanced` when overrides are needed.
 5. If the source table contains multiple model IDs, the operator confirms or pins one `model_id_value`.
 6. If the labels table is not unique on the join key, the operator confirms or provides a label ordering column.

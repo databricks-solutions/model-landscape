@@ -1060,6 +1060,63 @@ def _selected_model_from_search(search: str | None) -> str | None:
     return selected or None
 
 
+def _monitor_status_text(status: str | None) -> str:
+    return "Archived" if str(status or "").strip().lower() == "inactive" else "Active"
+
+
+def _monitor_option_label(display_name: str | None, model_key: str | None, *, status: str | None = None) -> str:
+    name_text = str(display_name or model_key or "Unnamed Monitor").strip()
+    key_text = str(model_key or "").strip()
+    if not key_text:
+        return name_text
+    suffix = f", {_monitor_status_text(status)}" if status is not None else ""
+    return f"{name_text} ({key_text}{suffix})"
+
+
+def _list_all_monitor_configs(backend: DashboardBackend) -> list[MonitorConfig]:
+    repository = getattr(backend, "repository", None)
+    if repository and hasattr(repository, "list_monitor_configs"):
+        try:
+            return list(repository.list_monitor_configs(status=None))
+        except TypeError:
+            return list(repository.list_monitor_configs())
+    return []
+
+
+def _existing_monitor_keys(backend: DashboardBackend) -> set[str]:
+    configs = _list_all_monitor_configs(backend)
+    if configs:
+        return {
+            str(config.model_key).strip()
+            for config in configs
+            if str(getattr(config, "model_key", "")).strip()
+        }
+    list_reference_models = getattr(backend, "list_reference_models", None)
+    if callable(list_reference_models):
+        try:
+            models = list_reference_models(status=None)
+        except TypeError:
+            models = list_reference_models()
+        return {
+            str(model.get("id") or "").strip()
+            for model in models
+            if str(model.get("id") or "").strip()
+        }
+    return set()
+
+
+def _suggest_unique_model_key(base_key: str | None, existing_keys: set[str]) -> str:
+    candidate = str(base_key or "").strip()
+    if not candidate:
+        return ""
+    if candidate not in existing_keys:
+        return candidate
+    suffix = 2
+    while f"{candidate}_{suffix}" in existing_keys:
+        suffix += 1
+    return f"{candidate}_{suffix}"
+
+
 def _resolve_reference_model_id(global_model_id: str | None, reference_model_id: str | None) -> str | None:
     selected = str(reference_model_id or "").strip()
     if selected:
@@ -1073,6 +1130,37 @@ def _get_monitor_config_for_reference(backend: DashboardBackend, model_id: str) 
         return backend.get_monitor_config(model_id, status=None)
     except TypeError:
         return backend.get_monitor_config(model_id)
+    except AttributeError:
+        return None
+
+
+def _resolve_monitor_config_by_key(
+    backend: DashboardBackend,
+    model_key: str,
+    *,
+    fail_if_ambiguous: bool = False,
+) -> tuple[MonitorConfig | None, str | None]:
+    normalized_key = str(model_key or "").strip()
+    if not normalized_key:
+        return None, "Select a monitor before continuing."
+    configs = _list_all_monitor_configs(backend)
+    if configs:
+        matches = [
+            config
+            for config in configs
+            if str(getattr(config, "model_key", "")).strip() == normalized_key
+        ]
+        if len(matches) == 1:
+            return matches[0], None
+        if len(matches) > 1:
+            if fail_if_ambiguous:
+                return None, f"Multiple monitors currently share model key {normalized_key}. Resolve that collision before using lifecycle actions."
+            return matches[0], None
+        return None, f"Selected monitor {normalized_key} no longer exists."
+    config = _get_monitor_config_for_reference(backend, normalized_key)
+    if config:
+        return config, None
+    return None, f"Selected monitor {normalized_key} no longer exists."
 
 
 def _make_backend(session_data: dict | None) -> DashboardBackend:
@@ -1669,7 +1757,13 @@ def register_callbacks(app) -> None:
         try:
             backend = _make_backend(session_data)
             models = backend.list_models()
-            options = [{"label": model["name"], "value": model["id"]} for model in models]
+            options = [
+                {
+                    "label": _monitor_option_label(model.get("name"), model.get("id")),
+                    "value": model["id"],
+                }
+                for model in models
+            ]
             if not options:
                 return [], None
             values = {option["value"] for option in options}
@@ -1699,7 +1793,7 @@ def register_callbacks(app) -> None:
             models = backend.list_reference_models(status=status_filter or "active")
             options = [
                 {
-                    "label": f"{model['name']} ({'Archived' if model['status'] == 'inactive' else 'Active'})",
+                    "label": _monitor_option_label(model.get("name"), model.get("id"), status=model.get("status")),
                     "value": model["id"],
                 }
                 for model in models
@@ -1972,8 +2066,9 @@ def register_callbacks(app) -> None:
         Output("baseline-fixed-range-input", "start_date"),
         Output("baseline-fixed-range-input", "end_date"),
         Input("scan-data", "data"),
+        Input("session-config-store", "data"),
     )
-    def populate_monitor_form(scan_data):
+    def populate_monitor_form(scan_data, session_data):
         if not scan_data:
             empty = [], ""
             blank_options = [{"label": "(none)", "value": ""}]
@@ -2010,6 +2105,11 @@ def register_callbacks(app) -> None:
             )
         columns = scan_data.get("columns", [])
         defaults = _discovery_defaults(scan_data) or _guess_defaults(scan_data.get("table_name", ""), columns)
+        try:
+            backend = _make_backend(session_data)
+            defaults["model_key"] = _suggest_unique_model_key(defaults.get("model_key"), _existing_monitor_keys(backend))
+        except Exception:
+            defaults["model_key"] = str(defaults.get("model_key") or "").strip()
         required_options = _option_list(columns)
         optional_options = _option_list(columns, include_blank=True)
         feature_values = defaults.get("feature_columns") or defaults.get("features") or []
@@ -2404,6 +2504,20 @@ def register_callbacks(app) -> None:
                 created_by="app",
             )
             backend = _make_backend(session)
+            existing_config, conflict_error = _resolve_monitor_config_by_key(backend, config.model_key)
+            if conflict_error and "no longer exists" not in conflict_error.lower():
+                return _status_alert(conflict_error, "danger"), no_update, no_update
+            if existing_config:
+                return (
+                    _status_alert(
+                        "A monitor with this model key already exists: "
+                        f"{existing_config.display_name} ({existing_config.model_key}, {_monitor_status_text(existing_config.status)}). "
+                        "Choose a different model key here, or edit the existing monitor in Monitor Settings.",
+                        "warning",
+                    ),
+                    no_update,
+                    no_update,
+                )
             backend.repository.validate_monitor_source(config)
             backend.repository.upsert_monitor_config(config)
             backend.repository.mark_monitor_bootstrap_pending(config)
@@ -3521,7 +3635,10 @@ def register_callbacks(app) -> None:
                     dbc.ModalBody(
                         [
                             html.P(
-                                f"Archive {config.display_name} ({config.model_key})? Scheduled refreshes will stop, but stored history will be kept.",
+                                (
+                                    f"Archive the selected monitor {config.display_name} ({config.model_key})? "
+                                    "Scheduled refreshes will stop, but the persisted monitoring history stored under this model key will be kept."
+                                ),
                                 className="mb-0",
                             )
                         ]
@@ -3832,8 +3949,15 @@ def register_callbacks(app) -> None:
                                         invalid=False,
                                     ),
                                     dcc.Store(id="reference-delete-model-key-store", data=config.model_key),
+                                    html.P(
+                                        (
+                                            f"Delete the selected monitor {config.display_name} ({config.model_key})? "
+                                            "This permanently removes the monitor configuration and all persisted monitoring history stored under this model key."
+                                        ),
+                                        className="text-muted small mt-3 mb-2",
+                                    ),
                                     html.Div(
-                                        "Type the exact model key to enable delete.",
+                                        "Type the exact model key for the selected monitor to enable delete.",
                                         id="reference-delete-confirm-status",
                                         className="text-muted small mt-2",
                                     ),
@@ -3922,6 +4046,24 @@ def register_callbacks(app) -> None:
                 html.P(
                     f"Selected monitor: {config.display_name} ({config.model_key}, {config_status}). Use the tabs below to move between contract details, editable settings, and admin actions.",
                     className="text-muted mb-3",
+                ),
+                html.Small(
+                    " | ".join(
+                        [
+                            f"Source: {config.source_table}",
+                            *(
+                                [f"Model ID Value: {config.model_id_value}"]
+                                if getattr(config, "model_id_value", None)
+                                else []
+                            ),
+                            *(
+                                [f"Model Version Value: {config.model_version_value}"]
+                                if getattr(config, "model_version_value", None)
+                                else []
+                            ),
+                        ]
+                    ),
+                    className="text-muted d-block mb-3",
                 ),
                 dbc.Tabs(
                     [
@@ -4175,16 +4317,17 @@ def register_callbacks(app) -> None:
         if not model_id:
             return _status_alert("Select a monitor before archiving it.", "warning"), no_update
         backend = _make_backend(session_data)
-        config = _get_monitor_config_for_reference(backend, model_id)
-        if not config:
-            return _status_alert("Selected monitor no longer exists.", "warning"), no_update
+        config, resolution_error = _resolve_monitor_config_by_key(backend, model_id, fail_if_ambiguous=True)
+        if resolution_error:
+            return _status_alert(resolution_error, "warning"), no_update
         try:
             backend.repository.archive_monitor(model_id)
         except Exception as error:
             return _status_alert(f"Could not archive monitor: {error}", "danger"), no_update
+        resolved_key = str(getattr(config, "model_key", "") or model_id).strip() or model_id
         return (
             _status_alert(
-                f"Archived {config.display_name}. It is no longer active, but its historical rows were kept.",
+                f"Archived {config.display_name} ({resolved_key}). It is no longer active, but its historical rows under this model key were kept.",
                 "success",
             ),
             datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -4206,16 +4349,17 @@ def register_callbacks(app) -> None:
         if not model_id:
             return _status_alert("Select a monitor before restoring it.", "warning"), no_update
         backend = _make_backend(session_data)
-        config = _get_monitor_config_for_reference(backend, model_id)
-        if not config:
-            return _status_alert("Selected monitor no longer exists.", "warning"), no_update
+        config, resolution_error = _resolve_monitor_config_by_key(backend, model_id, fail_if_ambiguous=True)
+        if resolution_error:
+            return _status_alert(resolution_error, "warning"), no_update
         try:
             backend.repository.restore_monitor(model_id)
         except Exception as error:
             return _status_alert(f"Could not restore monitor: {error}", "danger"), no_update
+        resolved_key = str(getattr(config, "model_key", "") or model_id).strip() or model_id
         return (
             _status_alert(
-                f"Restored {config.display_name}. It is active again and eligible for scheduled refresh.",
+                f"Restored {config.display_name} ({resolved_key}). It is active again and eligible for scheduled refresh.",
                 "success",
             ),
             datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -4306,9 +4450,9 @@ def register_callbacks(app) -> None:
         if not model_id:
             return _status_alert("Select a monitor before deleting it.", "warning"), no_update
         backend = _make_backend(session_data)
-        config = _get_monitor_config_for_reference(backend, model_id)
-        if not config:
-            return _status_alert("Selected monitor no longer exists.", "warning"), no_update
+        config, resolution_error = _resolve_monitor_config_by_key(backend, model_id, fail_if_ambiguous=True)
+        if resolution_error:
+            return _status_alert(resolution_error, "warning"), no_update
         if (confirmation_text or "").strip() != config.model_key:
             return _status_alert(
                 f"Type the exact model key ({config.model_key}) before deleting this monitor.",
@@ -4318,9 +4462,10 @@ def register_callbacks(app) -> None:
             backend.repository.delete_monitor(model_id)
         except Exception as error:
             return _status_alert(f"Could not delete monitor: {error}", "danger"), no_update
+        resolved_key = str(getattr(config, "model_key", "") or model_id).strip() or model_id
         return (
             _status_alert(
-                f"Deleted {config.display_name} and its persisted monitoring history.",
+                f"Deleted {config.display_name} ({resolved_key}) and its persisted monitoring history under that model key.",
                 "success",
             ),
             datetime.now(timezone.utc).isoformat(timespec="seconds"),
