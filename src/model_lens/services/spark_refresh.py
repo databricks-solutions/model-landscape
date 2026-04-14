@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-from pyspark.ml.feature import Bucketizer
 from pyspark.sql import DataFrame, Window
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
@@ -80,6 +79,38 @@ def _spark_binary_prediction_column(source_df: DataFrame, *, config: MonitorConf
 
 def _spark_binary_label_column(config: MonitorConfig) -> Any:
     return _spark_binary_indicator(_spark_col(config.contract.label_col))
+
+
+def _spark_bin_index_expr(column, *, edges: tuple[float, ...]) -> Any:
+    if len(edges) < 2:
+        return F.lit(None).cast("int")
+    numeric = column.cast("double")
+    expression = None
+    last_bin_index = len(edges) - 2
+    for bin_index in range(len(edges) - 1):
+        left_edge = float(edges[bin_index])
+        right_edge = float(edges[bin_index + 1])
+        upper_check = numeric <= F.lit(right_edge) if bin_index == last_bin_index else numeric < F.lit(right_edge)
+        condition = numeric.isNotNull() & (~F.isnan(numeric)) & (numeric >= F.lit(left_edge)) & upper_check
+        if expression is None:
+            expression = F.when(condition, F.lit(bin_index))
+        else:
+            expression = expression.when(condition, F.lit(bin_index))
+    return expression.otherwise(F.lit(None).cast("int"))
+
+
+def _spark_bucketed_frame(
+    frame: DataFrame,
+    *,
+    value_col: str,
+    edges: tuple[float, ...],
+    output_col: str = "_model_lens_bin_index",
+) -> DataFrame:
+    return (
+        frame
+        .withColumn(output_col, _spark_bin_index_expr(F.col(value_col), edges=edges))
+        .filter(F.col(output_col).isNotNull())
+    )
 
 
 def _class_filtered_df(
@@ -3033,14 +3064,12 @@ class SparkRefreshRepository(ControlPlaneRepository):
         edges = tuple(float(value) for value in bin_specs.get(feature, ()))
         count_map: dict[str, list[float]] = {}
         if len(edges) >= 2:
-            bucketizer = Bucketizer(
-                splits=list(edges),
-                inputCol="_model_lens_numeric_value",
-                outputCol="_model_lens_bin_index",
-                handleInvalid="skip",
-            )
             count_rows = (
-                bucketizer.transform(numeric.filter(F.col("_model_lens_numeric_value").isNotNull()))
+                _spark_bucketed_frame(
+                    numeric.filter(F.col("_model_lens_numeric_value").isNotNull()),
+                    value_col="_model_lens_numeric_value",
+                    edges=edges,
+                )
                 .groupBy("_model_lens_profile_date", "_model_lens_bin_index")
                 .agg(F.count("*").alias("bin_count"))
                 .orderBy("_model_lens_profile_date", "_model_lens_bin_index")
@@ -3398,14 +3427,8 @@ class SparkRefreshRepository(ControlPlaneRepository):
         )
         if not feature_df.take(1):
             return None
-        bucketizer = Bucketizer(
-            splits=list(edges),
-            inputCol="_model_lens_feature_value",
-            outputCol="_model_lens_bin_index",
-            handleInvalid="skip",
-        )
         bucketed = (
-            bucketizer.transform(feature_df)
+            _spark_bucketed_frame(feature_df, value_col="_model_lens_feature_value", edges=edges)
             .withColumn("_model_lens_pred_binary", F.col("_model_lens_prediction").cast("int"))
             .withColumn("_model_lens_truth_binary", F.col("_model_lens_label").cast("int"))
         )
@@ -3471,14 +3494,8 @@ class SparkRefreshRepository(ControlPlaneRepository):
         )
         if not feature_df.take(1):
             return None
-        bucketizer = Bucketizer(
-            splits=list(edges),
-            inputCol="_model_lens_feature_value",
-            outputCol="_model_lens_bin_index",
-            handleInvalid="skip",
-        )
         metric_df = (
-            bucketizer.transform(feature_df)
+            _spark_bucketed_frame(feature_df, value_col="_model_lens_feature_value", edges=edges)
             .withColumn("_model_lens_abs_error", F.abs(F.col("_model_lens_prediction") - F.col("_model_lens_label")))
             .withColumn("_model_lens_squared_error", F.pow(F.col("_model_lens_prediction") - F.col("_model_lens_label"), 2))
             .groupBy("_model_lens_profile_date", "_model_lens_bin_index")

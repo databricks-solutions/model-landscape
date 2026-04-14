@@ -189,6 +189,92 @@ def test_build_daily_profiles_uses_spark_for_quality_feature_and_performance_row
     assert {"f1", "precision", "recall"} <= metric_names
 
 
+def test_daily_numeric_feature_rows_include_last_edge_value() -> None:
+    spark = _spark()
+    repository = SparkRefreshRepository(
+        warehouse=DummyWarehouse(spark),  # type: ignore[arg-type]
+        table_names=TableNames(catalog="main", schema="default"),
+        spark=spark,
+    )
+    config = MonitorConfig(
+        model_key="fraud_v1",
+        display_name="Fraud V1",
+        source_table="unused",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=("amount",),
+        ),
+        problem_type="classification",
+    )
+    source_df = (
+        spark.createDataFrame([
+            {"amount": 0.0},
+            {"amount": 0.5},
+            {"amount": 1.0},
+            {"amount": 1.5},
+            {"amount": 2.0},
+        ])
+        .withColumn("_model_lens_profile_date", F.lit("2026-01-01").cast("date"))
+    )
+
+    rows = repository._build_daily_numeric_feature_rows(
+        config=config,
+        source_df=source_df,
+        feature="amount",
+        computed_at="2026-01-02T00:00:00+00:00",
+        bin_specs={"amount": (0.0, 1.0, 2.0)},
+    )
+
+    distribution = json.loads(str(rows[0]["distribution_json"]))
+    assert distribution["counts"] == [2.0, 3.0]
+
+
+def test_daily_classification_metrics_by_bin_include_last_edge_value() -> None:
+    spark = _spark()
+    repository = SparkRefreshRepository(
+        warehouse=DummyWarehouse(spark),  # type: ignore[arg-type]
+        table_names=TableNames(catalog="main", schema="default"),
+        spark=spark,
+    )
+    config = MonitorConfig(
+        model_key="fraud_v1",
+        display_name="Fraud V1",
+        source_table="unused",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=("amount",),
+        ),
+        problem_type="classification",
+    )
+    source_df = (
+        spark.createDataFrame([
+            {"amount": 0.0, "prediction": 1.0, "label": 1},
+            {"amount": 0.5, "prediction": 1.0, "label": 0},
+            {"amount": 1.0, "prediction": 0.0, "label": 0},
+            {"amount": 1.5, "prediction": 1.0, "label": 1},
+            {"amount": 2.0, "prediction": 1.0, "label": 1},
+        ])
+        .withColumn("_model_lens_profile_date", F.lit("2026-01-01").cast("date"))
+    )
+
+    metric_df = repository._daily_classification_metrics_by_bin_df(
+        config,
+        source_df,
+        "amount",
+        (0.0, 1.0, 2.0),
+        ("accuracy",),
+    )
+
+    assert metric_df is not None
+    rows = metric_df.orderBy("bin_label").collect()
+    assert [row["bin_label"] for row in rows] == ["[0, 1)", "[1, 2)"]
+    assert [int(row["row_count"]) for row in rows] == [2, 3]
+
+
 def test_append_refresh_result_backfills_missing_model_key_before_persisting() -> None:
     spark = _spark()
     repository = RecordingSparkAppendRepository(
