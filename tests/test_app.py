@@ -19,6 +19,7 @@ from model_lens.app import (
 )
 from model_lens.callbacks import _format_runtime_setting_value, _ready_for_session, _setup_retry_message
 from model_lens.pages import data_quality, drift_analysis, feature_deep_dive, incidents, overview, performance, reference
+from model_lens.ui import charts
 
 
 RENDER_WIZARD_CALLBACK = (
@@ -1225,6 +1226,22 @@ def test_render_quality_callback_surfaces_history_and_latest_snapshot(monkeypatc
     assert len(null_rate_guided.layout.shapes or ()) == 1
 
 
+def test_performance_timeline_uses_distinct_metric_colors() -> None:
+    fig = charts.build_performance_timeline(
+        [
+            {"period": "2026-01-20", "precision": 0.91, "recall": 0.72, "f1": 0.8},
+            {"period": "2026-01-21", "precision": 0.88, "recall": 0.69, "f1": 0.77},
+        ],
+        metric_name="f1",
+        metric_names=["precision", "recall", "f1"],
+    )
+
+    colors_by_name = {trace.name: trace.line.color for trace in fig.data}
+    assert colors_by_name["Precision"] == charts.PERFORMANCE_METRIC_COLORS["precision"]
+    assert colors_by_name["Recall"] == charts.PERFORMANCE_METRIC_COLORS["recall"]
+    assert colors_by_name["Precision"] != colors_by_name["Recall"]
+
+
 def test_render_quality_callback_uses_na_for_missing_prediction_mean_and_shows_std(monkeypatch) -> None:
     class _FakeBackend:
         def get_monitor_config(self, model_id):
@@ -2081,6 +2098,8 @@ def test_save_reference_schedule_persists_threshold_overrides(monkeypatch) -> No
         ["enabled"],
         ["f1"],
         "f1",
+        "quantile",
+        None,
         0.15,
         0.35,
         0.08,

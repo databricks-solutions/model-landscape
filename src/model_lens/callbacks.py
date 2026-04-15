@@ -3866,6 +3866,45 @@ def register_callbacks(app) -> None:
                         ],
                         className="g-3",
                     ),
+                    dbc.Row(
+                        [
+                            dbc.Col(
+                                [
+                                    dbc.Label("Performance Degradation Binning"),
+                                    dbc.Select(
+                                        id="reference-performance-binning-mode-select",
+                                        options=[
+                                            {"label": "Quantile (Recommended)", "value": "quantile"},
+                                            {"label": "Fixed Width", "value": "fixed_width"},
+                                        ],
+                                        value=getattr(config, "performance_binning_mode", "quantile"),
+                                    ),
+                                ],
+                                md=6,
+                            ),
+                            dbc.Col(
+                                [
+                                    dbc.Label("Optional Percentile Clip"),
+                                    dbc.Input(
+                                        id="reference-performance-binning-clip-input",
+                                        type="number",
+                                        min=0.1,
+                                        max=49.9,
+                                        step=0.1,
+                                        placeholder="Off",
+                                        value=getattr(config, "performance_binning_clip_percentile", None),
+                                    ),
+                                ],
+                                md=6,
+                            ),
+                        ],
+                        className="g-3 mt-1",
+                    ),
+                    dbc.Alert(
+                        "Quantile binning is the default for performance degradation because it is more robust to skewed distributions. Optional percentile clipping caps edge generation to P / 100-P while still assigning extreme values into the outer buckets.",
+                        color="secondary",
+                        className="py-2 mt-3 mb-0",
+                    ),
                     dbc.Button("Save Monitor Settings", id="reference-save-schedule-btn", color="primary", className="mt-3"),
                     (
                         html.Div(
@@ -4198,6 +4237,8 @@ def register_callbacks(app) -> None:
         State("reference-schedule-enabled-toggle", "value"),
         State("reference-performance-metrics-select", "value"),
         State("reference-default-performance-metric-select", "value"),
+        State("reference-performance-binning-mode-select", "value"),
+        State("reference-performance-binning-clip-input", "value"),
         State("reference-threshold-psi-warning-input", "value"),
         State("reference-threshold-psi-critical-input", "value"),
         State("reference-threshold-js_divergence-warning-input", "value"),
@@ -4218,6 +4259,8 @@ def register_callbacks(app) -> None:
         schedule_enabled,
         performance_metric_names,
         default_performance_metric,
+        performance_binning_mode,
+        performance_binning_clip_percentile,
         psi_warning,
         psi_critical,
         js_warning,
@@ -4258,6 +4301,8 @@ def register_callbacks(app) -> None:
                 labels_order_col=config.labels_order_col,
                 performance_metric_names=tuple(performance_metric_names or ()),
                 default_performance_metric=default_performance_metric or None,
+                performance_binning_mode=performance_binning_mode or config.performance_binning_mode,
+                performance_binning_clip_percentile=performance_binning_clip_percentile,
                 drift_cadence_preset=drift_cadence or config.drift_cadence_preset,
                 performance_cadence_preset=(
                     performance_cadence

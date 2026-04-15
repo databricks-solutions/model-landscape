@@ -779,7 +779,12 @@ def build_performance_bin_specs(
         numeric = pd.to_numeric(inference_df[feature], errors="coerce").dropna()
         if len(numeric) < max(2, n_bins):
             continue
-        edges = compute_bin_edges(numeric.to_numpy(dtype=float, copy=False), n_bins=n_bins)
+        edges = compute_bin_edges(
+            numeric.to_numpy(dtype=float, copy=False),
+            n_bins=n_bins,
+            mode=config.performance_binning_mode,
+            clip_percentile=config.performance_binning_clip_percentile,
+        )
         if len(edges) < 2:
             continue
         specs[feature] = tuple(float(value) for value in edges.tolist())

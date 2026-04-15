@@ -34,6 +34,7 @@ from model_lens.services.warehouse import WarehouseConnection
 from model_lens.analytics.drift import (
     EPSILON,
 )
+from model_lens.analytics.performance import compute_bin_edges
 
 
 CATEGORICAL_TOP_N = 100
@@ -87,6 +88,8 @@ def _spark_bin_index_expr(column, *, edges: tuple[float, ...]) -> Any:
     numeric = column.cast("double")
     expression = None
     last_bin_index = len(edges) - 2
+    first_edge = float(edges[0])
+    last_edge = float(edges[-1])
     for bin_index in range(len(edges) - 1):
         left_edge = float(edges[bin_index])
         right_edge = float(edges[bin_index + 1])
@@ -96,7 +99,12 @@ def _spark_bin_index_expr(column, *, edges: tuple[float, ...]) -> Any:
             expression = F.when(condition, F.lit(bin_index))
         else:
             expression = expression.when(condition, F.lit(bin_index))
-    return expression.otherwise(F.lit(None).cast("int"))
+    return (
+        expression
+        .when(numeric.isNotNull() & (~F.isnan(numeric)) & (numeric < F.lit(first_edge)), F.lit(0))
+        .when(numeric.isNotNull() & (~F.isnan(numeric)) & (numeric > F.lit(last_edge)), F.lit(last_bin_index))
+        .otherwise(F.lit(None).cast("int"))
+    )
 
 
 def _spark_bucketed_frame(
@@ -3254,11 +3262,37 @@ class SparkRefreshRepository(ControlPlaneRepository):
             max_value = _safe_float(row[max_alias])
             if non_null_count < max(2, PERFORMANCE_BIN_COUNT) or min_value is None or max_value is None:
                 continue
-            if min_value == max_value:
-                padding = max(abs(min_value) * 0.01, 0.5)
-                min_value -= padding
-                max_value += padding
-            edges = np.linspace(min_value, max_value, num=PERFORMANCE_BIN_COUNT + 1, dtype=float)
+            numeric_frame = (
+                source_df
+                .select(_spark_col(feature).cast("double").alias("_value"))
+                .where(F.col("_value").isNotNull())
+            )
+            if config.performance_binning_mode == "quantile":
+                clip_fraction = (config.performance_binning_clip_percentile or 0.0) / 100.0
+                quantiles = np.linspace(clip_fraction, 1.0 - clip_fraction, num=PERFORMANCE_BIN_COUNT + 1, dtype=float)
+                edges = np.unique(np.asarray(numeric_frame.approxQuantile("_value", quantiles.tolist(), 0.001), dtype=float))
+                if len(edges) < 2:
+                    edges = compute_bin_edges(
+                        np.array([min_value], dtype=float),
+                        n_bins=PERFORMANCE_BIN_COUNT,
+                        mode="quantile",
+                    )
+            else:
+                lower_bound = min_value
+                upper_bound = max_value
+                if config.performance_binning_clip_percentile:
+                    clip_fraction = config.performance_binning_clip_percentile / 100.0
+                    bounds = numeric_frame.approxQuantile("_value", [clip_fraction, 1.0 - clip_fraction], 0.001)
+                    if len(bounds) == 2:
+                        lower_bound = float(bounds[0])
+                        upper_bound = float(bounds[1])
+                edges = compute_bin_edges(
+                    np.array([lower_bound, upper_bound], dtype=float),
+                    n_bins=PERFORMANCE_BIN_COUNT,
+                    mode="fixed_width",
+                )
+            if len(edges) < 2:
+                continue
             specs[feature] = tuple(round(float(value), 6) for value in edges.tolist())
         return specs
 
@@ -3355,7 +3389,10 @@ class SparkRefreshRepository(ControlPlaneRepository):
             )
             .withColumn(
                 "recall",
-                F.when(F.col("tp") + F.col("fn") > 0, F.col("tp") / (F.col("tp") + F.col("fn"))).otherwise(F.lit(None).cast("double")),
+                F.when(
+                    F.col("tp") + F.col("fp") > 0,
+                    F.when(F.col("tp") + F.col("fn") > 0, F.col("tp") / (F.col("tp") + F.col("fn"))).otherwise(F.lit(None).cast("double")),
+                ).otherwise(F.lit(None).cast("double")),
             )
             .withColumn(
                 "f1",
@@ -3442,7 +3479,13 @@ class SparkRefreshRepository(ControlPlaneRepository):
                 F.sum(F.when((F.col("_model_lens_pred_binary") == 0) & (F.col("_model_lens_truth_binary") == 0), F.lit(1)).otherwise(F.lit(0))).alias("tn"),
             )
             .withColumn("precision", F.when(F.col("tp") + F.col("fp") > 0, F.col("tp") / (F.col("tp") + F.col("fp"))).otherwise(F.lit(None).cast("double")))
-            .withColumn("recall", F.when(F.col("tp") + F.col("fn") > 0, F.col("tp") / (F.col("tp") + F.col("fn"))).otherwise(F.lit(None).cast("double")))
+            .withColumn(
+                "recall",
+                F.when(
+                    F.col("tp") + F.col("fp") > 0,
+                    F.when(F.col("tp") + F.col("fn") > 0, F.col("tp") / (F.col("tp") + F.col("fn"))).otherwise(F.lit(None).cast("double")),
+                ).otherwise(F.lit(None).cast("double")),
+            )
             .withColumn(
                 "f1",
                 F.when(

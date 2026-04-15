@@ -20,6 +20,15 @@ LAYOUT_DEFAULTS = dict(
     yaxis=dict(gridcolor=COLORS["grid"], zerolinecolor=COLORS["grid"]),
 )
 
+PERFORMANCE_METRIC_COLORS = {
+    "precision": COLORS["blue"],
+    "recall": COLORS["highlight"],
+    "f1": COLORS["cyan"],
+    "accuracy": COLORS["purple"],
+    "mae": COLORS["blue"],
+    "rmse": COLORS["highlight"],
+}
+
 
 def _apply_layout(fig, **kwargs):
     fig.update_layout(**{**LAYOUT_DEFAULTS, **kwargs})
@@ -620,18 +629,18 @@ def build_performance_timeline(
         )
         return _apply_layout(fig, title=title)
     fig = go.Figure()
-    colors = [COLORS["cyan"], COLORS["high"], COLORS["highlight"], COLORS["blue"]]
     for index, current_metric in enumerate(available_metrics):
         current_values = pd.to_numeric(frame[current_metric], errors="coerce")
         if current_values.dropna().empty:
             continue
+        trace_color = PERFORMANCE_METRIC_COLORS.get(current_metric, COLORS["cyan"])
         fig.add_trace(
             go.Scatter(
                 x=frame["period"].astype(str),
                 y=current_values,
                 mode="markers" if len(frame) < 2 else "lines+markers",
-                line=dict(color=colors[index % len(colors)], width=3 if index == 0 else 2),
-                marker=dict(size=10 if len(frame) < 2 else 8),
+                line=dict(color=trace_color, width=3 if index == 0 else 2),
+                marker=dict(size=10 if len(frame) < 2 else 8, color=trace_color),
                 name=performance_metric_label(current_metric),
                 connectgaps=False,
             )

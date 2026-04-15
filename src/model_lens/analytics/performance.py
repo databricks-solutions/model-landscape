@@ -8,8 +8,47 @@ from model_lens.domain.performance_metrics import default_performance_metric_nam
 from model_lens.services.class_filters import normalized_binary_series, resolved_prediction_binary_series
 
 
-def compute_bin_edges(values: np.ndarray, n_bins: int = 10) -> np.ndarray:
-    return np.histogram_bin_edges(values[~np.isnan(values)], bins=n_bins)
+def _clean_binning_values(values: np.ndarray, *, clip_percentile: float | None = None) -> np.ndarray:
+    clean = np.asarray(values, dtype=float)
+    clean = clean[~np.isnan(clean)]
+    if clean.size == 0:
+        return clean
+    if clip_percentile is not None and 0.0 < clip_percentile < 50.0:
+        lower = float(np.nanpercentile(clean, clip_percentile))
+        upper = float(np.nanpercentile(clean, 100.0 - clip_percentile))
+        clean = np.clip(clean, lower, upper)
+    return clean
+
+
+def _pad_constant_edges(value: float) -> np.ndarray:
+    padding = max(abs(float(value)) * 0.01, 0.5)
+    return np.array([float(value) - padding, float(value) + padding], dtype=float)
+
+
+def compute_bin_edges(
+    values: np.ndarray,
+    n_bins: int = 10,
+    *,
+    mode: str = "quantile",
+    clip_percentile: float | None = None,
+) -> np.ndarray:
+    clean = _clean_binning_values(values, clip_percentile=clip_percentile)
+    if clean.size == 0:
+        return np.array([], dtype=float)
+    normalized_mode = str(mode or "quantile").strip().lower()
+    if normalized_mode == "fixed_width":
+        min_value = float(np.nanmin(clean))
+        max_value = float(np.nanmax(clean))
+        if min_value == max_value:
+            return _pad_constant_edges(min_value)
+        return np.linspace(min_value, max_value, num=n_bins + 1, dtype=float)
+    if clean.size == 1:
+        return _pad_constant_edges(float(clean[0]))
+    quantiles = np.linspace(0.0, 1.0, num=n_bins + 1, dtype=float)
+    edges = np.unique(np.quantile(clean, quantiles))
+    if edges.size < 2:
+        return _pad_constant_edges(float(clean[0]))
+    return edges.astype(float, copy=False)
 
 
 def _resolved_binary_arrays(
@@ -52,8 +91,9 @@ def compute_classification_metrics(
     fp = int(((pred_binary == 1) & (truth_binary == 0)).sum())
     fn = int(((pred_binary == 0) & (truth_binary == 1)).sum())
     tn = int(((pred_binary == 0) & (truth_binary == 0)).sum())
-    precision = (tp / (tp + fp)) if (tp + fp) > 0 else None
-    recall = (tp / (tp + fn)) if (tp + fn) > 0 else None
+    predicted_positive_count = tp + fp
+    precision = (tp / predicted_positive_count) if predicted_positive_count > 0 else None
+    recall = (tp / (tp + fn)) if predicted_positive_count > 0 and (tp + fn) > 0 else None
     f1 = None
     if precision is not None and recall is not None and (precision + recall) > 0:
         f1 = (2.0 * precision * recall) / (precision + recall)
@@ -97,8 +137,9 @@ def compute_daily_classification_metrics(
     fp = int(((pred_binary == 1) & (truth_binary == 0)).sum())
     fn = int(((pred_binary == 0) & (truth_binary == 1)).sum())
     tn = int(((pred_binary == 0) & (truth_binary == 0)).sum())
-    precision = (tp / (tp + fp)) if (tp + fp) > 0 else None
-    recall = (tp / (tp + fn)) if (tp + fn) > 0 else None
+    predicted_positive_count = tp + fp
+    precision = (tp / predicted_positive_count) if predicted_positive_count > 0 else None
+    recall = (tp / (tp + fn)) if predicted_positive_count > 0 and (tp + fn) > 0 else None
     f1 = None
     if precision is not None and recall is not None and (precision + recall) > 0:
         f1 = (2.0 * precision * recall) / (precision + recall)

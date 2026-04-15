@@ -466,13 +466,13 @@ def test_get_null_rate_history_explodes_top_features_over_time() -> None:
 def test_get_performance_summary_keeps_zero_delta_rows_visible() -> None:
     backend = _make_backend()
 
-    performance = backend.get_performance_summary("fraud_model_demo", metric_name="f1")
+    performance = backend.get_performance_summary("fraud_model_demo", metric_name="rmse")
 
     assert performance["timeline"] == [
-        {"period": "2026-01-20", "f1": 0.813},
-        {"period": "2026-01-21", "f1": 0.813},
+        {"period": "2026-01-20", "rmse": 0.813},
+        {"period": "2026-01-21", "rmse": 0.813},
     ]
-    assert "weighted comparison-window performance rows" in performance["timeline_unavailable_reason"]
+    assert performance["timeline_unavailable_reason"] == ""
     assert len(performance["latest_bins"]) == 2
     assert len(performance["all_bins"]) == 4
     assert set(performance["contributors"]["feature"]) == {"amount", "velocity_7d"}
@@ -503,15 +503,12 @@ def test_get_performance_rows_limits_to_recent_windows_in_sql() -> None:
 def test_get_performance_summary_supports_alternate_metric_names() -> None:
     backend = _make_backend()
 
-    precision = backend.get_performance_summary("fraud_model_demo", metric_name="precision")
     rmse = backend.get_performance_summary("fraud_model_demo", metric_name="rmse")
+    precision = backend.get_performance_summary("fraud_model_demo", metric_name="precision")
 
-    assert precision["timeline"] == [
-        {"period": "2026-01-20", "precision": 0.813},
-        {"period": "2026-01-21", "precision": 0.813},
-    ]
-    assert "weighted comparison-window performance rows" in precision["timeline_unavailable_reason"]
     assert rmse["timeline"][0]["rmse"] == 0.813
+    assert precision["timeline"] == []
+    assert "daily labeled facts or daily performance profiles" in precision["timeline_unavailable_reason"]
 
 
 def test_get_performance_summary_prefers_daily_label_metrics_and_keeps_null_gaps() -> None:
@@ -549,7 +546,7 @@ def test_get_performance_summary_prefers_daily_label_metrics_and_keeps_null_gaps
                 "fn": 4,
                 "tn": 6,
                 "precision": None,
-                "recall": 0.0,
+                "recall": None,
                 "f1": None,
                 "accuracy": 0.6,
             },
@@ -638,6 +635,17 @@ def test_get_performance_summary_falls_back_to_daily_performance_profiles_when_d
                 "volume_pct": 100.0,
                 "computed_at": "2026-01-21T00:00:00+00:00",
             },
+            {
+                "model_key": model_id,
+                "profile_date": "2026-01-22",
+                "feature_name": "amount",
+                "bin_label": "[0.0, 1.0)",
+                "metric_name": "accuracy",
+                "metric_value": 1.0,
+                "row_count": 4,
+                "volume_pct": 100.0,
+                "computed_at": "2026-01-22T00:00:00+00:00",
+            },
         ],
     )
     backend = DashboardBackend(repository=_with_published_generation(repository))
@@ -647,6 +655,7 @@ def test_get_performance_summary_falls_back_to_daily_performance_profiles_when_d
     assert performance["timeline"] == [
         {"period": "2026-01-20", "precision": 0.62},
         {"period": "2026-01-21", "precision": 0.75},
+        {"period": "2026-01-22", "precision": None},
     ]
     assert "weighted daily performance profiles" in performance["timeline_unavailable_reason"]
 

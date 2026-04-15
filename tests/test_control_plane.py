@@ -68,15 +68,21 @@ class FakeWarehouse:
             "labels_table": "",
             "labels_join_col": "",
             "labels_order_col": "",
-        "performance_metric_names": '["f1","precision","recall"]',
-        "default_performance_metric": "f1",
-        "threshold_overrides": "{}",
-        "mlflow_experiment_name": "",
-        "mlflow_experiment_id": "",
-        "mlflow_run_id": "",
+            "performance_metric_names": '["f1","precision","recall"]',
+            "default_performance_metric": "f1",
+            "performance_binning_mode": "quantile",
+            "performance_binning_clip_percentile": None,
+            "drift_cadence_preset": "6h",
+            "performance_cadence_preset": "disabled",
+            "schedule_enabled": True,
+            "threshold_overrides": "{}",
+            "mlflow_experiment_name": "",
+            "mlflow_experiment_id": "",
+            "mlflow_run_id": "",
             "mlflow_registered_model_name": "",
             "mlflow_model_version": "",
             "created_by": "app",
+            "status": "active",
         }
 
     def execute(self, sql: str) -> None:
@@ -140,16 +146,19 @@ class FakeWarehouse:
                 "labels_order_col": params[20],
                 "performance_metric_names": performance_metric_names,
                 "default_performance_metric": params[21],
-                "drift_cadence_preset": params[22],
-                "performance_cadence_preset": params[23],
-                "schedule_enabled": params[24],
-                "threshold_overrides": params[25],
-                "mlflow_experiment_name": params[26],
-                "mlflow_experiment_id": params[27],
-                "mlflow_run_id": params[28],
-                "mlflow_registered_model_name": params[29],
-                "mlflow_model_version": params[30],
-                "created_by": params[31],
+                "performance_binning_mode": params[22],
+                "performance_binning_clip_percentile": params[23],
+                "drift_cadence_preset": params[24],
+                "performance_cadence_preset": params[25],
+                "schedule_enabled": params[26],
+                "threshold_overrides": params[27],
+                "mlflow_experiment_name": params[28],
+                "mlflow_experiment_id": params[29],
+                "mlflow_run_id": params[30],
+                "mlflow_registered_model_name": params[31],
+                "mlflow_model_version": params[32],
+                "created_by": params[33],
+                "status": params[34],
             }
 
     def execute_batch(self, insert_template: str, rows: list[tuple], batch_size: int = 200) -> None:
@@ -355,12 +364,14 @@ def test_upsert_monitor_config_keeps_full_feature_and_categorical_metadata() -> 
     assert insert_params[14] is None
     assert insert_params[15] is None
     assert insert_params[21] == "f1"
-    assert insert_params[22] == "6h"
-    assert insert_params[23] == "disabled"
-    assert insert_params[24] is True
-    assert insert_params[25] == "{}"
-    assert insert_params[26] == "fraud_monitoring"
-    assert insert_params[30] == "7"
+    assert insert_params[22] == "quantile"
+    assert insert_params[23] is None
+    assert insert_params[24] == "6h"
+    assert insert_params[25] == "disabled"
+    assert insert_params[26] is True
+    assert insert_params[27] == "{}"
+    assert insert_params[28] == "fraud_monitoring"
+    assert insert_params[32] == "7"
 
 
 def test_upsert_monitor_config_persists_threshold_overrides() -> None:
@@ -377,7 +388,7 @@ def test_upsert_monitor_config_persists_threshold_overrides() -> None:
     repository.upsert_monitor_config(config)
 
     _, insert_params = warehouse.executed_params[-1]
-    assert json.loads(insert_params[25]) == {
+    assert json.loads(insert_params[27]) == {
         "psi": {"warning": 0.15, "critical": 0.35},
         "null_rate": {"warning": 2.0, "critical": 8.0},
     }
@@ -1466,6 +1477,7 @@ def test_ensure_control_plane_queues_performance_repair_when_daily_label_metrics
             return super().query_params(sql, params)
 
     warehouse = _BackfillWarehouse()
+    warehouse.monitor_row["performance_cadence_preset"] = "daily_7d_repair"
     repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
 
     repository.ensure_control_plane()

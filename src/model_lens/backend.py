@@ -1457,24 +1457,28 @@ class DashboardBackend:
 
     def _daily_performance_timeline_fallback(self, model_id: str, metric_name: str) -> list[dict[str, float | None]]:
         profiles = self.get_daily_performance_profiles(model_id)
-        if profiles.empty or "metric_name" not in profiles.columns:
+        if profiles.empty or "metric_name" not in profiles.columns or "profile_date_ts" not in profiles.columns:
             return []
-        selected = profiles[
-            (profiles["metric_name"] == str(metric_name or "").strip().lower())
-            & profiles["profile_date_ts"].notna()
-        ].copy()
-        if selected.empty:
+        metric_key = str(metric_name or "").strip().lower()
+        dated_profiles = profiles[profiles["profile_date_ts"].notna()].copy()
+        if dated_profiles.empty:
             return []
+        selected = dated_profiles[dated_profiles["metric_name"] == metric_key].copy()
         timeline: list[dict[str, float | None]] = []
-        for profile_date, group in selected.groupby("profile_date_ts", sort=True):
-            value = _weighted_average(
-                group.get("metric_value", pd.Series(dtype=float)),
-                group.get("row_count", pd.Series(dtype=float)),
+        for profile_date in sorted(dated_profiles["profile_date_ts"].dropna().unique()):
+            group = selected[selected["profile_date_ts"] == profile_date]
+            value = (
+                _weighted_average(
+                    group.get("metric_value", pd.Series(dtype=float)),
+                    group.get("row_count", pd.Series(dtype=float)),
+                )
+                if not group.empty
+                else None
             )
             timeline.append(
                 {
                     "period": str(pd.Timestamp(profile_date).date()),
-                    metric_name: round(float(value), 4) if value is not None else None,
+                    metric_key: round(float(value), 4) if value is not None else None,
                 }
             )
         return timeline
@@ -1563,19 +1567,10 @@ class DashboardBackend:
                     "window_start": bounds.get("window_start") or "",
                     "window_end": bounds.get("window_end") or "",
                 }
-            row_metrics = self._latest_window_metric_fallback_from_window_rows(model_id)
-            if any(value is not None for value in row_metrics.values()):
-                return {
-                    "supported": True,
-                    "metrics": row_metrics,
-                    "message": "Using weighted comparison-window performance rows until daily labeled facts are backfilled for this monitor.",
-                    "window_start": bounds.get("window_start") or "",
-                    "window_end": bounds.get("window_end") or "",
-                }
             return {
                 "supported": True,
                 "metrics": {},
-                "message": "Latest-window performance metrics are unavailable until labeled daily facts are populated.",
+                "message": "Latest-window performance metrics are unavailable until labeled daily facts or daily performance profiles are populated.",
                 "window_start": bounds.get("window_start") or "",
                 "window_end": bounds.get("window_end") or "",
             }
@@ -1667,28 +1662,9 @@ class DashboardBackend:
                     f"{metric_name.upper()} over time is currently using weighted daily performance profiles until daily labeled facts are backfilled for this monitor."
                 )
             else:
-                timeline = (
-                    [
-                        {
-                            "period": str(window_end.date()),
-                            metric_name: float(
-                                (group["current_metric"] * group["current_volume_pct"]).sum()
-                                / max(group["current_volume_pct"].sum(), 1)
-                            ),
-                        }
-                        for window_end, group in dated.groupby("window_end", sort=True)
-                    ]
-                    if not dated.empty
-                    else []
+                timeline_unavailable_reason = (
+                    f"{metric_name.upper()} over time is unavailable until daily labeled facts or daily performance profiles are populated for this monitor."
                 )
-                if timeline:
-                    timeline_unavailable_reason = (
-                        f"{metric_name.upper()} over time is currently using weighted comparison-window performance rows until daily labeled facts are backfilled for this monitor."
-                    )
-                else:
-                    timeline_unavailable_reason = (
-                        f"{metric_name.upper()} over time is unavailable until daily labeled facts are populated for this monitor."
-                    )
         else:
             timeline = (
                 [

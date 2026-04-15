@@ -17,6 +17,7 @@ REQUIRED_INFERENCE_COLUMNS = ("event_ts", "prediction")
 OPTIONAL_INFERENCE_COLUMNS = ("model_version", "prediction_proba", "label", "entity_id")
 DRIFT_CADENCE_PRESETS = ("hourly", "6h", "daily", "manual")
 PERFORMANCE_CADENCE_PRESETS = ("disabled", "6h_3d_repair", "daily_7d_repair", "daily_14d_repair", "manual")
+PERFORMANCE_BINNING_MODES = ("quantile", "fixed_width")
 
 
 @dataclass(frozen=True)
@@ -127,6 +128,8 @@ class MonitorConfig:
     labels_order_col: str | None = None
     performance_metric_names: tuple[str, ...] = field(default_factory=tuple)
     default_performance_metric: str | None = None
+    performance_binning_mode: str = "quantile"
+    performance_binning_clip_percentile: float | None = None
     drift_cadence_preset: str = "6h"
     performance_cadence_preset: str = "disabled"
     schedule_enabled: bool = True
@@ -139,20 +142,28 @@ class MonitorConfig:
         problem_type = normalize_problem_type(self.problem_type)
         drift = (self.drift_cadence_preset or "6h").strip().lower()
         performance = (self.performance_cadence_preset or "disabled").strip().lower()
+        binning_mode = (self.performance_binning_mode or "quantile").strip().lower()
         status = (self.status or "active").strip().lower()
         if drift not in DRIFT_CADENCE_PRESETS:
             raise ValueError(f"Unsupported drift cadence preset: {self.drift_cadence_preset!r}")
         if performance not in PERFORMANCE_CADENCE_PRESETS:
             raise ValueError(f"Unsupported performance cadence preset: {self.performance_cadence_preset!r}")
+        if binning_mode not in PERFORMANCE_BINNING_MODES:
+            raise ValueError(f"Unsupported performance binning mode: {self.performance_binning_mode!r}")
         if status not in {"active", "inactive"}:
             raise ValueError(f"Unsupported monitor status: {self.status!r}")
         if self.model_id_value and not self.contract.model_id_col:
             raise ValueError("Monitored Model ID Value requires a mapped Model ID Column.")
+        clip_percentile = None if self.performance_binning_clip_percentile in (None, "") else float(self.performance_binning_clip_percentile)
+        if clip_percentile is not None and not (0.0 < clip_percentile < 50.0):
+            raise ValueError("performance_binning_clip_percentile must be between 0 and 50.")
         normalized_metric_names = normalize_performance_metric_names(problem_type, self.performance_metric_names)
         default_metric = resolve_default_performance_metric(problem_type, normalized_metric_names, self.default_performance_metric)
         object.__setattr__(self, "problem_type", problem_type)
         object.__setattr__(self, "performance_metric_names", normalized_metric_names)
         object.__setattr__(self, "default_performance_metric", default_metric or default_primary_performance_metric(problem_type))
+        object.__setattr__(self, "performance_binning_mode", binning_mode)
+        object.__setattr__(self, "performance_binning_clip_percentile", clip_percentile)
         object.__setattr__(self, "drift_cadence_preset", drift)
         object.__setattr__(self, "performance_cadence_preset", performance)
         object.__setattr__(self, "status", status)
