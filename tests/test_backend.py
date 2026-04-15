@@ -657,7 +657,7 @@ def test_get_performance_summary_falls_back_to_daily_performance_profiles_when_d
         {"period": "2026-01-21", "precision": 0.75},
         {"period": "2026-01-22", "precision": None},
     ]
-    assert "weighted daily performance profiles" in performance["timeline_unavailable_reason"]
+    assert performance["timeline_unavailable_reason"] == ""
 
 
 def test_get_latest_window_metrics_aggregates_latest_daily_label_facts() -> None:
@@ -832,7 +832,7 @@ def test_get_latest_window_metrics_falls_back_to_daily_performance_profiles() ->
         "f1": 0.6667,
         "accuracy": 0.7,
     }
-    assert "weighted daily performance profiles" in snapshot["message"]
+    assert snapshot["message"] == "Showing recent performance trends."
 
 
 def test_get_quality_stats_and_history_support_class_filters_from_daily_profiles() -> None:

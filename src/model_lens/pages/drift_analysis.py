@@ -50,11 +50,11 @@ def layout():
                             dbc.Label("Top N Features", className="text-muted"),
                             dcc.Slider(
                                 id="drift-top-n",
-                                min=5,
+                                min=1,
                                 max=50,
                                 step=1,
                                 value=10,
-                                marks={5: "5", 10: "10", 20: "20", 30: "30", 40: "40", 50: "50"},
+                                marks={1: "1", 5: "5", 10: "10", 20: "20", 30: "30", 40: "40", 50: "50"},
                                 tooltip={"placement": "bottom", "always_visible": False},
                             ),
                         ],

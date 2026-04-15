@@ -1005,16 +1005,23 @@ def test_render_drift_callback_respects_top_n_selection(monkeypatch) -> None:
     callback = app.callback_map[RENDER_DRIFT_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
+    result_top_3 = fn("/drift", "fraud_model_demo", 0, {}, 0, "psi", "daily", 3, None, None, "all", "all", False)
     result_top_5 = fn("/drift", "fraud_model_demo", 0, {}, 0, "psi", "daily", 5, None, None, "all", "all", False)
     result_top_6 = fn("/drift", "fraud_model_demo", 0, {}, 1, "psi", "daily", 6, None, None, "all", "all", False)
     result_thresholds = fn("/drift", "fraud_model_demo", 0, {}, 2, "psi", "daily", 5, None, None, "all", "all", True)
 
+    heatmap_3 = result_top_3[0].children.children.figure
+    top_3_figure = result_top_3[3].children.children.figure
     heatmap_5 = result_top_5[0].children.children.figure
     top_5_figure = result_top_5[3].children.children.figure
     top_6_figure = result_top_6[3].children.children.figure
     threshold_heatmap = result_thresholds[0].children.children.figure
     threshold_bar = result_thresholds[3].children.children.figure
 
+    assert heatmap_3.layout.title.text == "Daily Feature Drift Heatmap"
+    assert len(heatmap_3.data[0].y) == 3
+    assert top_3_figure.layout.title.text == "Top 3 Drifting Features (Historical Max)"
+    assert len(top_3_figure.data[0].y) == 3
     assert "highest historical PSI" in str(result_top_5[1])
     assert "95th percentile" in str(result_top_5[1])
     assert heatmap_5.layout.title.text == "Daily Feature Drift Heatmap"

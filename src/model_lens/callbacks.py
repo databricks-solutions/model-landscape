@@ -2789,7 +2789,7 @@ def register_callbacks(app) -> None:
                 else:
                     empty = make_empty_state("No drift history available yet. Run a refresh to populate this page.", icon="fas fa-wave-square")
                 return empty, html.Div(), html.Div(), html.Div()
-            normalized_top_n = _normalize_top_n(top_n, default=10, minimum=5, maximum=50)
+            normalized_top_n = _normalize_top_n(top_n, default=10, minimum=1, maximum=50)
             ranked_features = _historical_drift_feature_ranking(
                 drift,
                 metric=metric or "psi",

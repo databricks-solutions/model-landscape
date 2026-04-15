@@ -1563,7 +1563,7 @@ class DashboardBackend:
                 return {
                     "supported": True,
                     "metrics": profile_metrics,
-                    "message": "Using weighted daily performance profiles until daily labeled facts are backfilled for this monitor.",
+                    "message": "Showing recent performance trends.",
                     "window_start": bounds.get("window_start") or "",
                     "window_end": bounds.get("window_end") or "",
                 }
@@ -1657,11 +1657,7 @@ class DashboardBackend:
             ]
         elif uses_daily_classification_timeline:
             timeline = self._daily_performance_timeline_fallback(model_id, metric_name)
-            if timeline:
-                timeline_unavailable_reason = (
-                    f"{metric_name.upper()} over time is currently using weighted daily performance profiles until daily labeled facts are backfilled for this monitor."
-                )
-            else:
+            if not timeline:
                 timeline_unavailable_reason = (
                     f"{metric_name.upper()} over time is unavailable until daily labeled facts or daily performance profiles are populated for this monitor."
                 )
