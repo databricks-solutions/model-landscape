@@ -1016,6 +1016,7 @@ def test_render_drift_callback_respects_top_n_selection(monkeypatch) -> None:
     threshold_bar = result_thresholds[3].children.children.figure
 
     assert "highest historical PSI" in str(result_top_5[1])
+    assert "95th percentile" in str(result_top_5[1])
     assert heatmap_5.layout.title.text == "Daily Feature Drift Heatmap"
     assert len(heatmap_5.data[0].y) == 5
     assert top_5_figure.layout.title.text == "Top 5 Drifting Features (Historical Max)"
@@ -1025,6 +1026,44 @@ def test_render_drift_callback_respects_top_n_selection(monkeypatch) -> None:
     assert len(top_6_figure.data[0].y) == 6
     assert heatmap_5.data[0].colorscale != threshold_heatmap.data[0].colorscale
     assert top_5_figure.data[0].marker.color != threshold_bar.data[0].marker.color
+
+
+def test_describe_drift_heatmap_scale_caps_large_outliers() -> None:
+    drift = pd.DataFrame(
+        [
+            {"feature": f"feature_{index}", "period": period, "psi": value}
+            for period, values in {
+                "2026-01-20": [0.011, 0.013, 0.016, 0.018, 0.022],
+                "2026-01-21": [0.012, 0.014, 0.017, 0.019, 5.25],
+            }.items()
+            for index, value in enumerate(values, start=1)
+        ]
+    )
+
+    scale = charts.describe_drift_heatmap_scale(drift, metric="psi", show_thresholds=False)
+
+    assert scale["clip_cap"] is not None
+    assert float(scale["zmax"]) < 5.25
+    assert int(scale["clip_count"]) == 1
+    assert "95th percentile" in str(scale["clip_note"])
+
+
+def test_describe_drift_heatmap_scale_falls_back_for_small_samples_and_respects_threshold_floor() -> None:
+    drift = pd.DataFrame(
+        [
+            {"feature": "amount", "period": "2026-01-20", "psi": 0.01},
+            {"feature": "velocity_7d", "period": "2026-01-20", "psi": 0.02},
+            {"feature": "amount", "period": "2026-01-21", "psi": 0.03},
+            {"feature": "velocity_7d", "period": "2026-01-21", "psi": 0.5},
+        ]
+    )
+
+    neutral_scale = charts.describe_drift_heatmap_scale(drift, metric="psi", show_thresholds=False)
+    threshold_scale = charts.describe_drift_heatmap_scale(drift, metric="psi", show_thresholds=True)
+
+    assert float(neutral_scale["zmax"]) == 0.5
+    assert neutral_scale["clip_note"] == ""
+    assert float(threshold_scale["zmax"]) >= 0.2
 
 
 def test_render_performance_callback_surfaces_zero_delta_state(monkeypatch) -> None:

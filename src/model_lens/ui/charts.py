@@ -29,6 +29,9 @@ PERFORMANCE_METRIC_COLORS = {
     "rmse": COLORS["highlight"],
 }
 
+DRIFT_HEATMAP_ROBUST_PERCENTILE = 95.0
+DRIFT_HEATMAP_MIN_POSITIVE_CELLS = 8
+
 
 def _apply_layout(fig, **kwargs):
     fig.update_layout(**{**LAYOUT_DEFAULTS, **kwargs})
@@ -61,6 +64,15 @@ def _metric_tickformat(metric: str, values: pd.Series | np.ndarray | list[float]
     if metric == "null_rate":
         return ".2f"
     return ".4f"
+
+
+def _format_metric_value(metric: str, value: float, values: pd.Series | np.ndarray | list[float]) -> str:
+    tickformat = _metric_tickformat(metric, values)
+    if tickformat == ".2e":
+        return f"{float(value):.2e}"
+    if tickformat == ".2f":
+        return f"{float(value):.2f}"
+    return f"{float(value):.4f}"
 
 
 def _apply_percentile_trim(values: np.ndarray, percentile: float | None) -> np.ndarray:
@@ -122,6 +134,64 @@ def _neutral_heatmap_colorscale() -> list[list[float | str]]:
     ]
 
 
+def describe_drift_heatmap_scale(
+    df: pd.DataFrame,
+    metric: str = "psi",
+    *,
+    show_thresholds: bool = False,
+    thresholds: dict[str, dict[str, float]] | None = None,
+) -> dict[str, object]:
+    if df.empty:
+        _, critical = get_thresholds(metric, thresholds)
+        zmax = critical * 1.5 if show_thresholds else 1.0
+        return {
+            "zmax": zmax,
+            "colorscale": _heatmap_colorscale(metric, zmax=zmax, thresholds=thresholds)
+            if show_thresholds
+            else _neutral_heatmap_colorscale(),
+            "tickformat": _metric_tickformat(metric, []),
+            "clip_note": "",
+            "clip_cap": None,
+            "clip_count": 0,
+        }
+
+    pivot = df.pivot_table(index="feature", columns="period", values=metric, aggfunc="max").sort_index()
+    values = pd.to_numeric(pd.Series(pivot.values.ravel()), errors="coerce").dropna()
+    positive_values = values[values > 0]
+    raw_max = float(values.max()) if not values.empty else 0.0
+    visual_cap = raw_max
+    clip_note = ""
+    clip_cap: float | None = None
+    clip_count = 0
+    if positive_values.size >= DRIFT_HEATMAP_MIN_POSITIVE_CELLS:
+        percentile_cap = float(np.nanpercentile(positive_values.to_numpy(dtype=float), DRIFT_HEATMAP_ROBUST_PERCENTILE))
+        if np.isfinite(percentile_cap) and percentile_cap > 0 and percentile_cap < raw_max:
+            visual_cap = percentile_cap
+            clip_cap = percentile_cap
+            clip_count = int((values > percentile_cap).sum())
+            clip_note = (
+                f"Heatmap color range capped at the {int(DRIFT_HEATMAP_ROBUST_PERCENTILE)}th percentile "
+                f"({_format_metric_value(metric, percentile_cap, values)}). "
+                f"{clip_count} cell{'s' if clip_count != 1 else ''} exceed the cap and render at the top color."
+            )
+
+    _, critical = get_thresholds(metric, thresholds)
+    if show_thresholds:
+        zmax = max(visual_cap, critical * 1.5) if raw_max > 0 else critical * 1.5
+        colorscale = _heatmap_colorscale(metric, zmax=zmax, thresholds=thresholds)
+    else:
+        zmax = max(visual_cap, 1e-9) if raw_max > 0 else 1.0
+        colorscale = _neutral_heatmap_colorscale()
+    return {
+        "zmax": zmax,
+        "colorscale": colorscale,
+        "tickformat": _metric_tickformat(metric, values),
+        "clip_note": clip_note,
+        "clip_cap": clip_cap,
+        "clip_count": clip_count,
+    }
+
+
 def _ranked_bar_colors(count: int) -> list[str]:
     palette = px.colors.sequential.Tealgrn
     if count <= 0:
@@ -145,15 +215,15 @@ def build_drift_heatmap(
         return _apply_layout(fig, title=title)
 
     pivot = df.pivot_table(index="feature", columns="period", values=metric, aggfunc="max").sort_index()
-    values = pd.to_numeric(pd.Series(pivot.values.ravel()), errors="coerce").dropna()
-    _, critical = get_thresholds(metric, thresholds)
-    if show_thresholds:
-        zmax = max(values.max(), critical * 1.5) if not values.empty else critical * 1.5
-        colorscale = _heatmap_colorscale(metric, zmax=zmax, thresholds=thresholds)
-    else:
-        zmax = max(float(values.max()), 1e-9) if not values.empty else 1.0
-        colorscale = _neutral_heatmap_colorscale()
-    tickformat = _metric_tickformat(metric, values)
+    scale = describe_drift_heatmap_scale(
+        df,
+        metric=metric,
+        show_thresholds=show_thresholds,
+        thresholds=thresholds,
+    )
+    zmax = float(scale["zmax"])
+    colorscale = scale["colorscale"]
+    tickformat = str(scale["tickformat"])
     fig = go.Figure(
         data=go.Heatmap(
             z=pivot.values,

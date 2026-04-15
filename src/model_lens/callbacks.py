@@ -2824,6 +2824,15 @@ def register_callbacks(app) -> None:
             if not timeline_features and "feature" in drift.columns:
                 timeline_features = drift["feature"].dropna().astype(str).drop_duplicates().tolist()[:8]
             filtered_drift = drift[drift["feature"].isin(timeline_features)].copy() if timeline_features else drift
+            heatmap_scale = charts.describe_drift_heatmap_scale(
+                filtered_drift,
+                metric=metric or "psi",
+                show_thresholds=bool(show_thresholds),
+                thresholds=resolved_thresholds,
+            )
+            clip_note = str(heatmap_scale.get("clip_note") or "").strip()
+            if clip_note:
+                notes.append(_status_alert(clip_note, "secondary"))
             title_suffix = f" ({filter_summary})" if filter_summary else ""
             heatmap_title = f"{(granularity or 'daily').title()} Feature Drift Heatmap{title_suffix}"
             return (
