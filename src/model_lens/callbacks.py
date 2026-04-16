@@ -3245,11 +3245,12 @@ def register_callbacks(app) -> None:
         Input("url", "pathname"),
         Input("global-model-select", "value"),
         Input("perf-metric-select", "value"),
+        Input("perf-drift-metric-select", "value"),
         Input("reload-token", "data"),
         Input("session-config-store", "data"),
         State("perf-feature-select", "value"),
     )
-    def render_performance(pathname, model_id, metric_name, _, session_data, current_feature):
+    def render_performance(pathname, model_id, metric_name, drift_metric, _, session_data, current_feature):
         if pathname != "/performance":
             return (no_update,) * 7
         try:
@@ -3383,16 +3384,18 @@ def register_callbacks(app) -> None:
                 ),
                 dbc.Col(make_metric_card("Windows", str(len(combined_timeline)), "Historical performance snapshots"), md=4),
             ]
+            selected_drift_metric = str(drift_metric or "psi").strip().lower() or "psi"
             drift = backend.get_drift_results(model_id, granularity="daily") if hasattr(backend, "get_drift_results") else pd.DataFrame()
             drift_ranking = (
-                drift.assign(_psi_rank=pd.to_numeric(drift.get("psi", pd.Series(dtype=float)), errors="coerce").fillna(0.0))
-                .groupby("feature", as_index=False)["_psi_rank"]
+                drift.assign(_metric_rank=pd.to_numeric(drift.get(selected_drift_metric, pd.Series(dtype=float)), errors="coerce").fillna(0.0))
+                .groupby("feature", as_index=False)["_metric_rank"]
                 .max()
-                .sort_values("_psi_rank", ascending=False)
+                .sort_values("_metric_rank", ascending=False)
                 if isinstance(drift, pd.DataFrame) and not drift.empty
-                else pd.DataFrame(columns=["feature", "_psi_rank"])
+                else pd.DataFrame(columns=["feature", "_metric_rank"])
             )
             drift_features = drift_ranking["feature"].head(5).astype(str).tolist() if not drift_ranking.empty else []
+            drift_metric_label = _THRESHOLD_LABELS.get(selected_drift_metric, str(selected_drift_metric or "psi").upper())
             note_source = latest_bins if not latest_bins.empty else all_bins
             note = note_source[[column for column in ("window_start", "window_end") if column in note_source.columns]].drop_duplicates().astype(str)
             note_row = note.to_dict("records")[0] if not note.empty else {}
@@ -3435,7 +3438,7 @@ def register_callbacks(app) -> None:
                     [
                         html.H6("Drift vs Time", className="text-light mt-3 mb-2"),
                         html.P(
-                            "Compare the PSI trend below with the performance metrics above to spot time-aligned drift and metric shifts.",
+                            f"Compare the {drift_metric_label} trend below with the performance metrics above to spot time-aligned drift and metric shifts.",
                             className="text-muted",
                             style={"fontSize": "0.8rem"},
                         ),
@@ -3443,8 +3446,8 @@ def register_callbacks(app) -> None:
                             charts.build_drift_timeline(
                                 drift,
                                 drift_features,
-                                metric="psi",
-                                title="PSI Over Time (Top Drifting Features)",
+                                metric=selected_drift_metric,
+                                title=f"{drift_metric_label} Over Time (Top Drifting Features)",
                             ),
                             class_name="mb-3",
                         ),

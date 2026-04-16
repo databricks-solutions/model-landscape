@@ -1483,6 +1483,23 @@ class DashboardBackend:
             )
         return timeline
 
+    def _window_performance_timeline(self, dated: pd.DataFrame, metric_name: str) -> list[dict[str, float | None]]:
+        if dated.empty:
+            return []
+        timeline: list[dict[str, float | None]] = []
+        for window_end, group in dated.groupby("window_end", sort=True):
+            value = _weighted_average(
+                group.get("current_metric", pd.Series(dtype=float)),
+                group.get("current_volume_pct", pd.Series(dtype=float)),
+            )
+            timeline.append(
+                {
+                    "period": str(window_end.date()),
+                    metric_name: round(float(value), 4) if value is not None else None,
+                }
+            )
+        return timeline
+
     def _latest_window_metric_fallback_from_daily_profiles(
         self,
         model_id: str,
@@ -1554,15 +1571,11 @@ class DashboardBackend:
             end_date=bounds.get("window_end") or None,
         )
         if frame.empty:
-            profile_metrics = self._latest_window_metric_fallback_from_daily_profiles(
-                model_id,
-                window_start=bounds.get("window_start") or None,
-                window_end=bounds.get("window_end") or None,
-            )
-            if any(value is not None for value in profile_metrics.values()):
+            window_metrics = self._latest_window_metric_fallback_from_window_rows(model_id)
+            if any(value is not None for value in window_metrics.values()):
                 return {
                     "supported": True,
-                    "metrics": profile_metrics,
+                    "metrics": window_metrics,
                     "message": "Showing recent performance trends.",
                     "window_start": bounds.get("window_start") or "",
                     "window_end": bounds.get("window_end") or "",
@@ -1570,7 +1583,7 @@ class DashboardBackend:
             return {
                 "supported": True,
                 "metrics": {},
-                "message": "Latest-window performance metrics are unavailable until labeled daily facts or daily performance profiles are populated.",
+                "message": "Latest-window performance metrics are unavailable until labeled daily facts or comparison-window performance rows are populated.",
                 "window_start": bounds.get("window_start") or "",
                 "window_end": bounds.get("window_end") or "",
             }
@@ -1656,26 +1669,13 @@ class DashboardBackend:
                 if pd.notna(row.get("profile_date_ts"))
             ]
         elif uses_daily_classification_timeline:
-            timeline = self._daily_performance_timeline_fallback(model_id, metric_name)
+            timeline = self._window_performance_timeline(dated, metric_name)
             if not timeline:
                 timeline_unavailable_reason = (
-                    f"{metric_name.upper()} over time is unavailable until daily labeled facts or daily performance profiles are populated for this monitor."
+                    f"{metric_name.upper()} over time is unavailable until daily labeled facts or comparison-window performance rows are populated for this monitor."
                 )
         else:
-            timeline = (
-                [
-                    {
-                        "period": str(window_end.date()),
-                        metric_name: float(
-                            (group["current_metric"] * group["current_volume_pct"]).sum()
-                            / max(group["current_volume_pct"].sum(), 1)
-                        ),
-                    }
-                    for window_end, group in dated.groupby("window_end", sort=True)
-                ]
-                if not dated.empty
-                else []
-            )
+            timeline = self._window_performance_timeline(dated, metric_name)
         latest_bins = dated.copy() if dated.empty else dated[dated["window_end"] == dated["window_end"].max()].copy()
         contributors = (
             latest_bins.groupby("feature", as_index=False)

@@ -507,8 +507,11 @@ def test_get_performance_summary_supports_alternate_metric_names() -> None:
     precision = backend.get_performance_summary("fraud_model_demo", metric_name="precision")
 
     assert rmse["timeline"][0]["rmse"] == 0.813
-    assert precision["timeline"] == []
-    assert "daily labeled facts or daily performance profiles" in precision["timeline_unavailable_reason"]
+    assert precision["timeline"] == [
+        {"period": "2026-01-20", "precision": 0.813},
+        {"period": "2026-01-21", "precision": 0.813},
+    ]
+    assert precision["timeline_unavailable_reason"] == ""
 
 
 def test_get_performance_summary_prefers_daily_label_metrics_and_keeps_null_gaps() -> None:
@@ -578,7 +581,7 @@ def test_get_performance_summary_prefers_daily_label_metrics_and_keeps_null_gaps
     ]
 
 
-def test_get_performance_summary_falls_back_to_daily_performance_profiles_when_daily_label_metrics_are_empty() -> None:
+def test_get_performance_summary_falls_back_to_comparison_window_rows_when_daily_label_metrics_are_empty() -> None:
     config = MonitorConfig(
         model_key="fraud_model_demo",
         display_name="Fraud Model Demo",
@@ -601,61 +604,14 @@ def test_get_performance_summary_falls_back_to_daily_performance_profiles_when_d
         list_monitor_configs=lambda status="active": [config],
         get_monitor_summary=lambda: pd.DataFrame(),
         get_daily_label_metric_rows=lambda model_id, start_date=None, end_date=None: [],
-        get_daily_performance_profile_rows=lambda model_id, start_date=None, end_date=None: [
-            {
-                "model_key": model_id,
-                "profile_date": "2026-01-20",
-                "feature_name": "amount",
-                "bin_label": "[0.0, 1.0)",
-                "metric_name": "precision",
-                "metric_value": 0.8,
-                "row_count": 2,
-                "volume_pct": 40.0,
-                "computed_at": "2026-01-20T00:00:00+00:00",
-            },
-            {
-                "model_key": model_id,
-                "profile_date": "2026-01-20",
-                "feature_name": "amount",
-                "bin_label": "[1.0, 2.0)",
-                "metric_name": "precision",
-                "metric_value": 0.5,
-                "row_count": 3,
-                "volume_pct": 60.0,
-                "computed_at": "2026-01-20T00:00:00+00:00",
-            },
-            {
-                "model_key": model_id,
-                "profile_date": "2026-01-21",
-                "feature_name": "amount",
-                "bin_label": "[0.0, 1.0)",
-                "metric_name": "precision",
-                "metric_value": 0.75,
-                "row_count": 4,
-                "volume_pct": 100.0,
-                "computed_at": "2026-01-21T00:00:00+00:00",
-            },
-            {
-                "model_key": model_id,
-                "profile_date": "2026-01-22",
-                "feature_name": "amount",
-                "bin_label": "[0.0, 1.0)",
-                "metric_name": "accuracy",
-                "metric_value": 1.0,
-                "row_count": 4,
-                "volume_pct": 100.0,
-                "computed_at": "2026-01-22T00:00:00+00:00",
-            },
-        ],
     )
     backend = DashboardBackend(repository=_with_published_generation(repository))
 
     performance = backend.get_performance_summary("fraud_model_demo", metric_name="precision")
 
     assert performance["timeline"] == [
-        {"period": "2026-01-20", "precision": 0.62},
-        {"period": "2026-01-21", "precision": 0.75},
-        {"period": "2026-01-22", "precision": None},
+        {"period": "2026-01-20", "precision": 0.813},
+        {"period": "2026-01-21", "precision": 0.813},
     ]
     assert performance["timeline_unavailable_reason"] == ""
 
@@ -676,7 +632,7 @@ def test_get_latest_window_metrics_aggregates_latest_daily_label_facts() -> None
         model_id_value="fraud_model_v1",
     )
 
-    class _SnapshotWarehouse:
+    class _SnapshotWarehouse(_FakeWarehouse):
         def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
             if "FROM comparison_windows" in sql:
                 return pd.DataFrame(
@@ -689,7 +645,7 @@ def test_get_latest_window_metrics_aggregates_latest_daily_label_facts() -> None
                         }
                     ]
                 )
-            raise AssertionError(f"Unexpected query: {sql}")
+            return super().query_params(sql, params)
 
     repository = SimpleNamespace(
         _warehouse=_SnapshotWarehouse(),
@@ -738,7 +694,7 @@ def test_get_latest_window_metrics_aggregates_latest_daily_label_facts() -> None
     }
 
 
-def test_get_latest_window_metrics_falls_back_to_daily_performance_profiles() -> None:
+def test_get_latest_window_metrics_falls_back_to_comparison_window_rows() -> None:
     config = MonitorConfig(
         model_key="fraud_model_demo",
         display_name="Fraud Model Demo",
@@ -754,7 +710,7 @@ def test_get_latest_window_metrics_falls_back_to_daily_performance_profiles() ->
         model_id_value="fraud_model_v1",
     )
 
-    class _SnapshotWarehouse:
+    class _SnapshotWarehouse(_FakeWarehouse):
         def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
             if "FROM comparison_windows" in sql:
                 return pd.DataFrame(
@@ -767,7 +723,7 @@ def test_get_latest_window_metrics_falls_back_to_daily_performance_profiles() ->
                         }
                     ]
                 )
-            raise AssertionError(f"Unexpected query: {sql}")
+            return super().query_params(sql, params)
 
     repository = SimpleNamespace(
         _warehouse=_SnapshotWarehouse(),
@@ -775,62 +731,16 @@ def test_get_latest_window_metrics_falls_back_to_daily_performance_profiles() ->
         list_monitor_configs=lambda status="active": [config],
         get_monitor_summary=lambda: pd.DataFrame(),
         get_daily_label_metric_rows=lambda model_id, start_date=None, end_date=None: [],
-        get_daily_performance_profile_rows=lambda model_id, start_date=None, end_date=None: [
-            {
-                "model_key": model_id,
-                "profile_date": "2026-01-20",
-                "feature_name": "amount",
-                "bin_label": "[0.0, 1.0)",
-                "metric_name": "precision",
-                "metric_value": 0.75,
-                "row_count": 4,
-                "volume_pct": 100.0,
-                "computed_at": "2026-01-20T00:00:00+00:00",
-            },
-            {
-                "model_key": model_id,
-                "profile_date": "2026-01-20",
-                "feature_name": "amount",
-                "bin_label": "[0.0, 1.0)",
-                "metric_name": "recall",
-                "metric_value": 0.6,
-                "row_count": 4,
-                "volume_pct": 100.0,
-                "computed_at": "2026-01-20T00:00:00+00:00",
-            },
-            {
-                "model_key": model_id,
-                "profile_date": "2026-01-20",
-                "feature_name": "amount",
-                "bin_label": "[0.0, 1.0)",
-                "metric_name": "f1",
-                "metric_value": 0.6667,
-                "row_count": 4,
-                "volume_pct": 100.0,
-                "computed_at": "2026-01-20T00:00:00+00:00",
-            },
-            {
-                "model_key": model_id,
-                "profile_date": "2026-01-20",
-                "feature_name": "amount",
-                "bin_label": "[0.0, 1.0)",
-                "metric_name": "accuracy",
-                "metric_value": 0.7,
-                "row_count": 4,
-                "volume_pct": 100.0,
-                "computed_at": "2026-01-20T00:00:00+00:00",
-            },
-        ],
     )
     backend = DashboardBackend(repository=_with_published_generation(repository))
 
     snapshot = backend.get_latest_window_metrics("fraud_model_demo")
 
     assert snapshot["metrics"] == {
-        "precision": 0.75,
-        "recall": 0.6,
-        "f1": 0.6667,
-        "accuracy": 0.7,
+        "precision": 0.813,
+        "recall": 0.813,
+        "f1": 0.813,
+        "accuracy": 0.813,
     }
     assert snapshot["message"] == "Showing recent performance trends."
 

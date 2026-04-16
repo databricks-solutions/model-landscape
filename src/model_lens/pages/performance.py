@@ -31,6 +31,22 @@ def layout():
                                     ],
                                     md=3,
                                 ),
+                                dbc.Col(
+                                    [
+                                        dbc.Label("Drift Metric (Trend Chart)", className="text-muted"),
+                                        dbc.Select(
+                                            id="perf-drift-metric-select",
+                                            options=[
+                                                {"label": "PSI", "value": "psi"},
+                                                {"label": "Jensen-Shannon", "value": "js_divergence"},
+                                                {"label": "KL Divergence", "value": "kl_divergence"},
+                                            ],
+                                            value="psi",
+                                            style=DROPDOWN_STYLE,
+                                        ),
+                                    ],
+                                    md=3,
+                                ),
                             ],
                             className="mb-4",
                         ),

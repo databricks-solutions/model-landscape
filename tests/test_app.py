@@ -1123,7 +1123,7 @@ def test_render_performance_callback_surfaces_zero_delta_state(monkeypatch) -> N
     callback = app.callback_map[RENDER_PERFORMANCE_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn("/performance", "fraud_model_demo", "f1", 0, {}, None)
+    result = fn("/performance", "fraud_model_demo", "f1", "psi", 0, {}, None)
 
     assert "Feature impact metric: F1 Score" in str(result[0])
     assert "no significant degradation" in str(result[0]).lower()
@@ -1189,12 +1189,69 @@ def test_render_performance_callback_handles_partial_window_note_and_missing_met
     callback = app.callback_map[RENDER_PERFORMANCE_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn("/performance", "fraud_model_demo", "precision", 0, {}, None)
+    result = fn("/performance", "fraud_model_demo", "precision", "psi", 0, {}, None)
 
     assert "unavailable until daily labeled facts are populated" in str(result[0]).lower()
     assert "Latest comparison window end: 2026-01-21" in str(result[6])
     assert "Performance Metrics Over Time" in str(result[2])
     assert "Chart gaps mean the metric was undefined on those days, not zero." in str(result[6])
+
+
+def test_render_performance_callback_uses_selected_drift_metric(monkeypatch) -> None:
+    latest_bins = pd.DataFrame(
+        [
+            {
+                "feature": "amount",
+                "bin_label": "[0, 100)",
+                "baseline_metric": 0.84,
+                "current_metric": 0.82,
+                "delta": -0.02,
+                "current_volume_pct": 55.0,
+                "degradation_contribution": -0.01,
+                "window_start": "2026-01-14",
+                "window_end": "2026-01-21",
+            }
+        ]
+    )
+
+    class _FakeBackend:
+        def get_monitor_config(self, model_id):
+            return SimpleNamespace(
+                contract=SimpleNamespace(label_col="label"),
+                problem_type="classification",
+                performance_metric_names=("f1", "precision", "recall"),
+            )
+
+        def get_performance_summary(self, model_id, metric_name="f1"):
+            value_map = {"f1": 0.84, "precision": 0.9, "recall": 0.78}
+            return {
+                "timeline": [{"period": "2026-01-21", metric_name: value_map.get(metric_name)}],
+                "contributors": pd.DataFrame([{"feature": "amount", "weighted_delta": -0.01}]),
+                "latest_bins": latest_bins,
+                "all_bins": latest_bins,
+                "has_significant_degradation": True,
+                "worst_weighted_delta": -0.01,
+                "timeline_unavailable_reason": "",
+            }
+
+        def get_drift_results(self, model_id, granularity="daily"):
+            assert granularity == "daily"
+            return pd.DataFrame(
+                [
+                    {"feature": "amount", "period": "2026-01-20", "psi": 0.12, "js_divergence": 0.03, "kl_divergence": 0.02},
+                    {"feature": "amount", "period": "2026-01-21", "psi": 0.18, "js_divergence": 0.05, "kl_divergence": 0.04},
+                ]
+            )
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    callback = app.callback_map[RENDER_PERFORMANCE_CALLBACK]["callback"]
+    fn = getattr(callback, "__wrapped__", callback)
+
+    result = fn("/performance", "fraud_model_demo", "f1", "js_divergence", 0, {}, None)
+
+    assert "Jensen-Shannon Divergence Over Time (Top Drifting Features)" in str(result[3])
+    assert "Compare the Jensen-Shannon Divergence trend below" in str(result[3])
 
 
 def test_render_quality_callback_surfaces_history_and_latest_snapshot(monkeypatch) -> None:
