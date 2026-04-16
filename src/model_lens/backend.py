@@ -1500,6 +1500,71 @@ class DashboardBackend:
             )
         return timeline
 
+    def _source_daily_label_metrics_fallback(
+        self,
+        model_id: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> pd.DataFrame:
+        loader = getattr(self.repository, "get_source_daily_label_metric_rows", None)
+        if loader is None:
+            return pd.DataFrame()
+        config = self.get_monitor_config(model_id, status=None)
+        if not supports_binary_class_filters(config):
+            return pd.DataFrame()
+        try:
+            frame = pd.DataFrame(
+                loader(
+                    config,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+            )
+        except Exception:
+            logger.exception("Failed to derive daily label metrics directly from the source rows", extra={"model_key": model_id})
+            return pd.DataFrame()
+        if frame.empty:
+            return frame
+        frame["profile_date_ts"] = pd.to_datetime(frame["profile_date"], errors="coerce")
+        for column in (
+            "actual_positive_count",
+            "actual_negative_count",
+            "predicted_positive_count",
+            "predicted_negative_count",
+            "tp",
+            "fp",
+            "fn",
+            "tn",
+            "precision",
+            "recall",
+            "f1",
+            "accuracy",
+        ):
+            if column in frame.columns:
+                frame[column] = pd.to_numeric(frame[column], errors="coerce")
+        return frame.sort_values("profile_date_ts").reset_index(drop=True)
+
+    def _resolved_daily_label_metrics(
+        self,
+        model_id: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> pd.DataFrame:
+        exact = self._source_daily_label_metrics_fallback(
+            model_id,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        if not exact.empty:
+            return exact
+        return self.get_daily_label_metrics(
+            model_id,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
     def _latest_window_metric_fallback_from_daily_profiles(
         self,
         model_id: str,
@@ -1565,7 +1630,7 @@ class DashboardBackend:
                 "window_start": (bounds or {}).get("window_start") or "",
                 "window_end": (bounds or {}).get("window_end") or "",
             }
-        frame = self.get_daily_label_metrics(
+        frame = self._resolved_daily_label_metrics(
             model_id,
             start_date=bounds.get("window_start") or None,
             end_date=bounds.get("window_end") or None,
@@ -1657,7 +1722,17 @@ class DashboardBackend:
         frame = frame.copy()
         frame["window_end"] = pd.to_datetime(frame["window_end"], errors="coerce")
         dated = frame[frame["window_end"].notna()].copy()
-        label_metrics = self.get_daily_label_metrics(model_id)
+        label_metrics = pd.DataFrame()
+        if uses_daily_classification_timeline and not dated.empty:
+            start_date = str(dated["window_end"].min().date())
+            end_date = str(dated["window_end"].max().date())
+            label_metrics = self._resolved_daily_label_metrics(
+                model_id,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        elif uses_daily_classification_timeline:
+            label_metrics = self._resolved_daily_label_metrics(model_id)
         timeline_unavailable_reason = ""
         if uses_daily_classification_timeline and not label_metrics.empty and metric_name in label_metrics.columns:
             timeline = [

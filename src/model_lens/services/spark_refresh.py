@@ -56,26 +56,27 @@ def _spark_binary_indicator(column) -> Any:
 
 def _spark_binary_prediction_column(source_df: DataFrame, *, config: MonitorConfig) -> Any:
     score_col = str(config.contract.prediction_score_col or "").strip()
+    prediction = _spark_col(config.contract.prediction_col)
+    discrete = _spark_binary_indicator(prediction)
+    numeric = prediction.cast("double")
+    numeric_threshold = (
+        F.when(
+            numeric.isNotNull() & numeric.between(0.0, 1.0),
+            F.when(numeric >= F.lit(0.5), F.lit(1)).otherwise(F.lit(0)),
+        )
+        .otherwise(F.lit(None).cast("int"))
+    )
     if score_col and score_col in source_df.columns:
         scores = _spark_col(score_col).cast("double")
-        return (
+        score_threshold = (
             F.when(
                 scores.isNotNull() & scores.between(0.0, 1.0),
                 F.when(scores >= F.lit(0.5), F.lit(1)).otherwise(F.lit(0)),
             )
             .otherwise(F.lit(None).cast("int"))
         )
-    prediction = _spark_col(config.contract.prediction_col)
-    discrete = _spark_binary_indicator(prediction)
-    numeric = prediction.cast("double")
-    return (
-        F.when(discrete.isNotNull(), discrete)
-        .when(
-            numeric.isNotNull() & numeric.between(0.0, 1.0),
-            F.when(numeric >= F.lit(0.5), F.lit(1)).otherwise(F.lit(0)),
-        )
-        .otherwise(F.lit(None).cast("int"))
-    )
+        return F.coalesce(discrete, score_threshold, numeric_threshold)
+    return F.coalesce(discrete, numeric_threshold)
 
 
 def _spark_binary_label_column(config: MonitorConfig) -> Any:

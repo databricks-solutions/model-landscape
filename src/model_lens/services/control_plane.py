@@ -18,6 +18,7 @@ from model_lens.domain.models import (
     RefreshResult,
 )
 from model_lens.services.inference_contracts import build_inference_contract
+from model_lens.services.class_filters import NEGATIVE_CLASS_TOKENS, POSITIVE_CLASS_TOKENS
 from model_lens.services.lakebase import LakebaseConnection, LakebaseReadModel
 from model_lens.services.schema import (
     comparison_window_migration_columns,
@@ -71,6 +72,39 @@ def _as_float(value: Any) -> float | None:
     if pd.isna(numeric):
         return None
     return float(numeric)
+
+
+def _sql_binary_indicator(expression: str) -> str:
+    positive_tokens = ", ".join(f"'{token}'" for token in sorted(POSITIVE_CLASS_TOKENS))
+    negative_tokens = ", ".join(f"'{token}'" for token in sorted(NEGATIVE_CLASS_TOKENS))
+    numeric = f"CAST({expression} AS DOUBLE)"
+    text = f"LOWER(TRIM(CAST({expression} AS STRING)))"
+    return (
+        "CASE "
+        f"WHEN {text} IN ({positive_tokens}) THEN 1 "
+        f"WHEN {text} IN ({negative_tokens}) THEN 0 "
+        f"WHEN {numeric} = 1.0 THEN 1 "
+        f"WHEN {numeric} = 0.0 THEN 0 "
+        "ELSE NULL END"
+    )
+
+
+def _sql_probability_indicator(expression: str) -> str:
+    numeric = f"CAST({expression} AS DOUBLE)"
+    return (
+        "CASE "
+        f"WHEN {numeric} IS NOT NULL AND {numeric} BETWEEN 0.0 AND 1.0 "
+        f"THEN CASE WHEN {numeric} >= 0.5 THEN 1 ELSE 0 END "
+        "ELSE NULL END"
+    )
+
+
+def _sql_binary_prediction_expression(prediction_expression: str, *, score_expression: str | None = None) -> str:
+    parts = [_sql_binary_indicator(prediction_expression)]
+    if score_expression:
+        parts.append(_sql_probability_indicator(score_expression))
+    parts.append(_sql_probability_indicator(prediction_expression))
+    return "COALESCE(" + ", ".join(parts) + ")"
 
 
 def _safe_json_dict(value: Any) -> dict[str, Any]:
@@ -1344,6 +1378,133 @@ class ControlPlaneRepository:
         if source_label_column and source_label_column not in frame.columns:
             frame[source_label_column] = pd.NA
         return frame
+
+    def get_source_daily_label_metric_rows(
+        self,
+        config: MonitorConfig,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        self.validate_monitor_source(config)
+        if not config.contract.label_col:
+            return []
+
+        ts_col = quote_column(validate_identifier(config.contract.timestamp_col))
+        prediction_expr = f"s.{quote_column(validate_identifier(config.contract.prediction_col))}"
+        score_expr = None
+        if config.contract.prediction_score_col:
+            score_expr = f"s.{quote_column(validate_identifier(config.contract.prediction_score_col))}"
+
+        label_expr = None
+        join_sql = ""
+        source_columns = self._warehouse.get_columns(config.source_table) if config.labels_table else []
+        source_join_col = _resolve_source_labels_join_col(
+            source_columns,
+            config.contract.entity_id_col,
+            config.labels_join_col,
+        )
+        if config.labels_table and config.contract.label_col and source_join_col and config.labels_join_col:
+            validate_identifier(config.labels_table)
+            label_col = validate_identifier(config.contract.label_col)
+            join_col = validate_identifier(config.labels_join_col)
+            label_expr = f"l.{quote_column(label_col)}"
+            if config.labels_order_col:
+                order_col = validate_identifier(config.labels_order_col)
+                join_source = f"""
+                    (
+                        SELECT {quote_column(join_col)}, {quote_column(label_col)}
+                        FROM (
+                            SELECT
+                                {quote_column(join_col)},
+                                {quote_column(label_col)},
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY {quote_column(join_col)}
+                                    ORDER BY {quote_column(order_col)} DESC
+                                ) AS {quote_column("model_lens_label_rank")}
+                            FROM {config.labels_table}
+                        ) ranked_labels
+                        WHERE {quote_column("model_lens_label_rank")} = 1
+                    ) l
+                """
+            else:
+                join_source = f"{config.labels_table} l"
+            join_sql = (
+                f" LEFT JOIN {join_source}"
+                f" ON s.{quote_column(source_join_col)}"
+                f" = l.{quote_column(join_col)}"
+            )
+        elif config.contract.label_col:
+            label_expr = f"s.{quote_column(validate_identifier(config.contract.label_col))}"
+
+        if not label_expr:
+            return []
+
+        filters, params = self._source_filters(config, start_date=start_date, end_date=end_date, alias="s")
+        where_sql = f" WHERE {' AND '.join(filters)}" if filters else ""
+        pred_binary_expr = _sql_binary_prediction_expression(prediction_expr, score_expression=score_expr)
+        label_binary_expr = _sql_binary_indicator(label_expr)
+        frame = self._warehouse.query_params(
+            f"""
+            WITH classified AS (
+                SELECT
+                    CAST(s.{ts_col} AS DATE) AS profile_date,
+                    {pred_binary_expr} AS pred_binary,
+                    {label_binary_expr} AS label_binary
+                FROM {config.source_table} s
+                {join_sql}
+                {where_sql}
+            )
+            SELECT
+                CAST(profile_date AS STRING) AS profile_date,
+                SUM(CASE WHEN label_binary = 1 AND pred_binary = 1 THEN 1 ELSE 0 END) AS tp,
+                SUM(CASE WHEN label_binary = 0 AND pred_binary = 1 THEN 1 ELSE 0 END) AS fp,
+                SUM(CASE WHEN label_binary = 1 AND pred_binary = 0 THEN 1 ELSE 0 END) AS fn,
+                SUM(CASE WHEN label_binary = 0 AND pred_binary = 0 THEN 1 ELSE 0 END) AS tn
+            FROM classified
+            WHERE pred_binary IS NOT NULL AND label_binary IS NOT NULL
+            GROUP BY profile_date
+            ORDER BY profile_date
+            """,
+            tuple(params),
+        )
+        if frame.empty:
+            return []
+
+        rows: list[dict[str, Any]] = []
+        for _, row in frame.iterrows():
+            tp = int(row.get("tp") or 0)
+            fp = int(row.get("fp") or 0)
+            fn = int(row.get("fn") or 0)
+            tn = int(row.get("tn") or 0)
+            predicted_positive_count = tp + fp
+            actual_positive_count = tp + fn
+            total_count = tp + fp + fn + tn
+            precision = (tp / predicted_positive_count) if predicted_positive_count > 0 else None
+            recall = (tp / actual_positive_count) if predicted_positive_count > 0 and actual_positive_count > 0 else None
+            f1 = None
+            if precision is not None and recall is not None and (precision + recall) > 0:
+                f1 = (2.0 * precision * recall) / (precision + recall)
+            accuracy = ((tp + tn) / total_count) if total_count > 0 else None
+            rows.append(
+                {
+                    "model_key": config.model_key,
+                    "profile_date": _as_text(row.get("profile_date")),
+                    "actual_positive_count": actual_positive_count,
+                    "actual_negative_count": fp + tn,
+                    "predicted_positive_count": predicted_positive_count,
+                    "predicted_negative_count": fn + tn,
+                    "tp": tp,
+                    "fp": fp,
+                    "fn": fn,
+                    "tn": tn,
+                    "precision": round(float(precision), 4) if precision is not None else None,
+                    "recall": round(float(recall), 4) if recall is not None else None,
+                    "f1": round(float(f1), 4) if f1 is not None else None,
+                    "accuracy": round(float(accuracy), 4) if accuracy is not None else None,
+                }
+            )
+        return rows
 
     def get_source_profile(
         self,

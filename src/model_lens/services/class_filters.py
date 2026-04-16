@@ -50,19 +50,18 @@ def resolved_prediction_binary_series(
     prediction_col: str,
     prediction_score_col: str | None = None,
 ) -> pd.Series:
+    discrete = normalized_binary_series(frame[prediction_col])
+    if discrete.notna().all():
+        return discrete
+    result = discrete.copy()
     if prediction_score_col and prediction_score_col in frame.columns:
         scores = pd.to_numeric(frame[prediction_score_col], errors="coerce")
-        result = pd.Series(pd.array([pd.NA] * len(frame), dtype="Int64"), index=frame.index)
-        valid = scores.notna() & scores.between(0.0, 1.0, inclusive="both")
+        valid = result.isna() & scores.notna() & scores.between(0.0, 1.0, inclusive="both")
         if valid.any():
             result.loc[valid] = (scores.loc[valid] >= 0.5).astype(int).astype("Int64")
         return result
-    discrete = normalized_binary_series(frame[prediction_col])
-    if discrete.notna().any():
-        return discrete
     numeric = pd.to_numeric(frame[prediction_col], errors="coerce")
-    result = pd.Series(pd.array([pd.NA] * len(frame), dtype="Int64"), index=frame.index)
-    valid = numeric.notna() & numeric.between(0.0, 1.0, inclusive="both")
+    valid = result.isna() & numeric.notna() & numeric.between(0.0, 1.0, inclusive="both")
     if valid.any():
         result.loc[valid] = (numeric.loc[valid] >= 0.5).astype(int).astype("Int64")
     return result
