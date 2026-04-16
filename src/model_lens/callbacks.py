@@ -3597,6 +3597,11 @@ def register_callbacks(app) -> None:
             if not drift_features:
                 drift_features = drift_feature_order if len(drift_feature_order) <= 12 else drift_feature_order[:12]
             drift_metric_label = _THRESHOLD_LABELS.get(selected_drift_metric, str(selected_drift_metric or "psi").upper())
+            drift_scope_label = (
+                "All Tracked Features"
+                if drift_feature_order and len(drift_features) == len(drift_feature_order)
+                else "Selected Drift Features"
+            )
             note_source = latest_bins if not latest_bins.empty else all_bins
             note = note_source[[column for column in ("window_start", "window_end") if column in note_source.columns]].drop_duplicates().astype(str)
             note_row = note.to_dict("records")[0] if not note.empty else {}
@@ -3651,6 +3656,7 @@ def register_callbacks(app) -> None:
                                 className="mb-2",
                             ),
                             html.P("Baseline and Current are the slice-level metric values. Delta is their change. Current Window Share shows how much of the latest traffic sits in that slice. Weighted Contribution is the slice's share-weighted pull on the overall metric.", className="mb-2"),
+                            html.P("The color bands come from raw slice delta thresholds. The x-axis is weighted contribution, so use the vertical zero line as the absolute visual guide.", className="mb-2"),
                             html.P("The center line at 0 means no net contribution. Right side is worse. Left side is better.", className="mb-0"),
                         ]
                     ),
@@ -3663,13 +3669,13 @@ def register_callbacks(app) -> None:
                 columns={
                     "feature": "Feature",
                     "bin": "Bin",
-                    "baseline": "Baseline",
-                    "current": "Current",
-                    "delta": "Delta",
-                    "volume_pct": "Current Window Share (%)",
-                    "impact": "Weighted Contribution",
-                }
-            )
+                        "baseline": "Baseline",
+                        "current": "Current",
+                        "delta": "Delta",
+                        "volume_pct": "Current Window Share (%)",
+                        "impact": "Weighted Contribution (Delta x Share)",
+                    }
+                )
             return (
                 alert,
                 kpi_cards,
@@ -3684,7 +3690,7 @@ def register_callbacks(app) -> None:
                     [
                         html.H6("Drift vs Time", className="text-light mt-3 mb-2"),
                         html.P(
-                            f"Compare the {drift_metric_label} trend below with the performance metrics above to spot time-aligned drift and metric shifts.",
+                            f"Compare the {drift_metric_label} trend below with the performance metrics above to spot time-aligned drift and metric shifts. Showing {len(drift_features)} of {len(drift_feature_order) or len(drift_features)} tracked features.",
                             className="text-muted",
                             style={"fontSize": "0.8rem"},
                         ),
@@ -3695,7 +3701,7 @@ def register_callbacks(app) -> None:
                                 metric=selected_drift_metric,
                                 show_thresholds=bool(perf_show_thresholds),
                                 thresholds=resolved_thresholds,
-                                title=f"{drift_metric_label} Over Time (Top Drifting Features)",
+                                title=f"{drift_metric_label} Over Time ({drift_scope_label})",
                             ),
                             class_name="mb-3",
                         ),
@@ -3727,9 +3733,13 @@ def register_callbacks(app) -> None:
                                     ],
                                     className="d-flex align-items-center gap-2 mb-2",
                                 ),
+                                html.Small(
+                                    "Weighted Contribution = Delta x Current Window Share for that slice in the latest comparison window.",
+                                    className="text-muted d-block mb-2",
+                                ),
                                 dbc.Popover(
                                     dbc.PopoverBody(
-                                        "Weighted Contribution is the slice's share-weighted pull on the overall metric in the latest comparison window.",
+                                        "Weighted Contribution is the slice's share-weighted pull on the overall metric in the latest comparison window. It combines how much the slice moved (Delta) with how much traffic the slice currently owns (Current Window Share).",
                                     ),
                                     target="perf-latest-bin-help-btn",
                                     trigger="click",

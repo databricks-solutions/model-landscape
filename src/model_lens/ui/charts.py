@@ -675,10 +675,25 @@ def build_dimension_breakdown(breakdown_df: pd.DataFrame, feature_name: str, dim
         go.Scatter(
             x=working["dimension_value"],
             y=working["feature_p50"],
-            name="P50",
-            mode="markers+lines",
+            name="Median (P50)",
+            mode="markers+lines+text" if len(working) <= 12 else "markers+lines",
             line=dict(color=COLORS["highlight"], width=2),
             marker=dict(size=7),
+            text=(
+                [
+                    f"Median={p50:.4g}<br>P75={p75:.4g}<br>P25={p25:.4g}"
+                    for p50, p75, p25 in zip(
+                        working["feature_p50"].fillna(np.nan),
+                        working["feature_p75"].fillna(np.nan),
+                        working["feature_p25"].fillna(np.nan),
+                    )
+                ]
+                if len(working) <= 12
+                else None
+            ),
+            textposition="top center",
+            textfont=dict(size=10, color=COLORS["text"]),
+            cliponaxis=False,
             error_y=dict(
                 type="data",
                 symmetric=False,
@@ -836,10 +851,24 @@ def build_feature_bin_impact(degradation_df: pd.DataFrame, feature_contributors:
                 )
             )
 
-    for label, color in [("Degraded (> 2%)", COLORS["high"]), ("Degraded (< 2%)", COLORS["moderate"]), ("Improved", COLORS["low"])]:
+    for label, color in [
+        ("Degraded (delta <= -2%)", COLORS["high"]),
+        ("Degraded (-2% < delta < 0)", COLORS["moderate"]),
+        ("Improved / stable (delta >= 0)", COLORS["low"]),
+    ]:
         fig.add_trace(go.Bar(x=[None], y=[None], orientation="h", marker_color=color, name=label, showlegend=True))
 
     fig.add_vline(x=0, line_color=COLORS["muted"], line_width=1)
+    fig.add_annotation(
+        text="Colors classify raw slice delta. Bar position shows weighted contribution, so the zero line is the absolute guide.",
+        xref="paper",
+        yref="paper",
+        x=0,
+        y=1.08,
+        xanchor="left",
+        showarrow=False,
+        font=dict(size=11, color=COLORS["muted"]),
+    )
     return _apply_layout(
         fig,
         title="Feature Impact on Performance — Per-Bin Breakdown",
