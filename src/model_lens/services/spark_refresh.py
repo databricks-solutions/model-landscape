@@ -432,7 +432,11 @@ def _iso_date(value: object) -> str | None:
 
 
 def _iter_local_rows(frame: DataFrame):
-    return frame.toLocalIterator()
+    for row in frame.toLocalIterator():
+        if hasattr(row, "asDict"):
+            yield row.asDict(recursive=True)
+        else:
+            yield row
 
 
 def _union_all(frames: list[DataFrame]) -> DataFrame | None:

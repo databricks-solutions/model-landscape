@@ -67,9 +67,11 @@ Responsibilities:
 - show a dedicated `Incidents` page that reads cross-monitor open incidents from `incidents` and recent lifecycle rows from `incident_history`
 - show `Refresh Diagnostics` in `Monitor Settings`, interpreting recent `refresh_runs` telemetry into bottleneck categories, trend guidance, and an advisory compute-footprint label
 - keep the Performance page correlation-friendly by rendering the performance-metric trend above a PSI-over-time chart for the same monitor
+- let the Performance page expose the tracked drift features explicitly and optionally overlay the selected drift metric's warning/critical guides on that lower drift chart
 - split `Monitor Settings` into `Contract`, `Settings`, and `Admin` tabs so the contract view, editable cadence/metric controls, and lifecycle/runtime actions are separated without changing the underlying route or data model
 - rank Overview severity and Drift top-feature callouts from historical max drift across persisted comparison windows instead of only the latest window
 - keep Drift threshold guides optional in the page UI while leaving the shared thresholds active for status and incident semantics
+- expose those same persisted threshold overrides directly on `Drift Analysis` through an inline threshold editor instead of forcing operators to leave the page for `Monitor Settings`
 - keep Overview cards/counts honest by treating monitors without persisted drift rows as `Computing/Pending` rather than healthy-zero snapshots
 - wrap the heavier analysis panes in loading indicators so page navigation does not look blank while warehouse queries are in flight
 - trigger the initial refresh workflow asynchronously during monitor activation
@@ -136,8 +138,12 @@ Undefined classification metrics are preserved as nulls instead of being coerced
 
 Those tables are not required for the unfiltered pages. The unfiltered Drift and Data Quality views continue to read the stable window/history tables, while class-filtered views and the raw daily Performance timeline can switch to these daily facts after the next refresh populates them.
 
+When those persisted class-aware quality facts are missing or stale, the Data Quality page can now derive filtered daily quality rows directly from source + labels for the requested class/date slice only when it can resolve a safe bounded range. That keeps class filtering usable without unbounded rescans and lets the UI distinguish a true zero-match slice from a missing-facts or unavailable-full-range condition.
+
 `monitor_configs` now also stores the monitor's configured performance metric set and default Performance-tab metric. The persisted performance tables stay generic on `metric_name`, so refresh and readback can handle different built-in metric combinations per monitor without changing the warehouse schema again.
 Monitor config writes are now atomic Delta `MERGE` operations keyed by `model_key`, so app-side saves no longer rely on a delete-then-insert gap.
+
+The Performance page no longer carries a second independent bin-detail chart. The per-bin impact chart remains the high-level “what hurts the metric” surface, and deeper configurable binning/outlier inspection is delegated to Feature Deep Dive through a prefilled handoff for the selected feature.
 
 ### 4. Lakebase Read Model
 
@@ -265,7 +271,7 @@ Primary code:
 13. It replaces or appends persisted rows for that model without duplicating logical windows, and recovery windows clear the open-incident projection when no incidents remain active.
 14. If Lakebase mode is active, it refreshes the Lakebase monitor summary and open-incident projection.
 
-For binary classification monitors, the same refresh pass also persists class-aware daily facts so the app can answer filtered Drift/Data Quality queries without raw rescans and can render a raw daily Performance timeline with null gaps on undefined days.
+For binary classification monitors, the same refresh pass also persists class-aware daily facts so the app can answer filtered Drift/Data Quality queries without raw rescans and can render a raw daily Performance timeline with null gaps on undefined days. The dashboard may still derive exact daily performance facts directly from source + labels, but only when it already has safe bounded window dates for that monitor view.
 
 The current numeric drift implementation now stabilizes out-of-range current distributions by expanding the outer histogram bounds to include the current min/max while preserving the reference-derived interior bin edges. That keeps PSI / KL / JS finite for genuine severe-drift cases instead of producing divide-by-zero warnings.
 With the Spark refresh repository active, those numeric-drift histograms and PSI / KL / JS aggregations now run in Spark from persisted daily numeric histogram edges/counts instead of collecting per-window sample arrays back into Python.
@@ -285,7 +291,7 @@ Current limitation:
 1. In Lakebase mode, the app reads monitor summary and incident inbox data from Lakebase.
 2. In warehouse-only mode, or if Lakebase is unavailable, it reads those views from the warehouse-backed repository.
 3. Overview severity and the Drift top-feature ranking are derived from historical max drift across the stored comparison windows, while `quality_metrics` remains the latest model-wide compatibility row rebuilt from daily quality facts.
-4. Drift and Data Quality date-range filters are applied inclusively, and binary class filters (`actual` / `predicted`, `positive` / `negative`) read the new class-aware daily facts instead of rescanning source tables. Those heavier filter controls now apply explicitly through `Apply Drift Filters` / `Apply Quality Filters`, so changing several controls does not trigger a burst of duplicate warehouse reads. If a class filter is requested before those daily facts exist, the app returns an explicit unavailable state.
+4. Drift and Data Quality date-range filters are applied inclusively, and binary class filters (`actual` / `predicted`, `positive` / `negative`) read the new class-aware daily facts instead of rescanning source tables. Those heavier filter controls now apply explicitly through `Apply Drift Filters` / `Apply Quality Filters`, so changing several controls does not trigger a burst of duplicate warehouse reads. If persisted class-aware facts are missing, Data Quality can fall back to a bounded source-derived slice; otherwise the app returns a specific unavailable state instead of silently scanning the full source table.
 5. Feature Deep Dive reads persisted daily-feature distributions first and only uses bounded source-window fallbacks; it no longer falls back to an unbounded raw-table scan. Custom edges and percentile clipping request exact bounded samples when they are available, and the heavier binning/outlier control changes are applied explicitly through the page's `Apply Distribution Controls` action instead of rerendering on every control default/change.
 6. The Performance timeline prefers `daily_label_metrics`, so undefined daily precision / recall / F1 render as gaps instead of being implied as zeros or weighted window aggregates.
 7. The app renders the current state for operators with loading indicators around the slower warehouse-backed panes.

@@ -47,15 +47,42 @@ def layout():
                                     ],
                                     md=3,
                                 ),
+                                dbc.Col(
+                                    [
+                                        dbc.Label("Tracked Drift Features", className="text-muted"),
+                                        dcc.Dropdown(
+                                            id="perf-drift-feature-select",
+                                            multi=True,
+                                            placeholder="Select drift features...",
+                                            className="dash-dropdown",
+                                        ),
+                                    ],
+                                    md=4,
+                                ),
+                                dbc.Col(
+                                    [
+                                        dbc.Label("Drift Threshold Guides", className="text-muted"),
+                                        dbc.Switch(
+                                            id="perf-drift-threshold-toggle",
+                                            value=False,
+                                            label="Show Threshold Guides",
+                                        ),
+                                        html.Small(
+                                            "Guide visibility follows the selected drift metric and uses the monitor's saved thresholds.",
+                                            className="text-muted d-block mt-1",
+                                        ),
+                                    ],
+                                    md=2,
+                                ),
                             ],
                             className="mb-4",
                         ),
                         dbc.Row(id="perf-kpi-cards", className="mb-3"),
                         html.Div(id="perf-timeline-container", className="mb-3"),
                         html.Div(id="perf-contributors-container", className="mb-4"),
-                        html.H6("Bin-Level Drill Down", className="text-light mb-2"),
+                        html.H6("Feature Deep Dive Shortcut", className="text-light mb-2"),
                         html.P(
-                            "Select a feature to see baseline vs current performance for each value range.",
+                            "Use this shortcut to inspect the selected feature with configurable binning and outlier handling in Feature Deep Dive.",
                             className="text-muted",
                             style={"fontSize": "0.8rem"},
                         ),

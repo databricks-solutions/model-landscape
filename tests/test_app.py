@@ -1016,6 +1016,7 @@ def test_render_drift_callback_respects_top_n_selection(monkeypatch) -> None:
     top_5_figure = result_top_5[3].children.children.figure
     top_6_figure = result_top_6[3].children.children.figure
     threshold_heatmap = result_thresholds[0].children.children.figure
+    threshold_timeline = result_thresholds[2].children.children.figure
     threshold_bar = result_thresholds[3].children.children.figure
 
     assert heatmap_3.layout.title.text == "Daily Feature Drift Heatmap"
@@ -1032,6 +1033,7 @@ def test_render_drift_callback_respects_top_n_selection(monkeypatch) -> None:
     assert top_6_figure.layout.title.text == "Top 6 Drifting Features (Historical Max)"
     assert len(top_6_figure.data[0].y) == 6
     assert heatmap_5.data[0].colorscale != threshold_heatmap.data[0].colorscale
+    assert len(threshold_timeline.layout.shapes) == 2
     assert top_5_figure.data[0].marker.color != threshold_bar.data[0].marker.color
 
 
@@ -1123,7 +1125,7 @@ def test_render_performance_callback_surfaces_zero_delta_state(monkeypatch) -> N
     callback = app.callback_map[RENDER_PERFORMANCE_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn("/performance", "fraud_model_demo", "f1", "psi", 0, {}, None)
+    result = fn("/performance", "fraud_model_demo", "f1", "psi", False, None, 0, {}, None)
 
     assert "Feature impact metric: F1 Score" in str(result[0])
     assert "no significant degradation" in str(result[0]).lower()
@@ -1189,7 +1191,7 @@ def test_render_performance_callback_handles_partial_window_note_and_missing_met
     callback = app.callback_map[RENDER_PERFORMANCE_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn("/performance", "fraud_model_demo", "precision", "psi", 0, {}, None)
+    result = fn("/performance", "fraud_model_demo", "precision", "psi", False, None, 0, {}, None)
 
     assert "unavailable until daily labeled facts are populated" in str(result[0]).lower()
     assert "Latest comparison window end: 2026-01-21" in str(result[6])
@@ -1248,7 +1250,7 @@ def test_render_performance_callback_uses_selected_drift_metric(monkeypatch) -> 
     callback = app.callback_map[RENDER_PERFORMANCE_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn("/performance", "fraud_model_demo", "f1", "js_divergence", 0, {}, None)
+    result = fn("/performance", "fraud_model_demo", "f1", "js_divergence", False, None, 0, {}, None)
 
     assert "Jensen-Shannon Divergence Over Time (Top Drifting Features)" in str(result[3])
     assert "Compare the Jensen-Shannon Divergence trend below" in str(result[3])
@@ -1257,7 +1259,10 @@ def test_render_performance_callback_uses_selected_drift_metric(monkeypatch) -> 
 def test_render_quality_callback_surfaces_history_and_latest_snapshot(monkeypatch) -> None:
     class _FakeBackend:
         def get_monitor_config(self, model_id):
-            return SimpleNamespace(contract=SimpleNamespace(label_col="label"), problem_type="classification")
+            return SimpleNamespace(
+                contract=SimpleNamespace(label_col="label", prediction_col="pred_label"),
+                problem_type="classification",
+            )
 
         def get_quality_stats(self, model_id, **kwargs):
             return {
@@ -1400,6 +1405,71 @@ def test_render_quality_callback_surfaces_backend_errors_instead_of_raising(monk
     assert "Data quality is unavailable right now." in str(result[0])
 
 
+def test_render_quality_callback_uses_specific_empty_state_for_zero_filtered_rows(monkeypatch) -> None:
+    class _FakeBackend:
+        def get_monitor_config(self, model_id):
+            return SimpleNamespace(
+                contract=SimpleNamespace(label_col="label", prediction_col="pred_label"),
+                problem_type="classification",
+            )
+
+        def get_quality_stats(self, model_id, **kwargs):
+            return {"_empty_reason": "no_filtered_rows"}
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    callback = app.callback_map[RENDER_QUALITY_CALLBACK]["callback"]
+    fn = getattr(callback, "__wrapped__", callback)
+
+    result = fn("/quality", "fraud_model_demo", 0, {}, 1, "2026-01-01", "2026-01-31", "predicted", "positive", False)
+
+    assert "No rows matched the selected class filter in this date range." in str(result[0])
+
+
+def test_render_quality_callback_uses_specific_empty_state_when_filtered_source_bounds_are_unavailable(monkeypatch) -> None:
+    class _FakeBackend:
+        def get_monitor_config(self, model_id):
+            return SimpleNamespace(
+                contract=SimpleNamespace(label_col="label", prediction_col="pred_label"),
+                problem_type="classification",
+            )
+
+        def get_quality_stats(self, model_id, **kwargs):
+            return {"_empty_reason": "filtered_source_bounds_unavailable"}
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    callback = app.callback_map[RENDER_QUALITY_CALLBACK]["callback"]
+    fn = getattr(callback, "__wrapped__", callback)
+
+    result = fn("/quality", "fraud_model_demo", 0, {}, 1, None, None, "predicted", "positive", False)
+
+    assert "Filtered quality history is not available for the full range yet." in str(result[0])
+
+
+def test_render_drift_callback_uses_specific_empty_state_for_zero_filtered_rows(monkeypatch) -> None:
+    class _FakeBackend:
+        def get_monitor_config(self, model_id):
+            return SimpleNamespace(
+                contract=SimpleNamespace(label_col="label", prediction_col="pred_label", categorical_columns=()),
+                problem_type="classification",
+            )
+
+        def get_drift_results(self, *args, **kwargs):
+            frame = pd.DataFrame()
+            frame.attrs["_empty_reason"] = "no_filtered_rows"
+            return frame
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    callback = app.callback_map[RENDER_DRIFT_CALLBACK]["callback"]
+    fn = getattr(callback, "__wrapped__", callback)
+
+    result = fn("/drift", "fraud_model_demo", 0, {}, 1, "psi", "daily", 5, "2026-01-01", "2026-01-31", "predicted", "positive", False)
+
+    assert "No rows matched the selected class filter in this date range." in str(result[0])
+
+
 def test_drift_and_quality_callbacks_use_apply_buttons_for_expensive_queries() -> None:
     app = create_app()
 
@@ -1423,6 +1493,42 @@ def test_drift_and_quality_callbacks_use_apply_buttons_for_expensive_queries() -
     assert "quality-class-basis-select" in quality_state_ids
     assert "quality-class-value-select" in quality_state_ids
     assert "quality-threshold-toggle" in quality_state_ids
+
+
+def test_sync_performance_drift_features_defaults_to_all_when_feature_count_is_small(monkeypatch) -> None:
+    class _FakeBackend:
+        def get_drift_results(self, model_id, granularity="daily"):
+            assert granularity == "daily"
+            return pd.DataFrame(
+                [
+                    {"feature": "amount", "period": "2026-01-21", "psi": 0.12},
+                    {"feature": "device_score", "period": "2026-01-21", "psi": 0.18},
+                    {"feature": "velocity_7d", "period": "2026-01-21", "psi": 0.15},
+                    {"feature": "country", "period": "2026-01-21", "psi": 0.07},
+                    {"feature": "channel", "period": "2026-01-21", "psi": 0.04},
+                    {"feature": "segment", "period": "2026-01-21", "psi": 0.03},
+                    {"feature": "device_type", "period": "2026-01-21", "psi": 0.05},
+                    {"feature": "account_age", "period": "2026-01-21", "psi": 0.09},
+                ]
+            )
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_output(app, "perf-drift-feature-select")
+
+    options, value = fn("fraud_model_demo", "psi", 0, {}, None)
+
+    assert [option["value"] for option in options] == [
+        "device_score",
+        "velocity_7d",
+        "amount",
+        "account_age",
+        "country",
+        "device_type",
+        "channel",
+        "segment",
+    ]
+    assert value == [option["value"] for option in options]
 
 
 def test_scan_source_table_failure_clears_prior_scan_data(monkeypatch) -> None:
@@ -1461,7 +1567,7 @@ def test_populate_feature_deep_dive_prefers_most_drifted_feature(monkeypatch) ->
     app = create_app()
     fn = _find_callback_by_output(app, "deepdive-feature-select")
 
-    options, value, dimension_options, selected_dimension = fn("/features", "fraud_model_demo", 0, {}, None, "")
+    options, value, dimension_options, selected_dimension = fn("/features", "", "fraud_model_demo", 0, {}, None, "")
 
     assert [option["value"] for option in options] == ["amount", "device_score", "velocity_7d"]
     assert value == "device_score"

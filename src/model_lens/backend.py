@@ -3,8 +3,9 @@ from __future__ import annotations
 import inspect
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timezone
+from time import monotonic
 
 import pandas as pd
 
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 _MAX_DASHBOARD_WINDOW_HISTORY = 400
 _MAX_DASHBOARD_PERFORMANCE_WINDOWS = 180
 _MAX_DASHBOARD_DAILY_PROFILE_DAYS = 400
+_EXACT_SOURCE_DAILY_METRIC_CACHE_TTL_SECONDS = 30.0
 
 
 def _safe_json_dict(value: object) -> dict:
@@ -271,6 +273,12 @@ def _coerce_timestamp(value: object) -> pd.Timestamp | None:
     return pd.Timestamp(ts)
 
 
+def _empty_frame_with_reason(reason: str) -> pd.DataFrame:
+    frame = pd.DataFrame()
+    frame.attrs["_empty_reason"] = str(reason or "").strip().lower()
+    return frame
+
+
 def _freshness_status(config: MonitorConfig, runtime_state: MonitorRuntimeState | None) -> str:
     if runtime_state is None or runtime_state.bootstrap_status != "completed":
         return "pending_bootstrap"
@@ -370,6 +378,7 @@ def _drift_results_from_frame(frame: pd.DataFrame, granularity: str = "daily") -
 @dataclass
 class DashboardBackend:
     repository: ControlPlaneRepository
+    _exact_source_daily_metric_cache: dict[tuple[str, str, str, str], tuple[float, pd.DataFrame]] = field(default_factory=dict, init=False, repr=False)
 
     @property
     def _warehouse(self):
@@ -380,6 +389,60 @@ class DashboardBackend:
         if callable(getter):
             return getter(model_id)
         return None
+
+    def _resolved_dashboard_source_bounds(
+        self,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        fallback_dates: pd.Series | list[object] | tuple[object, ...] | None = None,
+    ) -> tuple[str | None, str | None]:
+        resolved_start = str(start_date or "").strip() or None
+        resolved_end = str(end_date or "").strip() or None
+        if resolved_start and resolved_end:
+            return resolved_start, resolved_end
+        if fallback_dates is None:
+            return None, None
+        fallback_series = pd.to_datetime(pd.Series(list(fallback_dates)), errors="coerce").dropna()
+        if fallback_series.empty:
+            return None, None
+        if not resolved_start:
+            resolved_start = str(pd.Timestamp(fallback_series.min()).date())
+        if not resolved_end:
+            resolved_end = str(pd.Timestamp(fallback_series.max()).date())
+        if resolved_start and resolved_end:
+            return resolved_start, resolved_end
+        return None, None
+
+    def _recent_unfiltered_quality_bounds(self, model_id: str) -> tuple[str | None, str | None]:
+        loader = getattr(self.repository, "get_daily_quality_profile_rows", None)
+        rows: list[dict[str, object]] = []
+        if callable(loader):
+            try:
+                rows = loader(model_id)
+            except Exception:
+                logger.exception("Failed to load recent daily quality profiles for source-fallback bounds", extra={"model_key": model_id})
+                rows = []
+        if rows:
+            frame = pd.DataFrame(rows)
+            profile_dates = pd.to_datetime(frame.get("profile_date"), errors="coerce").dropna()
+            if not profile_dates.empty:
+                return (
+                    str(pd.Timestamp(profile_dates.min()).date()),
+                    str(pd.Timestamp(profile_dates.max()).date()),
+                )
+        history = self.get_quality_history(model_id)
+        if history.empty:
+            return None, None
+        history_dates = pd.to_datetime(history.get("period"), errors="coerce").dropna()
+        if history_dates.empty:
+            history_dates = pd.to_datetime(history.get("window_end"), errors="coerce").dropna()
+        if history_dates.empty:
+            return None, None
+        return (
+            str(pd.Timestamp(history_dates.min()).date()),
+            str(pd.Timestamp(history_dates.max()).date()),
+        )
 
     def list_models(self) -> list[dict]:
         configs = self.repository.list_monitor_configs(status="active")
@@ -538,10 +601,10 @@ class DashboardBackend:
         config = self.get_monitor_config(model_id)
         if class_filter_active:
             if not supports_binary_class_filters(config):
-                return pd.DataFrame()
+                return _empty_frame_with_reason("unsupported_class_filter")
             metadata_list = self._get_window_metadata(model_id, start_date=start_date, end_date=end_date)
             if not metadata_list:
-                return pd.DataFrame()
+                return _empty_frame_with_reason("missing_class_facts")
             load_start = min(str(metadata["baseline_start"]) for metadata in metadata_list if str(metadata["baseline_start"]).strip())
             load_end = max(str(metadata["window_end"]) for metadata in metadata_list if str(metadata["window_end"]).strip())
             class_feature_rows = (
@@ -556,7 +619,18 @@ class DashboardBackend:
                 else []
             )
             if not class_feature_rows:
-                return pd.DataFrame()
+                source_probe_rows, probe_reason = self._source_daily_quality_rows_fallback(
+                    model_id,
+                    start_date=load_start,
+                    end_date=load_end,
+                    class_basis=normalized_class_basis,
+                    class_value=normalized_class_value,
+                )
+                if probe_reason == "filtered_source_bounds_unavailable":
+                    return _empty_frame_with_reason(probe_reason)
+                if probe_reason is None and source_probe_rows == []:
+                    return _empty_frame_with_reason("no_filtered_rows")
+                return _empty_frame_with_reason("missing_class_facts")
             derived = derive_refresh_result_from_daily_profiles(
                 config=config,
                 metadata_list=metadata_list,
@@ -651,10 +725,10 @@ class DashboardBackend:
         end_date: str | None = None,
         class_basis: str | None = None,
         class_value: str | None = None,
-    ) -> list[dict[str, object]]:
+    ) -> tuple[list[dict[str, object]], str]:
         normalized_class_basis, normalized_class_value, class_filter_active = normalize_class_filter(class_basis, class_value)
         if class_filter_active:
-            return (
+            persisted_rows = (
                 self.repository.get_daily_class_quality_profile_rows(
                     model_id,
                     start_date=start_date,
@@ -665,7 +739,21 @@ class DashboardBackend:
                 if hasattr(self.repository, "get_daily_class_quality_profile_rows")
                 else []
             )
-        return (
+            if persisted_rows:
+                return persisted_rows, ""
+            source_rows, empty_reason = self._source_daily_quality_rows_fallback(
+                model_id,
+                start_date=start_date,
+                end_date=end_date,
+                class_basis=normalized_class_basis,
+                class_value=normalized_class_value,
+            )
+            if source_rows is not None:
+                if source_rows:
+                    return source_rows, ""
+                return [], empty_reason or "no_filtered_rows"
+            return [], empty_reason or "missing_class_facts"
+        rows = (
             self.repository.get_daily_quality_profile_rows(
                 model_id,
                 start_date=start_date,
@@ -674,6 +762,45 @@ class DashboardBackend:
             if hasattr(self.repository, "get_daily_quality_profile_rows")
             else []
         )
+        return rows, ""
+
+    def _source_daily_quality_rows_fallback(
+        self,
+        model_id: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        class_basis: str | None = None,
+        class_value: str | None = None,
+    ) -> tuple[list[dict[str, object]] | None, str | None]:
+        loader = getattr(self.repository, "get_source_daily_quality_profile_rows", None)
+        if loader is None:
+            return None, "missing_class_facts"
+        config = self.get_monitor_config(model_id, status=None)
+        if not supports_binary_class_filters(config):
+            return None, "unsupported_class_filter"
+        resolved_start, resolved_end = self._resolved_dashboard_source_bounds(
+            start_date=start_date,
+            end_date=end_date,
+            fallback_dates=None if (start_date or end_date) else list(self._recent_unfiltered_quality_bounds(model_id)),
+        )
+        if not resolved_start or not resolved_end:
+            return None, "filtered_source_bounds_unavailable"
+        try:
+            rows = loader(
+                config,
+                start_date=resolved_start,
+                end_date=resolved_end,
+                class_basis=class_basis,
+                class_value=class_value,
+            )
+            return rows, None
+        except Exception:
+            logger.exception(
+                "Failed to derive filtered daily quality profiles directly from source rows",
+                extra={"model_key": model_id},
+            )
+            return None, "missing_class_facts"
 
     def get_quality_stats(
         self,
@@ -686,16 +813,18 @@ class DashboardBackend:
     ) -> dict:
         _, _, class_filter_active = normalize_class_filter(class_basis, class_value)
         if start_date or end_date or class_filter_active:
-            return _quality_summary_from_daily_profiles(
+            rows, empty_reason = self._daily_quality_rows(
                 model_id,
-                self._daily_quality_rows(
-                    model_id,
-                    start_date=start_date,
-                    end_date=end_date,
-                    class_basis=class_basis,
-                    class_value=class_value,
-                ),
+                start_date=start_date,
+                end_date=end_date,
+                class_basis=class_basis,
+                class_value=class_value,
             )
+            if rows:
+                return _quality_summary_from_daily_profiles(model_id, rows)
+            if class_filter_active:
+                return {"_empty_reason": empty_reason or "no_filtered_rows"}
+            return {}
         generation_id = self._published_generation_id(model_id)
         filters = ["model_key = %s"]
         params: list[object] = [model_id]
@@ -746,7 +875,7 @@ class DashboardBackend:
                         end_date=end_date,
                         class_basis=class_basis,
                         class_value=class_value,
-                    )
+                    )[0]
                 )
             )
         generation_id = self._published_generation_id(model_id)
@@ -1504,8 +1633,8 @@ class DashboardBackend:
         self,
         model_id: str,
         *,
-        start_date: str | None = None,
-        end_date: str | None = None,
+        start_date: str,
+        end_date: str,
     ) -> pd.DataFrame:
         loader = getattr(self.repository, "get_source_daily_label_metric_rows", None)
         if loader is None:
@@ -1513,6 +1642,12 @@ class DashboardBackend:
         config = self.get_monitor_config(model_id, status=None)
         if not supports_binary_class_filters(config):
             return pd.DataFrame()
+        generation_id = self._published_generation_id(model_id) or ""
+        cache_key = (model_id, start_date, end_date, generation_id)
+        cached = self._exact_source_daily_metric_cache.get(cache_key)
+        now = monotonic()
+        if cached and cached[0] > now:
+            return cached[1].copy()
         try:
             frame = pd.DataFrame(
                 loader(
@@ -1524,7 +1659,14 @@ class DashboardBackend:
         except Exception:
             logger.exception("Failed to derive daily label metrics directly from the source rows", extra={"model_key": model_id})
             return pd.DataFrame()
+        expired_keys = [key for key, (expires_at, _) in self._exact_source_daily_metric_cache.items() if expires_at <= now]
+        for key in expired_keys:
+            self._exact_source_daily_metric_cache.pop(key, None)
         if frame.empty:
+            self._exact_source_daily_metric_cache[cache_key] = (
+                now + _EXACT_SOURCE_DAILY_METRIC_CACHE_TTL_SECONDS,
+                pd.DataFrame(),
+            )
             return frame
         frame["profile_date_ts"] = pd.to_datetime(frame["profile_date"], errors="coerce")
         for column in (
@@ -1543,7 +1685,12 @@ class DashboardBackend:
         ):
             if column in frame.columns:
                 frame[column] = pd.to_numeric(frame[column], errors="coerce")
-        return frame.sort_values("profile_date_ts").reset_index(drop=True)
+        normalized = frame.sort_values("profile_date_ts").reset_index(drop=True)
+        self._exact_source_daily_metric_cache[cache_key] = (
+            now + _EXACT_SOURCE_DAILY_METRIC_CACHE_TTL_SECONDS,
+            normalized.copy(),
+        )
+        return normalized
 
     def _resolved_daily_label_metrics(
         self,
@@ -1551,14 +1698,17 @@ class DashboardBackend:
         *,
         start_date: str | None = None,
         end_date: str | None = None,
+        exact_source_start_date: str | None = None,
+        exact_source_end_date: str | None = None,
     ) -> pd.DataFrame:
-        exact = self._source_daily_label_metrics_fallback(
-            model_id,
-            start_date=start_date,
-            end_date=end_date,
-        )
-        if not exact.empty:
-            return exact
+        if exact_source_start_date and exact_source_end_date:
+            exact = self._source_daily_label_metrics_fallback(
+                model_id,
+                start_date=exact_source_start_date,
+                end_date=exact_source_end_date,
+            )
+            if not exact.empty:
+                return exact
         return self.get_daily_label_metrics(
             model_id,
             start_date=start_date,
@@ -1634,6 +1784,8 @@ class DashboardBackend:
             model_id,
             start_date=bounds.get("window_start") or None,
             end_date=bounds.get("window_end") or None,
+            exact_source_start_date=bounds.get("window_start") or None,
+            exact_source_end_date=bounds.get("window_end") or None,
         )
         if frame.empty:
             window_metrics = self._latest_window_metric_fallback_from_window_rows(model_id)
@@ -1726,10 +1878,16 @@ class DashboardBackend:
         if uses_daily_classification_timeline and not dated.empty:
             start_date = str(dated["window_end"].min().date())
             end_date = str(dated["window_end"].max().date())
+            exact_source_start_date, exact_source_end_date = self._resolved_dashboard_source_bounds(
+                start_date=start_date,
+                end_date=end_date,
+            )
             label_metrics = self._resolved_daily_label_metrics(
                 model_id,
                 start_date=start_date,
                 end_date=end_date,
+                exact_source_start_date=exact_source_start_date,
+                exact_source_end_date=exact_source_end_date,
             )
         elif uses_daily_classification_timeline:
             label_metrics = self._resolved_daily_label_metrics(model_id)

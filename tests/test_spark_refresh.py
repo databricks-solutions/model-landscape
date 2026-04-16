@@ -14,6 +14,7 @@ from model_lens.services.table_names import TableNames
 
 SparkSession = pytest.importorskip("pyspark.sql").SparkSession
 SparkRefreshRepository = pytest.importorskip("model_lens.services.spark_refresh").SparkRefreshRepository
+iter_local_rows = pytest.importorskip("model_lens.services.spark_refresh")._iter_local_rows
 
 
 class DummyWarehouse:
@@ -90,6 +91,20 @@ def _source_table_name() -> str:
 
 def _label_table_name() -> str:
     return f"model_lens_labels_{uuid4().hex}"
+
+
+def test_iter_local_rows_returns_dicts_compatible_with_refresh_runtime() -> None:
+    spark = _spark()
+    frame = spark.createDataFrame(
+        [
+            {"generation_id": "gen-1", "window_end": "2026-01-21"},
+        ]
+    )
+
+    rows = list(iter_local_rows(frame))
+
+    assert rows == [{"generation_id": "gen-1", "window_end": "2026-01-21"}]
+    assert rows[0].get("generation_id") == "gen-1"
 
 
 class PersistedSparkRefreshRepository(SparkRefreshRepository):

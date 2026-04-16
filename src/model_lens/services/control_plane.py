@@ -1506,6 +1506,140 @@ class ControlPlaneRepository:
             )
         return rows
 
+    def get_source_daily_quality_profile_rows(
+        self,
+        config: MonitorConfig,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        class_basis: str | None = None,
+        class_value: str | None = None,
+    ) -> list[dict[str, Any]]:
+        self.validate_monitor_source(config)
+        if not config.contract.label_col:
+            return []
+
+        ts_col = quote_column(validate_identifier(config.contract.timestamp_col))
+        prediction_expr = f"s.{quote_column(validate_identifier(config.contract.prediction_col))}"
+        score_expr = None
+        if config.contract.prediction_score_col:
+            score_expr = f"s.{quote_column(validate_identifier(config.contract.prediction_score_col))}"
+
+        label_expr = None
+        join_sql = ""
+        source_columns = self._warehouse.get_columns(config.source_table) if config.labels_table else []
+        source_join_col = _resolve_source_labels_join_col(
+            source_columns,
+            config.contract.entity_id_col,
+            config.labels_join_col,
+        )
+        if config.labels_table and config.contract.label_col and source_join_col and config.labels_join_col:
+            validate_identifier(config.labels_table)
+            label_col = validate_identifier(config.contract.label_col)
+            join_col = validate_identifier(config.labels_join_col)
+            label_expr = f"l.{quote_column(label_col)}"
+            if config.labels_order_col:
+                order_col = validate_identifier(config.labels_order_col)
+                join_source = f"""
+                    (
+                        SELECT {quote_column(join_col)}, {quote_column(label_col)}
+                        FROM (
+                            SELECT
+                                {quote_column(join_col)},
+                                {quote_column(label_col)},
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY {quote_column(join_col)}
+                                    ORDER BY {quote_column(order_col)} DESC
+                                ) AS {quote_column("model_lens_label_rank")}
+                            FROM {config.labels_table}
+                        ) ranked_labels
+                        WHERE {quote_column("model_lens_label_rank")} = 1
+                    ) l
+                """
+            else:
+                join_source = f"{config.labels_table} l"
+            join_sql = (
+                f" LEFT JOIN {join_source}"
+                f" ON s.{quote_column(source_join_col)}"
+                f" = l.{quote_column(join_col)}"
+            )
+        elif config.contract.label_col:
+            label_expr = f"s.{quote_column(validate_identifier(config.contract.label_col))}"
+
+        if not label_expr:
+            return []
+
+        normalized_basis = str(class_basis or "").strip().lower()
+        normalized_value = str(class_value or "").strip().lower()
+        if normalized_basis not in {"actual", "predicted"} or normalized_value not in {"positive", "negative"}:
+            return []
+
+        filters, params = self._source_filters(config, start_date=start_date, end_date=end_date, alias="s")
+        where_sql = f" WHERE {' AND '.join(filters)}" if filters else ""
+        pred_binary_expr = _sql_binary_prediction_expression(prediction_expr, score_expression=score_expr)
+        label_binary_expr = _sql_binary_indicator(label_expr)
+        class_filter_column = "label_binary" if normalized_basis == "actual" else "pred_binary"
+        class_filter_value = 1 if normalized_value == "positive" else 0
+        prediction_value_expr = f"CAST({prediction_expr} AS DOUBLE)"
+        feature_select = ", ".join(
+            f"s.{quote_column(validate_identifier(feature))} AS {quote_column(validate_identifier(feature))}"
+            for feature in config.contract.feature_columns
+        )
+        feature_projection = f", {feature_select}" if feature_select else ""
+        null_rate_sql = ", ".join(
+            f"ROUND(AVG(CASE WHEN {quote_column(validate_identifier(feature))} IS NULL THEN 100.0 ELSE 0.0 END), 2) AS {quote_column(validate_identifier(feature))}"
+            for feature in config.contract.feature_columns
+        )
+        null_rate_projection = f", {null_rate_sql}" if null_rate_sql else ""
+        frame = self._warehouse.query_params(
+            f"""
+            WITH classified AS (
+                SELECT
+                    CAST(s.{ts_col} AS DATE) AS profile_date,
+                    {prediction_value_expr} AS prediction_value,
+                    {pred_binary_expr} AS pred_binary,
+                    {label_binary_expr} AS label_binary
+                    {feature_projection}
+                FROM {config.source_table} s
+                {join_sql}
+                {where_sql}
+            )
+            SELECT
+                CAST(profile_date AS STRING) AS profile_date,
+                COUNT(*) AS row_count,
+                AVG(prediction_value) AS prediction_mean,
+                STDDEV_SAMP(prediction_value) AS prediction_std,
+                SUM(CASE WHEN label_binary IS NOT NULL THEN 1 ELSE 0 END) AS label_row_count
+                {null_rate_projection}
+            FROM classified
+            WHERE {class_filter_column} = {class_filter_value}
+            GROUP BY profile_date
+            ORDER BY profile_date
+            """,
+            tuple(params),
+        )
+        if frame.empty:
+            return []
+
+        rows: list[dict[str, Any]] = []
+        for _, row in frame.iterrows():
+            null_rates = {
+                feature: round(float(pd.to_numeric(pd.Series([row.get(feature)]), errors="coerce").iloc[0] or 0.0), 2)
+                for feature in config.contract.feature_columns
+            }
+            rows.append(
+                {
+                    "model_key": config.model_key,
+                    "profile_date": _as_text(row.get("profile_date")),
+                    "row_count": int(row.get("row_count", 0) or 0),
+                    "prediction_mean": _as_float(row.get("prediction_mean")),
+                    "prediction_std": _as_float(row.get("prediction_std")),
+                    "null_rates": json.dumps(null_rates),
+                    "label_row_count": int(row.get("label_row_count", 0) or 0),
+                }
+            )
+        return rows
+
     def get_source_profile(
         self,
         config: MonitorConfig,

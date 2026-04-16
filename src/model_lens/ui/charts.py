@@ -249,7 +249,9 @@ def build_drift_timeline(
     df: pd.DataFrame,
     features: list[str],
     metric: str = "psi",
-    thresholds: dict | None = None,
+    *,
+    show_thresholds: bool = False,
+    thresholds: dict[str, dict[str, float]] | None = None,
     title: str | None = None,
 ):
     if df.empty:
@@ -294,6 +296,22 @@ def build_drift_timeline(
             xanchor="left",
             showarrow=False,
             font=dict(size=12, color=COLORS["muted"]),
+        )
+    if fig.data and show_thresholds:
+        warning, critical = get_thresholds(metric, thresholds)
+        fig.add_hline(
+            y=warning,
+            line_color=COLORS["moderate"],
+            line_dash="dot",
+            annotation_text=f"Warning ({warning:.4f})",
+            annotation_position="top left",
+        )
+        fig.add_hline(
+            y=critical,
+            line_color=COLORS["high"],
+            line_dash="dash",
+            annotation_text=f"Critical ({critical:.4f})",
+            annotation_position="top left",
         )
 
     return _apply_layout(
@@ -628,19 +646,35 @@ def build_dimension_breakdown(breakdown_df: pd.DataFrame, feature_name: str, dim
         fig.add_annotation(text="No dimension data available", showarrow=False)
         return _apply_layout(fig, title=f"{feature_name} by {dimension_name}")
 
+    working = breakdown_df.copy()
+    for column in ("feature_average", "feature_p25", "feature_p50", "feature_p75"):
+        if column not in working.columns:
+            working[column] = np.nan
+    if "row_count" not in working.columns:
+        working["row_count"] = 0
+
     fig = go.Figure()
     fig.add_trace(
         go.Bar(
-            x=breakdown_df["dimension_value"],
-            y=breakdown_df["feature_average"],
+            x=working["dimension_value"],
+            y=working["feature_average"],
             name="Average",
             marker_color=COLORS["blue"],
+            customdata=working[["feature_p25", "feature_p50", "feature_p75", "row_count"]].to_numpy(),
+            hovertemplate=(
+                "<b>%{x}</b><br>"
+                "Average: %{y:.4f}<br>"
+                "P25: %{customdata[0]:.4f}<br>"
+                "P50: %{customdata[1]:.4f}<br>"
+                "P75: %{customdata[2]:.4f}<br>"
+                "Rows: %{customdata[3]:,.0f}<extra></extra>"
+            ),
         )
     )
     fig.add_trace(
         go.Scatter(
-            x=breakdown_df["dimension_value"],
-            y=breakdown_df["feature_p50"],
+            x=working["dimension_value"],
+            y=working["feature_p50"],
             name="P50",
             mode="markers+lines",
             line=dict(color=COLORS["highlight"], width=2),
@@ -648,9 +682,18 @@ def build_dimension_breakdown(breakdown_df: pd.DataFrame, feature_name: str, dim
             error_y=dict(
                 type="data",
                 symmetric=False,
-                array=(breakdown_df["feature_p75"] - breakdown_df["feature_p50"]).clip(lower=0).fillna(0.0),
-                arrayminus=(breakdown_df["feature_p50"] - breakdown_df["feature_p25"]).clip(lower=0).fillna(0.0),
+                array=(working["feature_p75"] - working["feature_p50"]).clip(lower=0).fillna(0.0),
+                arrayminus=(working["feature_p50"] - working["feature_p25"]).clip(lower=0).fillna(0.0),
                 visible=True,
+            ),
+            customdata=working[["feature_average", "feature_p25", "feature_p75", "row_count"]].to_numpy(),
+            hovertemplate=(
+                "<b>%{x}</b><br>"
+                "Median (P50): %{y:.4f}<br>"
+                "Average: %{customdata[0]:.4f}<br>"
+                "P25: %{customdata[1]:.4f}<br>"
+                "P75: %{customdata[2]:.4f}<br>"
+                "Rows: %{customdata[3]:,.0f}<extra></extra>"
             ),
         )
     )
@@ -786,8 +829,8 @@ def build_feature_bin_impact(degradation_df: pd.DataFrame, feature_contributors:
                         f"Baseline: {row['baseline_metric']:.4f}<br>"
                         f"Current: {row['current_metric']:.4f}<br>"
                         f"Delta: {delta:+.4f}<br>"
-                        f"Volume: {row['current_volume_pct']:.1f}%<br>"
-                        f"Impact: {row['degradation_contribution']:.4f}"
+                        f"Current Window Share: {row['current_volume_pct']:.1f}%<br>"
+                        f"Weighted Contribution: {row['degradation_contribution']:.4f}"
                         "<extra></extra>"
                     ),
                 )
@@ -800,7 +843,7 @@ def build_feature_bin_impact(degradation_df: pd.DataFrame, feature_contributors:
     return _apply_layout(
         fig,
         title="Feature Impact on Performance — Per-Bin Breakdown",
-        xaxis_title="Degradation Impact (wider = more impact, left = worse)",
+        xaxis_title="Weighted Contribution to Overall Metric Change (right = worse, left = better, 0 = no contribution)",
         yaxis=dict(autorange="reversed", gridcolor=COLORS["grid"], categoryorder="array", categoryarray=feature_order),
         barmode="relative",
         height=max(350, len(feature_order) * 50 + 100),

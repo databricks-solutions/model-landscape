@@ -5,7 +5,7 @@ import os
 import re
 from datetime import datetime, timezone
 from functools import lru_cache
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlencode
 
 import dash_bootstrap_components as dbc
 import pandas as pd
@@ -146,8 +146,8 @@ def _resolved_monitor_thresholds(config: MonitorConfig | None) -> dict[str, dict
     return merged_thresholds(getattr(config, "threshold_overrides", None))
 
 
-def _threshold_input_id(metric: str, level: str) -> str:
-    return f"reference-threshold-{metric}-{level}-input"
+def _threshold_input_id(metric: str, level: str, *, prefix: str = "reference") -> str:
+    return f"{prefix}-threshold-{metric}-{level}-input"
 
 
 def _coerce_threshold_input(metric: str, level: str, value: object) -> float:
@@ -1054,6 +1054,17 @@ def _selected_model_from_search(search: str | None) -> str | None:
         return None
     parsed = parse_qs(search.lstrip("?"))
     values = parsed.get("model", [])
+    if not values:
+        return None
+    selected = str(values[0]).strip()
+    return selected or None
+
+
+def _selected_feature_from_search(search: str | None) -> str | None:
+    if not search:
+        return None
+    parsed = parse_qs(search.lstrip("?"))
+    values = parsed.get("feature", [])
     if not values:
         return None
     selected = str(values[0]).strip()
@@ -2722,6 +2733,118 @@ def register_callbacks(app) -> None:
             return _callback_error_panel("incident history", error)
 
     @app.callback(
+        Output(_threshold_input_id("psi", "warning", prefix="drift"), "value"),
+        Output(_threshold_input_id("psi", "critical", prefix="drift"), "value"),
+        Output(_threshold_input_id("js_divergence", "warning", prefix="drift"), "value"),
+        Output(_threshold_input_id("js_divergence", "critical", prefix="drift"), "value"),
+        Output(_threshold_input_id("kl_divergence", "warning", prefix="drift"), "value"),
+        Output(_threshold_input_id("kl_divergence", "critical", prefix="drift"), "value"),
+        Output(_threshold_input_id("null_rate", "warning", prefix="drift"), "value"),
+        Output(_threshold_input_id("null_rate", "critical", prefix="drift"), "value"),
+        Input("url", "pathname"),
+        Input("global-model-select", "value"),
+        Input("reload-token", "data"),
+        Input("session-config-store", "data"),
+    )
+    def sync_drift_threshold_inputs(pathname, model_id, _, session_data):
+        if pathname != "/drift":
+            return (no_update,) * 8
+        if not model_id:
+            return (None,) * 8
+        try:
+            backend = _make_backend(session_data)
+            config = backend.get_monitor_config(model_id)
+            resolved_thresholds = _resolved_monitor_thresholds(config)
+            values: list[float] = []
+            for metric in THRESHOLD_METRICS:
+                warning, critical = get_thresholds(metric, resolved_thresholds)
+                values.extend([warning, critical])
+            return tuple(values)
+        except Exception:
+            return (None,) * 8
+
+    @app.callback(
+        Output("drift-threshold-status", "children"),
+        Output("reload-token", "data", allow_duplicate=True),
+        Input("drift-save-thresholds-btn", "n_clicks"),
+        Input("drift-reset-thresholds-btn", "n_clicks"),
+        State("global-model-select", "value"),
+        State(_threshold_input_id("psi", "warning", prefix="drift"), "value"),
+        State(_threshold_input_id("psi", "critical", prefix="drift"), "value"),
+        State(_threshold_input_id("js_divergence", "warning", prefix="drift"), "value"),
+        State(_threshold_input_id("js_divergence", "critical", prefix="drift"), "value"),
+        State(_threshold_input_id("kl_divergence", "warning", prefix="drift"), "value"),
+        State(_threshold_input_id("kl_divergence", "critical", prefix="drift"), "value"),
+        State(_threshold_input_id("null_rate", "warning", prefix="drift"), "value"),
+        State(_threshold_input_id("null_rate", "critical", prefix="drift"), "value"),
+        State("session-config-store", "data"),
+        prevent_initial_call=True,
+    )
+    def save_drift_thresholds(
+        _save_clicks,
+        _reset_clicks,
+        model_id,
+        psi_warning,
+        psi_critical,
+        js_warning,
+        js_critical,
+        kl_warning,
+        kl_critical,
+        null_warning,
+        null_critical,
+        session_data,
+    ):
+        if not model_id:
+            return _status_alert("Select a monitor before updating drift thresholds.", "warning"), no_update
+        backend = _make_backend(session_data)
+        config = backend.get_monitor_config(model_id)
+        if not config:
+            return _status_alert("Selected monitor no longer exists.", "warning"), no_update
+        try:
+            triggered_id = ctx.triggered_id
+            threshold_overrides = (
+                {}
+                if triggered_id == "drift-reset-thresholds-btn"
+                else _collect_threshold_overrides_from_inputs(
+                    {
+                        "psi": (psi_warning, psi_critical),
+                        "js_divergence": (js_warning, js_critical),
+                        "kl_divergence": (kl_warning, kl_critical),
+                        "null_rate": (null_warning, null_critical),
+                    }
+                )
+            )
+            updated = MonitorConfig(
+                model_key=config.model_key,
+                display_name=config.display_name,
+                source_table=config.source_table,
+                contract=config.contract,
+                baseline=config.baseline,
+                problem_type=config.problem_type,
+                model_id_value=config.model_id_value,
+                model_version_value=config.model_version_value,
+                labels_table=config.labels_table,
+                labels_join_col=config.labels_join_col,
+                labels_order_col=config.labels_order_col,
+                performance_metric_names=config.performance_metric_names,
+                default_performance_metric=config.default_performance_metric,
+                performance_binning_mode=config.performance_binning_mode,
+                performance_binning_clip_percentile=config.performance_binning_clip_percentile,
+                drift_cadence_preset=config.drift_cadence_preset,
+                performance_cadence_preset=config.performance_cadence_preset,
+                schedule_enabled=config.schedule_enabled,
+                threshold_overrides=threshold_overrides,
+                mlflow=config.mlflow,
+                created_by=config.created_by,
+                status=getattr(config, "status", "active"),
+            )
+            backend.repository.upsert_monitor_config(updated)
+        except Exception as error:
+            return _status_alert(f"Could not update drift thresholds: {error}", "danger"), no_update
+        action_text = "Reset drift thresholds to defaults." if ctx.triggered_id == "drift-reset-thresholds-btn" else "Saved drift thresholds."
+        return _status_alert(action_text, "success"), datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    @app.callback(
         Output("drift-heatmap-container", "children"),
         Output("drift-categorical-note", "children"),
         Output("drift-timeline-container", "children"),
@@ -2781,11 +2904,18 @@ def register_callbacks(app) -> None:
                 class_value=class_value,
             )
             if drift.empty:
+                empty_reason = str(drift.attrs.get("_empty_reason") or "").strip().lower()
                 if class_filter_active:
-                    empty = make_empty_state(
-                        "Filtered drift history is unavailable until the next refresh populates class-aware daily facts.",
-                        icon="fas fa-wave-square",
-                    )
+                    if empty_reason == "no_filtered_rows":
+                        empty_message = "No rows matched the selected class filter in this date range."
+                    elif empty_reason == "filtered_source_bounds_unavailable":
+                        empty_message = (
+                            "Filtered drift history is not available for the full range yet. "
+                            "Select a date range or refresh to populate class-aware daily facts."
+                        )
+                    else:
+                        empty_message = "Filtered drift history is unavailable until the next refresh populates class-aware daily facts."
+                    empty = make_empty_state(empty_message, icon="fas fa-wave-square")
                 else:
                     empty = make_empty_state("No drift history available yet. Run a refresh to populate this page.", icon="fas fa-wave-square")
                 return empty, html.Div(), html.Div(), html.Div()
@@ -2851,6 +2981,8 @@ def register_callbacks(app) -> None:
                         filtered_drift,
                         timeline_features,
                         metric=metric or "psi",
+                        show_thresholds=bool(show_thresholds),
+                        thresholds=resolved_thresholds,
                         title=f"{(metric or 'psi').upper()} Over Time{title_suffix}",
                     )
                 ),
@@ -2876,13 +3008,14 @@ def register_callbacks(app) -> None:
         Output("deepdive-dimension-select", "options"),
         Output("deepdive-dimension-select", "value"),
         Input("url", "pathname"),
+        Input("url", "search"),
         Input("global-model-select", "value"),
         Input("reload-token", "data"),
         Input("session-config-store", "data"),
         State("deepdive-feature-select", "value"),
         State("deepdive-dimension-select", "value"),
     )
-    def populate_feature_deep_dive(pathname, model_id, _, session_data, feature_value, dimension_value):
+    def populate_feature_deep_dive(pathname, search, model_id, _, session_data, feature_value, dimension_value):
         if pathname != "/features":
             return no_update, no_update, no_update, no_update
         try:
@@ -2893,7 +3026,8 @@ def register_callbacks(app) -> None:
             return [], None, [], ""
         feature_values = {option["value"] for option in feature_options}
         dimension_values = {option["value"] for option in dimension_options}
-        selected_feature = feature_value if feature_value in feature_values else None
+        requested_feature = _selected_feature_from_search(search)
+        selected_feature = requested_feature if requested_feature in feature_values else (feature_value if feature_value in feature_values else None)
         if selected_feature is None and model_id:
             try:
                 drift = backend.get_drift_results(model_id)
@@ -3020,7 +3154,15 @@ def register_callbacks(app) -> None:
             dimension_chart = html.Div()
             if dimension:
                 breakdown = backend.get_dimension_breakdown(model_id, feature, dimension)
-                dimension_chart = make_chart_card(charts.build_dimension_breakdown(breakdown, feature, dimension))
+                dimension_chart = html.Div(
+                    [
+                        html.Small(
+                            "This chart compares average vs median and the middle 50% spread (P25 to P75) for each slice.",
+                            className="text-muted d-block mb-2",
+                        ),
+                        make_chart_card(charts.build_dimension_breakdown(breakdown, feature, dimension)),
+                    ]
+                )
             outlier_text = "Off"
             if normalized_outlier_mode == "percentile_clip":
                 outlier_text = f"Percentile Clip (P={outlier_value:.1f})"
@@ -3102,6 +3244,19 @@ def register_callbacks(app) -> None:
                 class_basis=class_basis,
                 class_value=class_value,
             )
+            empty_reason = str((quality or {}).get("_empty_reason") or "").strip().lower()
+            if empty_reason == "no_filtered_rows":
+                empty = make_empty_state(
+                    "No rows matched the selected class filter in this date range.",
+                    icon="fas fa-database",
+                )
+                return empty, html.Div(), html.Div(), html.Div()
+            if empty_reason == "filtered_source_bounds_unavailable":
+                empty = make_empty_state(
+                    "Filtered quality history is not available for the full range yet. Select a date range or refresh to populate class-aware daily facts.",
+                    icon="fas fa-database",
+                )
+                return empty, html.Div(), html.Div(), html.Div()
             if not quality:
                 empty_message = (
                     "Filtered quality history is unavailable until the next refresh populates class-aware daily facts."
@@ -3235,6 +3390,44 @@ def register_callbacks(app) -> None:
             return options, current_metric if current_metric in {option["value"] for option in options} else "f1"
 
     @app.callback(
+        Output("perf-drift-feature-select", "options"),
+        Output("perf-drift-feature-select", "value"),
+        Input("global-model-select", "value"),
+        Input("perf-drift-metric-select", "value"),
+        Input("reload-token", "data"),
+        Input("session-config-store", "data"),
+        State("perf-drift-feature-select", "value"),
+    )
+    def sync_performance_drift_features(model_id, drift_metric, _, session_data, current_values):
+        if not model_id:
+            return [], []
+        try:
+            backend = _make_backend(session_data)
+            drift = backend.get_drift_results(model_id, granularity="daily")
+            if drift.empty or "feature" not in drift.columns:
+                return [], []
+            metric_key = str(drift_metric or "psi").strip().lower() or "psi"
+            if metric_key in drift.columns:
+                ranked = _historical_drift_feature_ranking(
+                    drift,
+                    metric=metric_key,
+                    top_n=max(int(drift["feature"].nunique()), 1),
+                )
+                ordered_features = ranked["feature"].astype(str).tolist()
+            else:
+                ordered_features = drift["feature"].dropna().astype(str).drop_duplicates().tolist()
+            options = _option_list(ordered_features)
+            valid_values = {option["value"] for option in options}
+            requested_values = current_values if isinstance(current_values, list) else ([current_values] if current_values else [])
+            selected = [str(value) for value in requested_values if str(value) in valid_values]
+            if not selected:
+                selected = ordered_features if len(ordered_features) <= 12 else ordered_features[:12]
+            return options, selected
+        except Exception as error:
+            logger.exception("Failed to sync performance drift features", exc_info=error)
+            return [], []
+
+    @app.callback(
         Output("perf-labels-alert", "children"),
         Output("perf-kpi-cards", "children"),
         Output("perf-timeline-container", "children"),
@@ -3246,11 +3439,13 @@ def register_callbacks(app) -> None:
         Input("global-model-select", "value"),
         Input("perf-metric-select", "value"),
         Input("perf-drift-metric-select", "value"),
+        Input("perf-drift-threshold-toggle", "value"),
+        Input("perf-drift-feature-select", "value"),
         Input("reload-token", "data"),
         Input("session-config-store", "data"),
         State("perf-feature-select", "value"),
     )
-    def render_performance(pathname, model_id, metric_name, drift_metric, _, session_data, current_feature):
+    def render_performance(pathname, model_id, metric_name, drift_metric, perf_show_thresholds, current_drift_features, _, session_data, current_feature):
         if pathname != "/performance":
             return (no_update,) * 7
         try:
@@ -3259,6 +3454,7 @@ def register_callbacks(app) -> None:
                 return empty, html.Div(), html.Div(), html.Div(), [], None, html.Div()
             backend = _make_backend(session_data)
             config = backend.get_monitor_config(model_id)
+            resolved_thresholds = _resolved_monitor_thresholds(config)
             if not config or not config.contract.label_col:
                 return (
                     _status_alert("This monitor does not have labels configured, so performance degradation analysis is unavailable.", "warning"),
@@ -3394,7 +3590,12 @@ def register_callbacks(app) -> None:
                 if isinstance(drift, pd.DataFrame) and not drift.empty
                 else pd.DataFrame(columns=["feature", "_metric_rank"])
             )
-            drift_features = drift_ranking["feature"].head(5).astype(str).tolist() if not drift_ranking.empty else []
+            drift_feature_order = drift_ranking["feature"].astype(str).tolist() if not drift_ranking.empty else []
+            drift_feature_values = set(drift_feature_order)
+            requested_drift_features = current_drift_features if isinstance(current_drift_features, list) else ([current_drift_features] if current_drift_features else [])
+            drift_features = [str(value) for value in requested_drift_features if str(value) in drift_feature_values]
+            if not drift_features:
+                drift_features = drift_feature_order if len(drift_feature_order) <= 12 else drift_feature_order[:12]
             drift_metric_label = _THRESHOLD_LABELS.get(selected_drift_metric, str(selected_drift_metric or "psi").upper())
             note_source = latest_bins if not latest_bins.empty else all_bins
             note = note_source[[column for column in ("window_start", "window_end") if column in note_source.columns]].drop_duplicates().astype(str)
@@ -3424,6 +3625,51 @@ def register_callbacks(app) -> None:
                         className="text-muted d-block",
                     )
                 )
+            impact_help_button = dbc.Button(
+                html.I(className="fas fa-circle-question"),
+                id="perf-feature-impact-help-btn",
+                color="link",
+                className="p-0 text-info text-decoration-none",
+            )
+            impact_help = dbc.Popover(
+                [
+                    dbc.PopoverHeader("How to Read Feature Impact"),
+                    dbc.PopoverBody(
+                        [
+                            html.Div(
+                                [
+                                    html.Div(style={"width": "38px", "height": "10px", "backgroundColor": "#e74c3c", "display": "inline-block", "marginRight": "8px"}),
+                                    html.Span("Long red bars hurt the selected metric most."),
+                                ],
+                                className="mb-2",
+                            ),
+                            html.Div(
+                                [
+                                    html.Div(style={"width": "38px", "height": "10px", "backgroundColor": "#2ecc71", "display": "inline-block", "marginRight": "8px"}),
+                                    html.Span("Long green bars help the selected metric most."),
+                                ],
+                                className="mb-2",
+                            ),
+                            html.P("Baseline and Current are the slice-level metric values. Delta is their change. Current Window Share shows how much of the latest traffic sits in that slice. Weighted Contribution is the slice's share-weighted pull on the overall metric.", className="mb-2"),
+                            html.P("The center line at 0 means no net contribution. Right side is worse. Left side is better.", className="mb-0"),
+                        ]
+                    ),
+                ],
+                target="perf-feature-impact-help-btn",
+                trigger="click",
+                placement="auto",
+            )
+            latest_bin_table = latest_bin_table.rename(
+                columns={
+                    "feature": "Feature",
+                    "bin": "Bin",
+                    "baseline": "Baseline",
+                    "current": "Current",
+                    "delta": "Delta",
+                    "volume_pct": "Current Window Share (%)",
+                    "impact": "Weighted Contribution",
+                }
+            )
             return (
                 alert,
                 kpi_cards,
@@ -3447,13 +3693,51 @@ def register_callbacks(app) -> None:
                                 drift,
                                 drift_features,
                                 metric=selected_drift_metric,
+                                show_thresholds=bool(perf_show_thresholds),
+                                thresholds=resolved_thresholds,
                                 title=f"{drift_metric_label} Over Time (Top Drifting Features)",
                             ),
                             class_name="mb-3",
                         ),
-                        make_chart_card(charts.build_feature_bin_impact(feature_frame, contributors)),
-                        html.H6("Latest Bin Metrics", className="text-light mt-3 mb-2"),
-                        _render_frame(latest_bin_table, "No bin-level performance data available."),
+                        html.Div(
+                            [
+                                html.Div(
+                                    [
+                                        html.H6("Feature Impact on Performance", className="text-light mb-0"),
+                                        impact_help_button,
+                                    ],
+                                    className="d-flex align-items-center gap-2 mb-2",
+                                ),
+                                impact_help,
+                                make_chart_card(charts.build_feature_bin_impact(feature_frame, contributors)),
+                            ],
+                            className="mb-3",
+                        ),
+                        html.Div(
+                            [
+                                html.Div(
+                                    [
+                                        html.H6("Latest Bin Metrics", className="text-light mb-0"),
+                                        dbc.Button(
+                                            html.I(className="fas fa-circle-question"),
+                                            id="perf-latest-bin-help-btn",
+                                            color="link",
+                                            className="p-0 text-info text-decoration-none",
+                                        ),
+                                    ],
+                                    className="d-flex align-items-center gap-2 mb-2",
+                                ),
+                                dbc.Popover(
+                                    dbc.PopoverBody(
+                                        "Weighted Contribution is the slice's share-weighted pull on the overall metric in the latest comparison window.",
+                                    ),
+                                    target="perf-latest-bin-help-btn",
+                                    trigger="click",
+                                    placement="auto",
+                                ),
+                                _render_frame(latest_bin_table, "No bin-level performance data available."),
+                            ]
+                        ),
                     ]
                 ),
                 feature_options,
@@ -3477,16 +3761,24 @@ def register_callbacks(app) -> None:
         if pathname != "/performance":
             return no_update
         if not model_id or not feature:
-            return html.Div()
+            return html.Div("Select a feature to open it in Feature Deep Dive.", className="text-muted")
         try:
-            backend = _make_backend(session_data)
-            resolved_metric = metric_name or _default_performance_metric(model_id, backend)
-            performance = backend.get_performance_summary(model_id, metric_name=resolved_metric)
-            latest_bins = performance["latest_bins"] if not performance["latest_bins"].empty else performance.get("all_bins", pd.DataFrame())
-            feature_bins = latest_bins[latest_bins["feature"] == feature]
-            return make_chart_card(charts.build_bin_detail(feature_bins, feature, metric_name=resolved_metric))
+            href = f"/features?{urlencode({'model': model_id, 'feature': feature})}"
+            return html.Div(
+                [
+                    html.Small(
+                        "Configurable binning and outlier handling now live in Feature Deep Dive for this selected feature.",
+                        className="text-muted d-block mb-2",
+                    ),
+                    dbc.Button(
+                        f"Open {feature} in Feature Deep Dive",
+                        href=href,
+                        color="secondary",
+                    ),
+                ]
+            )
         except Exception as error:
-            return _callback_error_panel("bin-level performance detail", error)
+            return _callback_error_panel("feature deep dive shortcut", error)
 
     @app.callback(
         Output("reference-page-body", "children"),

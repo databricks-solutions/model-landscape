@@ -143,6 +143,91 @@ def layout():
                 ],
                 className="mb-4",
             ),
+            dbc.Accordion(
+                [
+                    dbc.AccordionItem(
+                        [
+                            html.Small(
+                                "Edit warning and critical thresholds for drift and null-rate guides on this page. Saved values also drive Overview severity and future incidents.",
+                                className="text-muted d-block mb-3",
+                            ),
+                            html.Div(id="drift-threshold-status", className="mb-2"),
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        [
+                                            html.H6("PSI", className="text-light mb-3"),
+                                            dbc.Label("Warning", className="text-muted"),
+                                            dbc.Input(id="drift-threshold-psi-warning-input", type="number", min=0, step=0.0001),
+                                            dbc.Label("Critical", className="text-muted mt-2"),
+                                            dbc.Input(id="drift-threshold-psi-critical-input", type="number", min=0, step=0.0001),
+                                        ],
+                                        md=3,
+                                    ),
+                                    dbc.Col(
+                                        [
+                                            html.H6("Jensen-Shannon", className="text-light mb-3"),
+                                            dbc.Label("Warning", className="text-muted"),
+                                            dbc.Input(id="drift-threshold-js_divergence-warning-input", type="number", min=0, step=0.0001),
+                                            dbc.Label("Critical", className="text-muted mt-2"),
+                                            dbc.Input(id="drift-threshold-js_divergence-critical-input", type="number", min=0, step=0.0001),
+                                        ],
+                                        md=3,
+                                    ),
+                                    dbc.Col(
+                                        [
+                                            html.H6("KL Divergence", className="text-light mb-3"),
+                                            dbc.Label("Warning", className="text-muted"),
+                                            dbc.Input(id="drift-threshold-kl_divergence-warning-input", type="number", min=0, step=0.0001),
+                                            dbc.Label("Critical", className="text-muted mt-2"),
+                                            dbc.Input(id="drift-threshold-kl_divergence-critical-input", type="number", min=0, step=0.0001),
+                                        ],
+                                        md=3,
+                                    ),
+                                    dbc.Col(
+                                        [
+                                            html.H6("Null Rate (%)", className="text-light mb-3"),
+                                            dbc.Label("Warning", className="text-muted"),
+                                            dbc.Input(id="drift-threshold-null_rate-warning-input", type="number", min=0, step=0.01),
+                                            dbc.Label("Critical", className="text-muted mt-2"),
+                                            dbc.Input(id="drift-threshold-null_rate-critical-input", type="number", min=0, step=0.01),
+                                        ],
+                                        md=3,
+                                    ),
+                                ],
+                                className="g-3",
+                            ),
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        dbc.Button(
+                                            "Save Thresholds",
+                                            id="drift-save-thresholds-btn",
+                                            color="primary",
+                                            className="w-100",
+                                        ),
+                                        md=3,
+                                    ),
+                                    dbc.Col(
+                                        dbc.Button(
+                                            "Reset to Defaults",
+                                            id="drift-reset-thresholds-btn",
+                                            color="secondary",
+                                            outline=True,
+                                            className="w-100",
+                                        ),
+                                        md=3,
+                                    ),
+                                ],
+                                className="g-3 mt-3",
+                            ),
+                        ],
+                        title="Thresholds",
+                    )
+                ],
+                start_collapsed=True,
+                className="mb-4",
+            ),
             dcc.Loading(
                 type="default",
                 children=html.Div(
