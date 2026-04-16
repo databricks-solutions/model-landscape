@@ -17,7 +17,12 @@ from model_lens.app import (
     _workspace_lakebase_instances,
     create_app,
 )
-from model_lens.callbacks import _format_runtime_setting_value, _ready_for_session, _setup_retry_message
+from model_lens.callbacks import (
+    _format_runtime_setting_value,
+    _outlier_control_value,
+    _ready_for_session,
+    _setup_retry_message,
+)
 from model_lens.pages import data_quality, drift_analysis, feature_deep_dive, incidents, overview, performance, reference
 from model_lens.ui import charts
 
@@ -624,7 +629,12 @@ def test_setup_retry_message_tells_user_to_click_setup_again() -> None:
     message = _setup_retry_message("warehouse permission denied")
 
     assert "click Setup Control Plane again to retry" in message
-    assert "warehouse permission denied" in message
+    assert "warehouse permission denied" not in message
+
+
+def test_percentile_clip_outlier_control_normalizes_zero_to_safe_minimum() -> None:
+    assert _outlier_control_value("percentile_clip", 0.0) == 1.0
+    assert _outlier_control_value("percentile_clip", -4.0) == 1.0
 
 
 def test_render_onboarding_wizard_callback_executes_for_step_two() -> None:
@@ -846,7 +856,8 @@ def test_render_overview_surfaces_backend_errors_instead_of_raising(monkeypatch)
 
     result = fn("/", None, {})
 
-    assert "Could not load overview: warehouse timeout" in str(result)
+    assert "Could not load overview. Check logs and try again." in str(result)
+    assert "warehouse timeout" not in str(result)
     assert "Overview is unavailable right now." in str(result)
 
 
@@ -900,6 +911,7 @@ def test_render_overview_surfaces_computing_pending_bucket(monkeypatch) -> None:
     rendered = str(result)
     assert "Computing/Pending" in rendered
     assert "No drift history yet" in rendered
+    assert "—" in rendered
 
 
 def test_render_overview_handles_non_string_versions(monkeypatch) -> None:
@@ -1640,7 +1652,8 @@ def test_render_quality_callback_surfaces_backend_errors_instead_of_raising(monk
 
     result = fn("/quality", "fraud_model_demo", 0, {}, 0, None, None, "all", "all", False)
 
-    assert "Could not load data quality: sql endpoint unavailable" in str(result[0])
+    assert "Could not load data quality. Check logs and try again." in str(result[0])
+    assert "sql endpoint unavailable" not in str(result[0])
     assert "Data quality is unavailable right now." in str(result[0])
 
 
@@ -1782,7 +1795,8 @@ def test_scan_source_table_failure_clears_prior_scan_data(monkeypatch) -> None:
     result = fn(1, "main.demo.inference", "", "", "", {})
 
     assert result[0] is None
-    assert "Scan failed: warehouse offline" in str(result[1])
+    assert "Scan failed. Check logs and try again." in str(result[1])
+    assert "warehouse offline" not in str(result[1])
 
 
 def test_populate_feature_deep_dive_prefers_most_drifted_feature(monkeypatch) -> None:
@@ -1892,7 +1906,8 @@ def test_render_feature_deep_dive_handles_backend_errors(monkeypatch) -> None:
 
     distribution, dimension, context = fn("/features", "fraud_model_demo", "amount", "", 0, {}, 0, "auto", 40, "", "off", 1.0)
 
-    assert "Could not load feature detail: feature read failed" in str(distribution)
+    assert "Could not load feature detail. Check logs and try again." in str(distribution)
+    assert "feature read failed" not in str(distribution)
     assert "Feature detail is unavailable right now." in str(context)
 
 

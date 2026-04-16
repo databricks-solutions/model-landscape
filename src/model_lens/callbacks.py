@@ -91,8 +91,13 @@ def _status_alert(message: str, color: str = "info") -> dbc.Alert:
     return dbc.Alert(message, color=color, className="py-2 mb-3")
 
 
+def _user_action_error_message(action: str) -> str:
+    return f"{action} failed. Check logs and try again."
+
+
 def _callback_error_message(context: str, error: Exception) -> str:
-    return f"Could not load {context}: {error}"
+    del error
+    return f"Could not load {context}. Check logs and try again."
 
 
 def _callback_error_panel(
@@ -287,9 +292,9 @@ def _outlier_control_value(mode: object, raw_value: object) -> float | None:
         return None
     numeric = pd.to_numeric(pd.Series([raw_value]), errors="coerce").iloc[0]
     if normalized_mode == "percentile_clip":
-        if pd.isna(numeric):
+        if pd.isna(numeric) or float(numeric) <= 0:
             return 1.0
-        return max(0.0, min(49.0, float(numeric)))
+        return min(49.0, float(numeric))
     if pd.isna(numeric) or float(numeric) <= 0:
         return 1.5
     return float(numeric)
@@ -342,7 +347,8 @@ def _configured_run_now_permission_hint(*, workflow_kind: str = "shared") -> str
 
 
 def _setup_retry_message(error: object) -> str:
-    return f"Setup failed. Fix the issue and click Setup Control Plane again to retry. Details: {error}"
+    del error
+    return "Setup failed. Fix the issue and click Setup Control Plane again to retry."
 
 
 def _refresh_job_unavailable_message(model_key: str, error: Exception) -> str:
@@ -352,11 +358,11 @@ def _refresh_job_unavailable_message(model_key: str, error: Exception) -> str:
     )
     if is_refresh_job_configuration_error(error):
         return (
-            f"Saved monitor {model_key}. Initial refresh is pending on the shared refresh job; automatic trigger was unavailable: {error}. "
+            f"Saved monitor {model_key}. Initial refresh is pending on the shared refresh job; automatic trigger was unavailable. "
             f"{detail}"
         )
     return (
-        f"Saved monitor {model_key}. Initial refresh is pending on the shared refresh job; automatic trigger was unavailable: {error}. "
+        f"Saved monitor {model_key}. Initial refresh is pending on the shared refresh job; automatic trigger was unavailable. "
         "The shared workflow can still pick it up on its next hourly run, or you can run it manually once job permissions are fixed."
         f"{_configured_run_now_permission_hint(workflow_kind='bootstrap')}"
     )
@@ -369,11 +375,11 @@ def _manual_refresh_unavailable_message(model_key: str, error: Exception) -> str
     )
     if is_refresh_job_configuration_error(error):
         return (
-            f"Could not trigger the initial refresh for {model_key}: {error}. "
+            f"Could not trigger the initial refresh for {model_key}. "
             f"{detail}"
         )
     return (
-        f"Could not trigger the initial refresh for {model_key}: {error}. "
+        f"Could not trigger the initial refresh for {model_key}. "
         "The shared workflow can still pick it up on its next hourly run once job permissions are fixed."
         f"{_configured_run_now_permission_hint(workflow_kind='bootstrap')}"
     )
@@ -1919,7 +1925,7 @@ def register_callbacks(app) -> None:
                 mlflow_registered_model_name=(mlflow_registered_model_name or "").strip() or None,
             )
         except Exception as error:
-            return None, _status_alert(f"Scan failed: {error}", "danger"), html.Div()
+            return None, _status_alert(_user_action_error_message("Scan"), "danger"), html.Div()
         columns = list(discovery.columns)
         preview = pd.DataFrame(discovery.preview_rows)
         schema = pd.DataFrame(discovery.schema_rows)
@@ -2536,7 +2542,7 @@ def register_callbacks(app) -> None:
             backend.repository.upsert_monitor_config(config)
             backend.repository.mark_monitor_bootstrap_pending(config)
         except Exception as error:
-            return _status_alert(f"Save failed: {error}", "danger"), no_update, no_update
+            return _status_alert(_user_action_error_message("Save"), "danger"), no_update, no_update
         messages: list[tuple[str, str]] = []
         try:
             trigger = trigger_refresh_job(
@@ -2620,7 +2626,7 @@ def register_callbacks(app) -> None:
                             avg_psi=row["avg_psi"],
                             drifting_count=row["drifting_features"],
                             total_features=row["total_features"],
-                            max_null_rate=row["max_null_rate"],
+                            max_null_rate=None if row["computing"] else row["max_null_rate"],
                             has_labels=row["has_labels"],
                             thresholds=row.get("thresholds"),
                             computing=row["computing"],
@@ -2673,7 +2679,7 @@ def register_callbacks(app) -> None:
                         "avg_js": "—" if row["computing"] else round(row["avg_js"], 4),
                         "drifting_features": "Computing/Pending" if row["computing"] else f"{row['drifting_features']} / {row['total_features']}",
                         "top_drifter": row["top_drifter"],
-                        "max_null_rate": round(row["max_null_rate"], 2),
+                        "max_null_rate": "—" if row["computing"] else round(row["max_null_rate"], 2),
                     }
                     for row in sorted_data
                 ]
@@ -2843,7 +2849,7 @@ def register_callbacks(app) -> None:
             )
             backend.repository.upsert_monitor_config(updated)
         except Exception as error:
-            return _status_alert(f"Could not update drift thresholds: {error}", "danger"), no_update
+            return _status_alert(_user_action_error_message("Updating drift thresholds"), "danger"), no_update
         action_text = "Reset drift thresholds to defaults." if ctx.triggered_id == "drift-reset-thresholds-btn" else "Saved drift thresholds."
         return _status_alert(action_text, "success"), datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -3194,7 +3200,7 @@ def register_callbacks(app) -> None:
             return distribution, dimension_chart, context_children
         except Exception as error:
             logger.exception("Failed to render feature deep dive", exc_info=error)
-            return make_empty_state(f"Could not load feature detail: {error}", icon="fas fa-triangle-exclamation"), html.Div(), "Feature detail is unavailable right now."
+            return make_empty_state("Could not load feature detail. Check logs and try again.", icon="fas fa-triangle-exclamation"), html.Div(), "Feature detail is unavailable right now."
 
     @app.callback(
         Output("quality-kpi-cards", "children"),
@@ -4663,7 +4669,7 @@ def register_callbacks(app) -> None:
                     )
                 )
         except Exception as error:
-            return _status_alert(f"Could not update monitor settings: {error}", "danger"), no_update
+            return _status_alert(_user_action_error_message("Updating monitor settings"), "danger"), no_update
         return (
             _status_alert(f"Updated monitor settings for {updated.display_name}.", "success"),
             datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -4680,7 +4686,7 @@ def register_callbacks(app) -> None:
         try:
             status = update_shared_workflow_schedule(int(interval_hours or 1))
         except Exception as error:
-            return _status_alert(f"Could not update the shared workflow schedule: {error}", "danger"), no_update
+            return _status_alert(_user_action_error_message("Updating the shared workflow schedule"), "danger"), no_update
         return (
             _status_alert(
                 f"Updated the shared refresh workflow to {status.current_label.lower()} for job {status.job_id}.",
@@ -4760,7 +4766,7 @@ def register_callbacks(app) -> None:
         try:
             backend.repository.archive_monitor(model_id)
         except Exception as error:
-            return _status_alert(f"Could not archive monitor: {error}", "danger"), no_update
+            return _status_alert(_user_action_error_message("Archiving the monitor"), "danger"), no_update
         resolved_key = str(getattr(config, "model_key", "") or model_id).strip() or model_id
         return (
             _status_alert(
@@ -4792,7 +4798,7 @@ def register_callbacks(app) -> None:
         try:
             backend.repository.restore_monitor(model_id)
         except Exception as error:
-            return _status_alert(f"Could not restore monitor: {error}", "danger"), no_update
+            return _status_alert(_user_action_error_message("Restoring the monitor"), "danger"), no_update
         resolved_key = str(getattr(config, "model_key", "") or model_id).strip() or model_id
         return (
             _status_alert(
@@ -4898,7 +4904,7 @@ def register_callbacks(app) -> None:
         try:
             backend.repository.delete_monitor(model_id)
         except Exception as error:
-            return _status_alert(f"Could not delete monitor: {error}", "danger"), no_update
+            return _status_alert(_user_action_error_message("Deleting the monitor"), "danger"), no_update
         resolved_key = str(getattr(config, "model_key", "") or model_id).strip() or model_id
         return (
             _status_alert(
