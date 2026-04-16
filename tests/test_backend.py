@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 import model_lens.backend as backend_module
-from model_lens.backend import DashboardBackend, _null_rate_dict, _safe_json_list
+from model_lens.backend import DashboardBackend, _null_rate_dict, _period_label, _safe_json_list
 from model_lens.domain.models import BaselinePolicy, InferenceContract, MonitorConfig
 from model_lens.services.refresh_jobs import SharedWorkflowScheduleStatus
 from model_lens.services.thresholds import get_thresholds
@@ -1802,6 +1802,75 @@ def test_current_window_detail_reads_use_current_window_bounds_only() -> None:
     assert calls[1]["end_date"] == "2026-01-21"
     assert calls[1]["sample_rows_per_day"] > 0
     assert calls[1]["max_total_rows"] > 0
+
+
+def test_period_label_drops_invalid_timestamps_instead_of_returning_nat_strings() -> None:
+    labels = _period_label(pd.Series(["2026-01-21", None, "not-a-date"]), "daily")
+
+    assert labels.tolist() == ["2026-01-21", None, None]
+
+
+def test_dimension_breakdown_limits_aggregation_to_top_dimension_values() -> None:
+    config = MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.model_lens_demo.inference_logs",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            feature_columns=("amount", "region"),
+        ),
+        baseline=BaselinePolicy(n_days=2),
+        model_id_value="fraud_model_v1",
+    )
+
+    class CurrentWindowWarehouse:
+        def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
+            if "FROM comparison_windows" in sql:
+                return pd.DataFrame(
+                    [
+                        {
+                            "baseline_start": "2026-01-07",
+                            "baseline_end": "2026-01-13",
+                            "window_start": "2026-01-14",
+                            "window_end": "2026-01-21",
+                        }
+                    ]
+                )
+            raise AssertionError(f"Unexpected query: {sql}")
+
+    rows = [
+        {"event_ts": "2026-01-14T00:00:00", "amount": float(index), "region": f"region_{index}", "prediction": 0.2}
+        for index in range(30)
+    ]
+    rows.extend(
+        [
+            {"event_ts": "2026-01-21T00:00:00", "amount": 999.0, "region": "region_0", "prediction": 0.9},
+            {"event_ts": "2026-01-21T00:00:00", "amount": 998.0, "region": "region_1", "prediction": 0.9},
+        ]
+    )
+
+    repository = SimpleNamespace(
+        _warehouse=CurrentWindowWarehouse(),
+        table_names=SimpleNamespace(
+            drift_metrics="drift_metrics",
+            quality_metrics="quality_metrics",
+            quality_history="quality_history",
+            performance_metrics="performance_metrics",
+            comparison_windows="comparison_windows",
+        ),
+        list_monitor_configs=lambda status="active": [config],
+        get_monitor_summary=lambda: pd.DataFrame(),
+        load_monitor_frame=lambda *args, **kwargs: pd.DataFrame(rows),
+    )
+    backend = DashboardBackend(repository=_with_published_generation(repository))
+
+    breakdown = backend.get_dimension_breakdown("fraud_model_demo", "amount", "region")
+
+    assert len(breakdown) == 20
+    assert "region_29" not in breakdown["dimension_value"].tolist()
+    assert "region_0" in breakdown["dimension_value"].tolist()
 
 
 def test_current_window_returns_empty_when_only_unbounded_load_is_supported() -> None:

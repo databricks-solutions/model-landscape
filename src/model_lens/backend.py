@@ -299,11 +299,13 @@ def _freshness_status(config: MonitorConfig, runtime_state: MonitorRuntimeState 
 
 def _period_label(series: pd.Series, granularity: str) -> pd.Series:
     timestamps = pd.to_datetime(series, errors="coerce")
+    labels = timestamps.dt.date.astype("object")
     if granularity == "monthly":
-        return timestamps.dt.to_period("M").dt.to_timestamp().dt.date.astype(str)
-    if granularity == "weekly":
-        return timestamps.dt.to_period("W").dt.end_time.dt.date.astype(str)
-    return timestamps.dt.date.astype(str)
+        labels = timestamps.dt.to_period("M").dt.to_timestamp().dt.date.astype("object")
+    elif granularity == "weekly":
+        labels = timestamps.dt.to_period("W").dt.end_time.dt.date.astype("object")
+    labels = labels.where(timestamps.notna(), None)
+    return labels.map(lambda value: str(value) if value is not None and not pd.isna(value) else None)
 
 
 def _sql_placeholders(count: int) -> str:
@@ -317,6 +319,7 @@ def _drift_results_from_frame(frame: pd.DataFrame, granularity: str = "daily") -
     working["window_end_ts"] = pd.to_datetime(working["window_end"], errors="coerce")
     working["computed_at_ts"] = pd.to_datetime(working["computed_at"], errors="coerce")
     working["period"] = _period_label(working["window_end"], granularity)
+    working = working[working["period"].notna()].copy()
     metrics = (
         working.pivot_table(
             index=["feature_name", "period"],
@@ -1495,8 +1498,24 @@ class DashboardBackend:
             return pd.DataFrame()
         working = current[[dimension, feature]].copy()
         working[feature] = pd.to_numeric(working[feature], errors="coerce")
+        if working.empty:
+            return pd.DataFrame()
+        dimension_values = working[dimension]
+        top_dimension_values = dimension_values.value_counts(dropna=False).head(20).index.tolist()
+        if not top_dimension_values:
+            return pd.DataFrame()
+        mask = pd.Series(False, index=working.index)
+        for value in top_dimension_values:
+            if pd.isna(value):
+                mask = mask | dimension_values.isna()
+            else:
+                mask = mask | (dimension_values == value)
+        filtered = working[mask].copy()
+        filtered["_dimension_value"] = filtered[dimension].apply(
+            lambda value: "(missing)" if pd.isna(value) or not str(value).strip() else str(value)
+        )
         breakdown = (
-            working.groupby(dimension, dropna=False)
+            filtered.groupby("_dimension_value", dropna=False)
             .agg(
                 feature_average=(feature, "mean"),
                 feature_p25=(feature, lambda values: float(values.quantile(0.25)) if values.notna().any() else float("nan")),
@@ -1505,12 +1524,9 @@ class DashboardBackend:
                 row_count=(feature, "size"),
             )
             .reset_index()
-            .rename(columns={dimension: "dimension_value"})
+            .rename(columns={"_dimension_value": "dimension_value"})
             .sort_values("row_count", ascending=False)
             .head(20)
-        )
-        breakdown["dimension_value"] = breakdown["dimension_value"].apply(
-            lambda value: "(missing)" if pd.isna(value) or not str(value).strip() else str(value)
         )
         return breakdown
 

@@ -1265,7 +1265,7 @@ def _monitor_contract_ready(
         return bool(
             _source_labels_join_col(scan_data, entity_id_col, labels_join_col)
             and (labels_join_col or "").strip()
-            and ((external_label_col or "").strip() or source_label_col)
+            and ((external_label_col or "").strip() or (source_label_col or "").strip())
         )
     return True
 
@@ -1481,7 +1481,10 @@ def register_callbacks(app) -> None:
         prevent_initial_call=True,
     )
     def navigate_onboarding_wizard(_, __, current_step):
-        step = int(current_step or 1)
+        try:
+            step = int(current_step or 1)
+        except (TypeError, ValueError):
+            step = 1
         if ctx.triggered_id == "wizard-back-btn":
             return max(1, step - 1)
         return min(len(onboarding.STEP_LABELS), step + 1)
@@ -2551,7 +2554,7 @@ def register_callbacks(app) -> None:
                 "success",
             ))
         except Exception as error:
-            messages.append((_refresh_job_unavailable_message(config.model_key, error), "success"))
+            messages.append((_refresh_job_unavailable_message(config.model_key, error), "warning"))
         non_numeric = _non_numeric_features(feature_columns or [], scan_data)
         if non_numeric:
             messages.append((
@@ -2651,7 +2654,7 @@ def register_callbacks(app) -> None:
                 [
                     {
                         "model": row["model_name"],
-                        "versions": ", ".join(row.get("versions", [])),
+                        "versions": ", ".join(str(value) for value in row.get("versions", [])),
                         "status": (
                             "Computing/Pending"
                             if row["computing"]
@@ -3497,10 +3500,15 @@ def register_callbacks(app) -> None:
             timeline_map: dict[str, dict[str, object]] = {}
             for current_metric, summary in timeline_summaries.items():
                 for row in summary.get("timeline", []):
-                    period = str(row.get("period") or "").strip()
-                    if not period:
+                    raw_period = row.get("period")
+                    period_text = str(raw_period or "").strip()
+                    if not period_text:
                         continue
-                    entry = timeline_map.setdefault(period, {"period": period})
+                    parsed_period = pd.to_datetime(period_text, errors="coerce")
+                    if pd.isna(parsed_period):
+                        continue
+                    normalized_period = str(pd.Timestamp(parsed_period).date())
+                    entry = timeline_map.setdefault(normalized_period, {"period": normalized_period})
                     entry[current_metric] = row.get(current_metric)
             combined_timeline = [
                 timeline_map[period]

@@ -204,6 +204,34 @@ def test_monitor_contract_ready_accepts_shared_labels_join_without_entity_id_col
     ) is True
 
 
+def test_monitor_contract_ready_rejects_whitespace_only_source_label_col_for_external_labels() -> None:
+    scan_data = {
+        "columns": ["event_ts", "prediction", "gc_transaction", "amount"],
+    }
+
+    assert callbacks_module._monitor_contract_ready(
+        scan_data=scan_data,
+        display_name="Fraud Model Demo",
+        model_key="fraud_model_demo",
+        timestamp_col="event_ts",
+        model_id_col=None,
+        prediction_col="prediction",
+        model_id_value=None,
+        model_version_col=None,
+        model_version_value=None,
+        entity_id_col=None,
+        source_label_col="   ",
+        external_label_col="",
+        labels_table="main.demo.labels",
+        labels_join_col="gc_transaction",
+        feature_columns=["amount"],
+        baseline_kind="rolling",
+        baseline_days=7,
+        baseline_start=None,
+        baseline_end=None,
+    ) is False
+
+
 def test_save_monitor_allows_table_scoped_monitor_without_model_id_column(monkeypatch) -> None:
     saved = {"validated": None, "upserted": None, "pending": None}
 
@@ -300,6 +328,7 @@ def test_save_monitor_allows_table_scoped_monitor_without_model_id_column(monkey
     assert saved["upserted"].default_performance_metric == "f1"
     assert "Initial refresh is pending on the shared refresh job" in str(result[0])
     assert "The shared workflow can still pick it up on its next hourly run" in str(result[0])
+    assert "color='warning'" in str(result[0])
     assert result[1]
 
 
@@ -677,6 +706,19 @@ def test_render_onboarding_wizard_surfaces_error_alert_instead_of_raising(monkey
     assert result[10] is True
 
 
+def test_navigate_onboarding_wizard_recovers_from_invalid_step_value() -> None:
+    app = create_app()
+    fn = _find_callback_by_output(app, "onboarding-current-step")
+    original_ctx = callbacks_module.ctx
+    callbacks_module.ctx = SimpleNamespace(triggered_id="wizard-next-btn")
+    try:
+        result = fn(1, None, "not-a-number")
+    finally:
+        callbacks_module.ctx = original_ctx
+
+    assert result == 2
+
+
 def test_validate_workspace_wiring_callback_renders_readiness_card(monkeypatch) -> None:
     monkeypatch.setattr(
         callbacks_module,
@@ -858,6 +900,39 @@ def test_render_overview_surfaces_computing_pending_bucket(monkeypatch) -> None:
     rendered = str(result)
     assert "Computing/Pending" in rendered
     assert "No drift history yet" in rendered
+
+
+def test_render_overview_handles_non_string_versions(monkeypatch) -> None:
+    class _FakeBackend:
+        def get_overview_rows(self, metric="psi"):
+            assert metric == "psi"
+            return [
+                {
+                    "model_id": "fraud_model_demo",
+                    "model_name": "Fraud Model Demo",
+                    "description": "main.demo.fraud",
+                    "versions": [1, "v2"],
+                    "max_psi": 0.12,
+                    "avg_psi": 0.09,
+                    "avg_js": 0.03,
+                    "drifting_features": 1,
+                    "total_features": 2,
+                    "top_drifter": "amount",
+                    "max_null_rate": 0.5,
+                    "has_labels": True,
+                    "computing": False,
+                    "freshness_status": "fresh",
+                    "last_run_status": "completed",
+                }
+            ]
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_output(app, "overview-page-body")
+
+    result = fn("/", None, {})
+
+    assert "1, v2" in str(result)
 
 
 def test_populate_model_selector_returns_empty_when_no_monitors_exist(monkeypatch) -> None:
@@ -1255,6 +1330,65 @@ def test_render_performance_callback_uses_selected_drift_metric(monkeypatch) -> 
 
     assert "Jensen-Shannon Divergence Over Time (All Tracked Features)" in str(result[3])
     assert "Compare the Jensen-Shannon Divergence trend below" in str(result[3])
+
+
+def test_render_performance_callback_ignores_invalid_timeline_periods(monkeypatch) -> None:
+    latest_bins = pd.DataFrame(
+        [
+            {
+                "feature": "amount",
+                "bin_label": "[0, 100)",
+                "baseline_metric": 0.84,
+                "current_metric": 0.82,
+                "delta": -0.02,
+                "current_volume_pct": 55.0,
+                "degradation_contribution": -0.01,
+                "window_start": "2026-01-14",
+                "window_end": "2026-01-21",
+            }
+        ]
+    )
+
+    class _FakeBackend:
+        def get_monitor_config(self, model_id):
+            return SimpleNamespace(
+                contract=SimpleNamespace(label_col="label"),
+                problem_type="classification",
+                performance_metric_names=("f1", "precision", "recall"),
+            )
+
+        def get_performance_summary(self, model_id, metric_name="f1"):
+            return {
+                "timeline": [
+                    {"period": None, metric_name: 0.11},
+                    {"period": "NaT", metric_name: 0.22},
+                    {"period": "2026-01-21", metric_name: 0.84},
+                ],
+                "contributors": pd.DataFrame([{"feature": "amount", "weighted_delta": -0.01}]),
+                "latest_bins": latest_bins,
+                "all_bins": latest_bins,
+                "has_significant_degradation": True,
+                "worst_weighted_delta": -0.01,
+                "timeline_unavailable_reason": "",
+            }
+
+        def get_drift_results(self, model_id, granularity="daily"):
+            assert granularity == "daily"
+            return pd.DataFrame(
+                [
+                    {"feature": "amount", "period": "2026-01-21", "psi": 0.18},
+                ]
+            )
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    callback = app.callback_map[RENDER_PERFORMANCE_CALLBACK]["callback"]
+    fn = getattr(callback, "__wrapped__", callback)
+
+    result = fn("/performance", "fraud_model_demo", "f1", "psi", False, None, 0, {}, None)
+
+    timeline_figure = result[2].children.children.figure
+    assert list(timeline_figure.data[0].x) == ["2026-01-21"]
 
 
 def test_render_performance_callback_defaults_drift_chart_to_all_available_features(monkeypatch) -> None:
