@@ -1223,6 +1223,40 @@ def test_render_performance_callback_surfaces_zero_delta_state(monkeypatch) -> N
     assert "Only one comparison window is available" in str(result[6])
 
 
+def test_feature_bin_impact_sorts_bins_numerically_and_draws_visible_separators() -> None:
+    degradation = pd.DataFrame(
+        [
+            {
+                "feature": "amount",
+                "bin_label": "[10, 20)",
+                "baseline_metric": 0.9,
+                "current_metric": 0.7,
+                "delta": -0.2,
+                "current_volume_pct": 40.0,
+                "degradation_contribution": 0.08,
+            },
+            {
+                "feature": "amount",
+                "bin_label": "[0, 10)",
+                "baseline_metric": 0.8,
+                "current_metric": 0.6,
+                "delta": -0.2,
+                "current_volume_pct": 35.0,
+                "degradation_contribution": 0.07,
+            },
+        ]
+    )
+    contributors = pd.DataFrame([{"feature": "amount", "weighted_delta": 0.15}])
+
+    figure = charts.build_feature_bin_impact(degradation, contributors)
+    bar_traces = [trace for trace in figure.data if trace.showlegend is False]
+
+    assert "[0, 10)" in bar_traces[0].hovertemplate
+    assert "[10, 20)" in bar_traces[1].hovertemplate
+    assert bar_traces[0].marker.line.width == 1.5
+    assert bar_traces[1].marker.line.width == 1.5
+
+
 def test_render_performance_callback_handles_partial_window_note_and_missing_metric_column(monkeypatch) -> None:
     latest_bins = pd.DataFrame(
         [
@@ -1720,6 +1754,29 @@ def test_render_drift_callback_uses_specific_empty_state_for_zero_filtered_rows(
     result = fn("/drift", "fraud_model_demo", 0, {}, 1, "psi", "daily", 5, "2026-01-01", "2026-01-31", "predicted", "positive", False)
 
     assert "No rows matched the selected class filter in this date range." in str(result[0])
+
+
+def test_render_drift_callback_uses_specific_empty_state_for_missing_class_facts(monkeypatch) -> None:
+    class _FakeBackend:
+        def get_monitor_config(self, model_id):
+            return SimpleNamespace(
+                contract=SimpleNamespace(label_col="label", prediction_col="pred_label", categorical_columns=()),
+                problem_type="classification",
+            )
+
+        def get_drift_results(self, *args, **kwargs):
+            frame = pd.DataFrame()
+            frame.attrs["_empty_reason"] = "missing_class_facts"
+            return frame
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    callback = app.callback_map[RENDER_DRIFT_CALLBACK]["callback"]
+    fn = getattr(callback, "__wrapped__", callback)
+
+    result = fn("/drift", "fraud_model_demo", 0, {}, 1, "psi", "daily", 5, None, None, "predicted", "positive", False)
+
+    assert "Filtered drift history is not available yet for this monitor." in str(result[0])
 
 
 def test_drift_and_quality_callbacks_use_apply_buttons_for_expensive_queries() -> None:

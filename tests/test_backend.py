@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pandas as pd
@@ -461,6 +462,56 @@ def test_get_null_rate_history_explodes_top_features_over_time() -> None:
     assert set(history["feature"]) == {"amount", "velocity_7d"}
     assert list(history["period"].unique()) == ["2026-01-20", "2026-01-21"]
     assert history[history["feature"] == "velocity_7d"]["null_rate"].tolist() == [0.8, 1.2]
+
+
+def test_get_null_rate_history_defaults_to_showing_all_features_up_to_twelve() -> None:
+    config = MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.model_lens_demo.inference_logs",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=tuple(f"feature_{index}" for index in range(1, 9)),
+        ),
+        baseline=BaselinePolicy(n_days=7),
+    )
+    null_rates = {f"feature_{index}": float(index) for index in range(1, 9)}
+    repository = SimpleNamespace(
+        _warehouse=_FakeWarehouse(),
+        list_monitor_configs=lambda status="active": [config],
+        get_monitor_summary=lambda: pd.DataFrame(),
+        get_daily_quality_profile_rows=lambda *args, **kwargs: [
+            {
+                "model_key": "fraud_model_demo",
+                "profile_date": "2026-01-20",
+                "row_count": 100,
+                "prediction_mean": 0.2,
+                "prediction_std": 0.1,
+                "null_rates": json.dumps(null_rates),
+                "computed_at": "2026-01-20T10:00:00",
+            },
+            {
+                "model_key": "fraud_model_demo",
+                "profile_date": "2026-01-21",
+                "row_count": 120,
+                "prediction_mean": 0.3,
+                "prediction_std": 0.1,
+                "null_rates": json.dumps(null_rates),
+                "computed_at": "2026-01-21T10:00:00",
+            },
+        ],
+    )
+    backend = DashboardBackend(repository=_with_published_generation(repository))
+
+    history = backend.get_null_rate_history(
+        "fraud_model_demo",
+        start_date="2026-01-20",
+        end_date="2026-01-21",
+    )
+
+    assert len(set(history["feature"])) == 8
 
 
 def test_get_performance_summary_keeps_zero_delta_rows_visible() -> None:
@@ -1522,6 +1573,70 @@ def test_get_drift_results_supports_class_filtered_daily_feature_profiles() -> N
     assert list(drift["feature"]) == ["amount"]
     assert drift.iloc[0]["period"] == "2026-01-04"
     assert drift.iloc[0]["psi"] > 0.0
+
+
+def test_get_drift_results_derives_class_filtered_feature_profiles_from_bounded_source_rows() -> None:
+    class _WindowWarehouse(_FakeWarehouse):
+        def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
+            if "FROM comparison_windows" in sql:
+                return pd.DataFrame(
+                    [
+                        {
+                            "window_id": "rolling|2026-01-01|2026-01-02|2026-01-03|2026-01-04",
+                            "model_key": params[0],
+                            "window_grain": "day",
+                            "window_start": "2026-01-03",
+                            "window_end": "2026-01-04",
+                            "baseline_start": "2026-01-01",
+                            "baseline_end": "2026-01-02",
+                            "baseline_kind": "rolling",
+                        }
+                    ]
+                )
+            return super().query_params(sql, params)
+
+    load_calls: list[tuple[str | None, str | None]] = []
+    config = MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.model_lens_demo.inference_logs",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=("amount",),
+        ),
+        baseline=BaselinePolicy(n_days=2),
+    )
+    repository = SimpleNamespace(
+        _warehouse=_WindowWarehouse(),
+        table_names=SimpleNamespace(comparison_windows="comparison_windows", drift_metrics="drift_metrics"),
+        list_monitor_configs=lambda status="active": [config],
+        get_monitor_summary=lambda: pd.DataFrame(),
+        get_latest_published_generation_id=lambda model_key: "published-1",
+        get_daily_class_feature_profile_rows=lambda *args, **kwargs: [],
+        load_monitor_frame=lambda config, start_date=None, end_date=None, feature_columns=None, max_total_rows=None, sample_rows_per_day=None: load_calls.append((start_date, end_date)) or pd.DataFrame(
+            [
+                {"event_ts": "2026-01-01T00:00:00", "prediction": 1, "label": 1, "amount": 1.0},
+                {"event_ts": "2026-01-02T00:00:00", "prediction": 1, "label": 1, "amount": 1.2},
+                {"event_ts": "2026-01-03T00:00:00", "prediction": 1, "label": 1, "amount": 5.0},
+                {"event_ts": "2026-01-04T00:00:00", "prediction": 1, "label": 1, "amount": 5.2},
+            ]
+        ),
+        get_source_daily_quality_profile_rows=lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Source quality probe should not run when bounded source rows can derive drift directly")
+        ),
+    )
+    backend = DashboardBackend(repository=repository)
+
+    drift = backend.get_drift_results(
+        "fraud_model_demo",
+        class_basis="predicted",
+        class_value="positive",
+    )
+
+    assert not drift.empty
+    assert load_calls == [("2026-01-01", "2026-01-04")]
 
 
 def test_get_drift_results_marks_no_filtered_rows_when_bounded_source_probe_is_empty() -> None:

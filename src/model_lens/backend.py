@@ -16,7 +16,11 @@ from model_lens.services.control_plane import ControlPlaneRepository, build_repo
 from model_lens.services.monitor_discovery import MonitorDiscoveryService
 from model_lens.services.onboarding import baseline_label
 from model_lens.services.refresh_diagnostics import build_refresh_diagnostics
-from model_lens.services.refresh_engine import derive_refresh_result_from_daily_profiles, split_baseline_current
+from model_lens.services.refresh_engine import (
+    build_daily_class_feature_profile_rows,
+    derive_refresh_result_from_daily_profiles,
+    split_baseline_current,
+)
 from model_lens.services.refresh_jobs import resolve_shared_workflow_schedule_status
 from model_lens.services.thresholds import get_thresholds, merged_thresholds
 
@@ -622,18 +626,30 @@ class DashboardBackend:
                 else []
             )
             if not class_feature_rows:
-                source_probe_rows, probe_reason = self._source_daily_quality_rows_fallback(
+                source_class_rows, source_reason = self._source_daily_class_feature_rows_fallback(
                     model_id,
                     start_date=load_start,
                     end_date=load_end,
                     class_basis=normalized_class_basis,
                     class_value=normalized_class_value,
                 )
-                if probe_reason == "filtered_source_bounds_unavailable":
-                    return _empty_frame_with_reason(probe_reason)
-                if probe_reason is None and source_probe_rows == []:
-                    return _empty_frame_with_reason("no_filtered_rows")
-                return _empty_frame_with_reason("missing_class_facts")
+                if source_class_rows:
+                    class_feature_rows = source_class_rows
+                else:
+                    if source_reason == "no_filtered_rows":
+                        return _empty_frame_with_reason("no_filtered_rows")
+                    source_probe_rows, probe_reason = self._source_daily_quality_rows_fallback(
+                        model_id,
+                        start_date=load_start,
+                        end_date=load_end,
+                        class_basis=normalized_class_basis,
+                        class_value=normalized_class_value,
+                    )
+                    if probe_reason == "filtered_source_bounds_unavailable":
+                        return _empty_frame_with_reason(probe_reason)
+                    if probe_reason is None and source_probe_rows == []:
+                        return _empty_frame_with_reason("no_filtered_rows")
+                    return _empty_frame_with_reason("missing_class_facts")
             derived = derive_refresh_result_from_daily_profiles(
                 config=config,
                 metadata_list=metadata_list,
@@ -944,7 +960,7 @@ class DashboardBackend:
     def get_null_rate_history(
         self,
         model_id: str,
-        top_n: int = 5,
+        top_n: int = 12,
         *,
         start_date: str | None = None,
         end_date: str | None = None,
@@ -981,6 +997,43 @@ class DashboardBackend:
             .tolist()
         )
         return frame[frame["feature"].isin(top_features)].sort_values(["period", "feature"]).reset_index(drop=True)
+
+    def _source_daily_class_feature_rows_fallback(
+        self,
+        model_id: str,
+        *,
+        start_date: str,
+        end_date: str,
+        class_basis: str,
+        class_value: str,
+    ) -> tuple[list[dict[str, object]], str | None]:
+        config = self.get_monitor_config(model_id, status=None)
+        if not supports_binary_class_filters(config):
+            return [], "unsupported_class_filter"
+        if not self._supports_safe_bounded_monitor_frame_load():
+            return [], "filtered_source_bounds_unavailable"
+        frame = self._load_monitor_frame_bounded(
+            config,
+            start_date=start_date,
+            end_date=end_date,
+            feature_columns=tuple(config.contract.feature_columns),
+        )
+        if frame.empty:
+            return [], "no_filtered_rows"
+        rows = build_daily_class_feature_profile_rows(
+            config=config,
+            inference_df=frame,
+            computed_at=pd.Timestamp.now(tz=timezone.utc).isoformat(),
+        )
+        filtered_rows = [
+            row
+            for row in rows
+            if str(row.get("class_basis") or "").strip().lower() == class_basis
+            and str(row.get("class_value") or "").strip().lower() == class_value
+        ]
+        if not filtered_rows:
+            return [], "no_filtered_rows"
+        return filtered_rows, None
 
     def _latest_quality_map(self, model_ids: list[str]) -> dict[str, dict[str, object]]:
         if not model_ids:

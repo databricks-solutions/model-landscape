@@ -2922,6 +2922,11 @@ def register_callbacks(app) -> None:
                             "Filtered drift history is not available for the full range yet. "
                             "Select a date range or refresh to populate class-aware daily facts."
                         )
+                    elif empty_reason == "missing_class_facts":
+                        empty_message = (
+                            "Filtered drift history is not available yet for this monitor. "
+                            "Run a refresh to populate class-aware daily facts or select a date range with published filtered history."
+                        )
                     else:
                         empty_message = "Filtered drift history is unavailable until the next refresh populates class-aware daily facts."
                     empty = make_empty_state(empty_message, icon="fas fa-wave-square")

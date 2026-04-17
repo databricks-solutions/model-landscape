@@ -818,7 +818,9 @@ def build_feature_bin_impact(degradation_df: pd.DataFrame, feature_contributors:
 
     fig = go.Figure()
     for feature in feature_order:
-        feature_frame = degradation_df[degradation_df["feature"] == feature].sort_values("bin_label")
+        feature_frame = degradation_df[degradation_df["feature"] == feature].copy()
+        feature_frame["_bin_sort"] = feature_frame["bin_label"].apply(_bin_sort_key)
+        feature_frame = feature_frame.sort_values(["_bin_sort", "bin_label"]).drop(columns=["_bin_sort"])
         for _, row in feature_frame.iterrows():
             delta = row["delta"]
             if delta < -0.02:
@@ -836,7 +838,8 @@ def build_feature_bin_impact(degradation_df: pd.DataFrame, feature_contributors:
                     y=[feature],
                     orientation="h",
                     marker_color=color,
-                    marker_line=dict(color=COLORS["bg"], width=0.5),
+                    marker_line=dict(color=COLORS["grid"], width=1.5),
+                    opacity=0.96,
                     showlegend=False,
                     hovertemplate=(
                         f"<b>{feature}</b><br>"
