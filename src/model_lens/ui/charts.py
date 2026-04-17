@@ -15,7 +15,7 @@ LAYOUT_DEFAULTS = dict(
     paper_bgcolor=COLORS["bg"],
     plot_bgcolor=COLORS["bg"],
     font=dict(color=COLORS["text"], family="Inter, system-ui, sans-serif"),
-    margin=dict(l=60, r=20, t=50, b=40),
+    margin=dict(l=80, r=40, t=70, b=60),
     xaxis=dict(gridcolor=COLORS["grid"], zerolinecolor=COLORS["grid"]),
     yaxis=dict(gridcolor=COLORS["grid"], zerolinecolor=COLORS["grid"]),
 )
@@ -31,6 +31,7 @@ PERFORMANCE_METRIC_COLORS = {
 
 DRIFT_HEATMAP_ROBUST_PERCENTILE = 95.0
 DRIFT_HEATMAP_MIN_POSITIVE_CELLS = 8
+DRIFT_HEATMAP_MAX_HEIGHT = 1000
 
 
 def _apply_layout(fig, **kwargs):
@@ -240,8 +241,8 @@ def build_drift_heatmap(
         fig,
         title=title,
         xaxis=dict(title="Time Period", gridcolor=COLORS["grid"], tickangle=-45),
-        yaxis=dict(title="", gridcolor=COLORS["grid"], autorange="reversed"),
-        height=max(300, len(pivot.index) * 35 + 100),
+        yaxis=dict(title="", gridcolor=COLORS["grid"], autorange="reversed", automargin=True),
+        height=min(DRIFT_HEATMAP_MAX_HEIGHT, max(300, len(pivot.index) * 35 + 100)),
     )
 
 
@@ -304,14 +305,20 @@ def build_drift_timeline(
             line_color=COLORS["moderate"],
             line_dash="dot",
             annotation_text=f"Warning ({warning:.4f})",
-            annotation_position="top left",
+            annotation_position="bottom right",
+            annotation_font_color=COLORS["text"],
+            annotation_font_size=11,
+            annotation_bgcolor=COLORS["card"],
         )
         fig.add_hline(
             y=critical,
             line_color=COLORS["high"],
             line_dash="dash",
             annotation_text=f"Critical ({critical:.4f})",
-            annotation_position="top left",
+            annotation_position="top right",
+            annotation_font_color=COLORS["text"],
+            annotation_font_size=11,
+            annotation_bgcolor=COLORS["card"],
         )
 
     return _apply_layout(
@@ -319,8 +326,17 @@ def build_drift_timeline(
         title=title or f"{metric.upper()} Over Time",
         xaxis_title="Time Period",
         yaxis=dict(title=metric.upper(), tickformat=tickformat, gridcolor=COLORS["grid"], zerolinecolor=COLORS["grid"]),
-        legend=dict(bgcolor="rgba(0,0,0,0.5)", font=dict(size=10)),
-        height=400,
+        legend=dict(
+            bgcolor="rgba(0,0,0,0.5)",
+            font=dict(size=9),
+            orientation="v",
+            yanchor="top",
+            y=1,
+            xanchor="left",
+            x=1.01,
+        ),
+        height=420,
+        margin=dict(l=80, r=170 if len(selected_features) > 8 else 140, t=70, b=60),
     )
 
 
@@ -364,7 +380,7 @@ def build_top_drifters_bar(
         fig,
         title=title or f"Top {top_n} Drifting Features (Historical Max)",
         xaxis=dict(title=metric.upper(), tickformat=tickformat, gridcolor=COLORS["grid"], zerolinecolor=COLORS["grid"]),
-        yaxis=dict(autorange="reversed", gridcolor=COLORS["grid"]),
+        yaxis=dict(autorange="reversed", gridcolor=COLORS["grid"], automargin=True),
         height=max(300, top_n * 35 + 80),
     )
 
@@ -451,10 +467,12 @@ def build_quality_window_timeline(history_df: pd.DataFrame):
         go.Scatter(
             x=history_df["period"].astype(str),
             y=history_df["row_count"],
-            mode="markers" if len(history_df) < 2 else "lines+markers",
+            mode="markers+text" if len(history_df) < 2 else "lines+markers",
             line=dict(color=COLORS["cyan"], width=3),
             marker=dict(size=10 if len(history_df) < 2 else 7),
             name="Rows",
+            text=[f"{int(value):,}" for value in history_df["row_count"]] if len(history_df) < 2 else None,
+            textposition="top center",
             fill="tozeroy",
             fillcolor="rgba(41,128,185,0.10)",
         )
@@ -505,7 +523,7 @@ def build_null_rate_chart(
         fig,
         title="Null Rates by Feature",
         xaxis_title="Null Rate (%)",
-        yaxis=dict(autorange="reversed", gridcolor=COLORS["grid"]),
+        yaxis=dict(autorange="reversed", gridcolor=COLORS["grid"], automargin=True),
         height=max(300, len(features) * 30 + 80),
     )
 
@@ -518,19 +536,23 @@ def build_null_rate_timeline(history_df: pd.DataFrame):
 
     fig = go.Figure()
     colors = px.colors.qualitative.Set2
+    single_period = len(history_df["period"].dropna().astype(str).unique()) < 2
+    show_single_point_labels = single_period and history_df["feature"].dropna().nunique() <= 6
     for index, feature in enumerate(history_df["feature"].dropna().astype(str).drop_duplicates().tolist()):
         feature_frame = history_df[history_df["feature"] == feature].sort_values("period")
         fig.add_trace(
             go.Scatter(
                 x=feature_frame["period"].astype(str),
                 y=feature_frame["null_rate"],
-                mode="markers" if len(feature_frame) < 2 else "lines+markers",
+                mode="markers+text" if single_period and show_single_point_labels else ("markers" if len(feature_frame) < 2 else "lines+markers"),
                 name=feature,
                 line=dict(color=colors[index % len(colors)], width=2),
                 marker=dict(size=9 if len(feature_frame) < 2 else 6),
+                text=[f"{float(value):.2f}%" for value in feature_frame["null_rate"]] if single_period and show_single_point_labels else None,
+                textposition="top center",
             )
         )
-    if len(history_df["period"].dropna().astype(str).unique()) < 2:
+    if single_period:
         fig.add_annotation(
             text="Only one comparison window is available so far.",
             xref="paper",
@@ -584,10 +606,12 @@ def build_prediction_quality_timeline(history_df: pd.DataFrame):
         go.Scatter(
             x=frame["period"].astype(str),
             y=frame["prediction_mean"],
-            mode="markers" if len(frame) < 2 else "lines+markers",
+            mode="markers+text" if len(frame) < 2 else "lines+markers",
             line=dict(color=COLORS["accent"], width=3),
             marker=dict(size=10 if len(frame) < 2 else 7),
             name="prediction average",
+            text=[f"{float(value):.4f}" for value in frame["prediction_mean"]] if len(frame) < 2 else None,
+            textposition="top center",
         )
     )
     if len(frame) < 2:
@@ -618,8 +642,8 @@ def build_multi_model_summary(model_drift_data: list[dict], metric: str = "psi")
     fig = make_subplots(
         rows=1,
         cols=2,
-        subplot_titles=("Max PSI by Model", "Drifting Features Count"),
-        horizontal_spacing=0.15,
+        subplot_titles=(f"Max {metric.upper()} by Model", "Drifting Features Count"),
+        horizontal_spacing=0.1,
     )
     colors = [
         COLORS["cyan"]
@@ -633,11 +657,14 @@ def build_multi_model_summary(model_drift_data: list[dict], metric: str = "psi")
         marker_color=colors,
         name="Max PSI",
         text=["Computing" if is_computing else None for is_computing in computing],
-        textposition="outside",
+        textposition="auto",
+        cliponaxis=False,
     )
     fig.add_trace(max_trace, row=1, col=1)
     fig.add_trace(go.Bar(x=models, y=drifting_count, marker_color=COLORS["blue"], name="Features > Warning"), row=1, col=2)
-    return _apply_layout(fig, title="Multi-Model Drift Overview", showlegend=False, height=350)
+    fig.update_xaxes(tickangle=-20, automargin=True, row=1, col=1)
+    fig.update_xaxes(tickangle=-20, automargin=True, row=1, col=2)
+    return _apply_layout(fig, title="Multi-Model Drift Overview", showlegend=False, height=420)
 
 
 def build_dimension_breakdown(breakdown_df: pd.DataFrame, feature_name: str, dimension_name: str):
@@ -715,7 +742,7 @@ def build_dimension_breakdown(breakdown_df: pd.DataFrame, feature_name: str, dim
     return _apply_layout(
         fig,
         title=f"{feature_name} by {dimension_name}",
-        xaxis_title=dimension_name,
+        xaxis=dict(title=dimension_name, tickangle=-35 if len(working) > 10 else 0, automargin=True),
         yaxis_title="Value",
         legend=dict(bgcolor="rgba(0,0,0,0.5)"),
         height=350,
@@ -766,10 +793,12 @@ def build_performance_timeline(
             go.Scatter(
                 x=frame["period"].astype(str),
                 y=current_values,
-                mode="markers" if len(frame) < 2 else "lines+markers",
+                mode="markers+text" if len(frame) < 2 else "lines+markers",
                 line=dict(color=trace_color, width=3 if index == 0 else 2),
                 marker=dict(size=10 if len(frame) < 2 else 8, color=trace_color),
                 name=performance_metric_label(current_metric),
+                text=[f"{float(value):.4f}" if pd.notna(value) else "" for value in current_values] if len(frame) < 2 else None,
+                textposition="top center",
                 connectgaps=False,
             )
         )
@@ -875,8 +904,14 @@ def build_feature_bin_impact(degradation_df: pd.DataFrame, feature_contributors:
     return _apply_layout(
         fig,
         title="Feature Impact on Performance — Per-Bin Breakdown",
-        xaxis_title="Weighted Contribution to Overall Metric Change (right = worse, left = better, 0 = no contribution)",
-        yaxis=dict(autorange="reversed", gridcolor=COLORS["grid"], categoryorder="array", categoryarray=feature_order),
+        xaxis_title="Weighted Contribution to Metric Change",
+        yaxis=dict(
+            autorange="reversed",
+            gridcolor=COLORS["grid"],
+            categoryorder="array",
+            categoryarray=feature_order,
+            automargin=True,
+        ),
         barmode="relative",
         height=max(350, len(feature_order) * 50 + 100),
         legend=dict(bgcolor="rgba(0,0,0,0.5)", font=dict(size=10), orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),

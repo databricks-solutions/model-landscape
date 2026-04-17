@@ -24,7 +24,7 @@ from model_lens.callbacks import (
     _setup_retry_message,
 )
 from model_lens.pages import data_quality, drift_analysis, feature_deep_dive, incidents, overview, performance, reference
-from model_lens.ui import charts
+from model_lens.ui import charts, components, styles
 
 
 RENDER_WIZARD_CALLBACK = (
@@ -1257,6 +1257,123 @@ def test_feature_bin_impact_sorts_bins_numerically_and_draws_visible_separators(
     assert bar_traces[1].marker.line.width == 1.5
 
 
+def test_demo_chart_layout_defaults_expand_margins_and_cap_heatmap_height() -> None:
+    drift_rows = pd.DataFrame(
+        [
+            {"feature": f"feature_{index:02d}", "period": "2026-01-21", "psi": 0.02 + (index * 0.001)}
+            for index in range(1, 55)
+        ]
+    )
+
+    figure = charts.build_drift_heatmap(drift_rows, metric="psi")
+
+    assert charts.LAYOUT_DEFAULTS["margin"] == {"l": 80, "r": 40, "t": 70, "b": 60}
+    assert figure.layout.height == 1000
+    assert figure.layout.yaxis.automargin is True
+
+
+def test_horizontal_bar_charts_enable_yaxis_automargin_and_shorter_feature_impact_title() -> None:
+    drift = pd.DataFrame(
+        [
+            {"feature": "southamerica-east1", "psi": 0.31},
+            {"feature": "northamerica-south1", "psi": 0.22},
+        ]
+    )
+    null_rates = {"southamerica-east1": 0.38, "northamerica-south1": 0.24}
+    degradation = pd.DataFrame(
+        [
+            {
+                "feature": "southamerica-east1",
+                "bin_label": "[0, 10)",
+                "baseline_metric": 0.92,
+                "current_metric": 0.80,
+                "delta": -0.12,
+                "current_volume_pct": 42.0,
+                "degradation_contribution": 0.05,
+            }
+        ]
+    )
+    contributors = pd.DataFrame([{"feature": "southamerica-east1", "weighted_delta": 0.05}])
+
+    top_drifters = charts.build_top_drifters_bar(drift, metric="psi", top_n=2)
+    null_rate_chart = charts.build_null_rate_chart(null_rates)
+    feature_impact = charts.build_feature_bin_impact(degradation, contributors)
+
+    assert top_drifters.layout.yaxis.automargin is True
+    assert null_rate_chart.layout.yaxis.automargin is True
+    assert feature_impact.layout.yaxis.automargin is True
+    assert feature_impact.layout.xaxis.title.text == "Weighted Contribution to Metric Change"
+
+
+def test_drift_timeline_moves_legend_outside_plot_and_separates_threshold_annotations() -> None:
+    drift_rows = pd.DataFrame(
+        [
+            {"feature": f"feature_{index:02d}", "period": "2026-01-21", "psi": 0.05 + (index * 0.01)}
+            for index in range(1, 13)
+        ]
+    )
+
+    figure = charts.build_drift_timeline(
+        drift_rows,
+        features=[f"feature_{index:02d}" for index in range(1, 13)],
+        metric="psi",
+        show_thresholds=True,
+    )
+
+    warning_annotation = next(annotation for annotation in figure.layout.annotations if str(annotation.text).startswith("Warning"))
+    critical_annotation = next(annotation for annotation in figure.layout.annotations if str(annotation.text).startswith("Critical"))
+
+    assert figure.layout.legend.orientation == "v"
+    assert figure.layout.legend.x > 1
+    assert warning_annotation.y != critical_annotation.y
+    assert warning_annotation.yanchor != critical_annotation.yanchor
+
+
+def test_dimension_breakdown_rotates_xaxis_for_large_category_sets() -> None:
+    breakdown = pd.DataFrame(
+        [
+            {
+                "dimension_value": f"region_{index:02d}",
+                "feature_average": 10.0 + index,
+                "feature_p25": 8.0 + index,
+                "feature_p50": 9.0 + index,
+                "feature_p75": 11.0 + index,
+                "row_count": 100 + index,
+            }
+            for index in range(12)
+        ]
+    )
+
+    figure = charts.build_dimension_breakdown(breakdown, "latency_ms", "region")
+
+    assert figure.layout.xaxis.tickangle == -35
+    assert figure.layout.xaxis.automargin is True
+
+
+def test_multi_model_summary_uses_more_height_and_rotated_xaxis_labels() -> None:
+    figure = charts.build_multi_model_summary(
+        [
+            {"model": "fraud_monitor_v1_long_name", "max_psi": 0.12, "drifting_features": 4, "computing": False},
+            {"model": "fraud_monitor_v2_long_name", "max_psi": 0.18, "drifting_features": 6, "computing": True},
+        ],
+        metric="psi",
+    )
+
+    assert figure.layout.height == 420
+    assert figure.layout.xaxis.tickangle == -20
+    assert figure.layout.xaxis2.tickangle == -20
+
+
+def test_performance_timeline_uses_text_labels_for_single_window() -> None:
+    figure = charts.build_performance_timeline(
+        [{"period": "2026-01-21", "precision": 0.92, "recall": 0.41, "f1": 0.57}],
+        metric_names=("precision", "recall", "f1"),
+    )
+
+    assert figure.data[0].mode == "markers+text"
+    assert figure.data[0].text[0] == "0.9200"
+
+
 def test_render_performance_callback_handles_partial_window_note_and_missing_metric_column(monkeypatch) -> None:
     latest_bins = pd.DataFrame(
         [
@@ -1539,6 +1656,27 @@ def test_build_dimension_breakdown_adds_explicit_quartile_labels_for_small_dimen
     assert "Median=47" in figure.data[1].text[0]
     assert "P75=56" in figure.data[1].text[0]
     assert "P25=37" in figure.data[1].text[0]
+
+
+def test_make_model_status_card_truncates_long_model_name_and_description() -> None:
+    card = components.make_model_status_card(
+        model_name="customer_prod_mlproduct.mlp_rsch.really_long_model_name_that_should_not_break_layout",
+        model_id="model_1",
+        max_psi=0.12,
+        avg_psi=0.04,
+        drifting_count=2,
+        total_features=8,
+        description="customer_prod_mlproduct.mlp_rsch.really_long_table_name_with_labels_and_metadata",
+    )
+
+    header_col = card.children.children[0].children[0]
+    title_component = header_col.children[0]
+    description_component = card.children.children[1]
+
+    assert title_component.title.startswith("customer_prod_mlproduct")
+    assert title_component.style["textOverflow"] == "ellipsis"
+    assert description_component.title.startswith("customer_prod_mlproduct")
+    assert description_component.style["overflow"] == "hidden"
 
 
 def test_render_quality_callback_surfaces_history_and_latest_snapshot(monkeypatch) -> None:
@@ -2749,7 +2887,7 @@ def test_reference_delete_confirmation_enables_delete_only_on_exact_match() -> N
     assert "does not match" in str(status)
 
 
-def test_sidebar_status_wraps_long_monitor_description(monkeypatch) -> None:
+def test_sidebar_status_truncates_long_monitor_description_with_ellipsis_css(monkeypatch) -> None:
     description = "cjc_aws_workspace_catalog.model_lens_demo.inference_logs | model_id=fraud_model_v1"
 
     class _FakeBackend:
@@ -2773,3 +2911,5 @@ def test_sidebar_status_wraps_long_monitor_description(monkeypatch) -> None:
     description_component = status.children[0]
     assert "model-lens-sidebar-description" in description_component.className
     assert description_component.title == description
+    assert "text-overflow: ellipsis" in styles.INDEX_STRING
+    assert "white-space: nowrap" in styles.INDEX_STRING

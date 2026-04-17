@@ -6,7 +6,7 @@ COLORS = {
     "accent": "#0f3460",
     "highlight": "#e94560",
     "text": "#eee",
-    "muted": "#888",
+    "muted": "#b4bdd0",
     "low": "#2ecc71",
     "moderate": "#f39c12",
     "high": "#e74c3c",
@@ -118,9 +118,10 @@ INDEX_STRING = """<!DOCTYPE html>
     }
     .model-lens-sidebar-footer { margin-top: 12px; }
     .model-lens-sidebar-description {
-        overflow-wrap: anywhere;
-        word-break: break-word;
-        white-space: normal;
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
         max-width: 100%;
         line-height: 1.35;
     }
@@ -136,9 +137,9 @@ INDEX_STRING = """<!DOCTYPE html>
     .VirtualizedSelectOption { background-color: #1e2d42 !important; color: #ccc !important; }
     .VirtualizedSelectFocusedOption { background-color: #0f3460 !important; color: #fff !important; }
     .Select-input > input { color: #ccc !important; }
-    .Select-arrow { border-color: #888 transparent transparent !important; }
-    .Select.is-open > .Select-control .Select-arrow { border-color: transparent transparent #888 !important; }
-    .Select-clear { color: #888 !important; }
+    .Select-arrow { border-color: #b4bdd0 transparent transparent !important; }
+    .Select.is-open > .Select-control .Select-arrow { border-color: transparent transparent #b4bdd0 !important; }
+    .Select-clear { color: #b4bdd0 !important; }
     .dash-dropdown .Select-menu-outer { z-index: 1000 !important; }
     .dash-dropdown .Select-control,
     .dash-dropdown .Select-multi-value-wrapper,
@@ -146,8 +147,8 @@ INDEX_STRING = """<!DOCTYPE html>
     .DateInput_input { background-color: #1e2d42 !important; color: #ccc !important;
                        border-color: #2a2a4a !important; font-size: 0.85rem !important; }
     .DateRangePickerInput { background-color: #1e2d42 !important; }
-    .DateRangePickerInput_arrow svg { fill: #888 !important; }
-    .nav-link { color: #888 !important; padding: 10px 15px; border-radius: 6px; margin: 2px 0; }
+    .DateRangePickerInput_arrow svg { fill: #b4bdd0 !important; }
+    .nav-link { color: #b4bdd0 !important; padding: 10px 15px; border-radius: 6px; margin: 2px 0; }
     .nav-link:hover { color: #eee !important; background-color: #0f3460 !important; }
     .nav-link.active { color: #fff !important; background-color: #0f3460 !important; }
     @media (max-width: 991px) {

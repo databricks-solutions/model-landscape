@@ -12,6 +12,21 @@ from model_lens.ui.styles import (
     WIZARD_STEP_INACTIVE,
 )
 
+MODEL_TITLE_STYLE = {
+    "overflow": "hidden",
+    "textOverflow": "ellipsis",
+    "whiteSpace": "nowrap",
+    "maxWidth": "100%",
+}
+
+MODEL_DESCRIPTION_STYLE = {
+    "fontSize": "0.75rem",
+    "display": "-webkit-box",
+    "WebkitLineClamp": "2",
+    "WebkitBoxOrient": "vertical",
+    "overflow": "hidden",
+}
+
 
 def get_drift_status(
     value: float | int | None,
@@ -75,7 +90,7 @@ def make_model_status_card(
                         [
                             dbc.Col(
                                 [
-                                    html.H5(model_name, className="mb-1 text-light"),
+                                    html.H5(model_name, className="mb-1 text-light", style=MODEL_TITLE_STYLE, title=model_name),
                                     dbc.Badge(
                                         [html.I(className="fas fa-spinner fa-spin me-1"), "Computing..."],
                                         color="info",
@@ -93,7 +108,7 @@ def make_model_status_card(
                         ],
                         className="align-items-start",
                     ),
-                    html.P(description, className="text-muted mb-2", style={"fontSize": "0.75rem"})
+                    html.P(description, className="text-muted mb-2", style=MODEL_DESCRIPTION_STYLE, title=description)
                     if description
                     else None,
                     html.Hr(style={"borderColor": COLORS["grid"], "margin": "8px 0"}),
@@ -138,7 +153,7 @@ def make_model_status_card(
             [
                 dbc.Row(
                     [
-                        dbc.Col([html.H5(model_name, className="mb-1 text-light"), html.Div(badges)]),
+                        dbc.Col([html.H5(model_name, className="mb-1 text-light", style=MODEL_TITLE_STYLE, title=model_name), html.Div(badges)]),
                         dbc.Col(
                             html.I(className="fas fa-robot fa-2x", style={"color": border, "opacity": "0.7"}),
                             width="auto",
@@ -146,7 +161,7 @@ def make_model_status_card(
                     ],
                     className="align-items-start",
                 ),
-                html.P(description, className="text-muted mb-2", style={"fontSize": "0.75rem"})
+                html.P(description, className="text-muted mb-2", style=MODEL_DESCRIPTION_STYLE, title=description)
                 if description
                 else None,
                 html.Small(
