@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import logging
 import os
 import re
@@ -2823,32 +2824,10 @@ def register_callbacks(app) -> None:
                     }
                 )
             )
-            updated = MonitorConfig(
-                model_key=config.model_key,
-                display_name=config.display_name,
-                source_table=config.source_table,
-                contract=config.contract,
-                baseline=config.baseline,
-                problem_type=config.problem_type,
-                model_id_value=config.model_id_value,
-                model_version_value=config.model_version_value,
-                labels_table=config.labels_table,
-                labels_join_col=config.labels_join_col,
-                labels_order_col=config.labels_order_col,
-                performance_metric_names=config.performance_metric_names,
-                default_performance_metric=config.default_performance_metric,
-                performance_binning_mode=config.performance_binning_mode,
-                performance_binning_clip_percentile=config.performance_binning_clip_percentile,
-                drift_cadence_preset=config.drift_cadence_preset,
-                performance_cadence_preset=config.performance_cadence_preset,
-                schedule_enabled=config.schedule_enabled,
-                threshold_overrides=threshold_overrides,
-                mlflow=config.mlflow,
-                created_by=config.created_by,
-                status=getattr(config, "status", "active"),
-            )
+            updated = replace(config, threshold_overrides=threshold_overrides)
             backend.repository.upsert_monitor_config(updated)
         except Exception as error:
+            logger.exception("Failed to update drift thresholds for %s", model_id, exc_info=error)
             return _status_alert(_user_action_error_message("Updating drift thresholds"), "danger"), no_update
         action_text = "Reset drift thresholds to defaults." if ctx.triggered_id == "drift-reset-thresholds-btn" else "Saved drift thresholds."
         return _status_alert(action_text, "success"), datetime.now(timezone.utc).isoformat(timespec="seconds")

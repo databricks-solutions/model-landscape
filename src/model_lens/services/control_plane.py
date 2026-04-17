@@ -805,7 +805,7 @@ class ControlPlaneRepository:
                     %s AS drift_cadence_preset,
                     %s AS performance_cadence_preset,
                     %s AS schedule_enabled,
-                    %s AS threshold_overrides,
+                    CAST(%s AS STRING) AS threshold_overrides,
                     %s AS mlflow_experiment_name,
                     %s AS mlflow_experiment_id,
                     %s AS mlflow_run_id,

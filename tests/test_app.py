@@ -2778,6 +2778,81 @@ def test_save_reference_schedule_persists_threshold_overrides(monkeypatch) -> No
     assert "Updated monitor settings for Fraud Model Demo" in str(result[0])
 
 
+def test_save_drift_thresholds_preserves_existing_monitor_config(monkeypatch) -> None:
+    saved = {}
+
+    config = callbacks_module.MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.demo.inference",
+        contract=callbacks_module.build_inference_contract(
+            columns=["event_ts", "prediction", "label", "amount"],
+            timestamp_col="event_ts",
+            model_id_col=None,
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=["amount"],
+        ),
+        baseline=callbacks_module.build_default_baseline(n_days=7),
+        problem_type="classification",
+        performance_metric_names=("f1", "precision"),
+        default_performance_metric="precision",
+        performance_binning_mode="fixed_width",
+        performance_binning_clip_percentile=5.0,
+        drift_cadence_preset="daily",
+        performance_cadence_preset="daily_7d_repair",
+        schedule_enabled=False,
+        threshold_overrides={"psi": {"warning": 0.1, "critical": 0.25}},
+        mlflow=callbacks_module.MLflowLineage(experiment_name="fraud_exp", run_id="run-123"),
+        created_by="demo-user",
+    )
+
+    class _FakeBackend:
+        def __init__(self):
+            self.repository = SimpleNamespace(
+                upsert_monitor_config=lambda updated: saved.setdefault("config", updated),
+            )
+
+        def get_monitor_config(self, model_id):
+            assert model_id == "fraud_model_demo"
+            return config
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    monkeypatch.setattr(callbacks_module, "ctx", SimpleNamespace(triggered_id="drift-save-thresholds-btn"))
+    app = create_app()
+    fn = _find_callback_by_input_and_output(app, "drift-save-thresholds-btn", "drift-threshold-status")
+
+    result = fn(
+        1,
+        None,
+        "fraud_model_demo",
+        0.15,
+        0.35,
+        0.08,
+        0.2,
+        0.12,
+        0.4,
+        2.0,
+        8.0,
+        {},
+    )
+
+    assert saved["config"].source_table == config.source_table
+    assert saved["config"].performance_metric_names == config.performance_metric_names
+    assert saved["config"].performance_binning_mode == "fixed_width"
+    assert saved["config"].performance_binning_clip_percentile == 5.0
+    assert saved["config"].mlflow == config.mlflow
+    assert saved["config"].created_by == "demo-user"
+    assert saved["config"].threshold_overrides == {
+        "psi": {"warning": 0.15, "critical": 0.35},
+        "js_divergence": {"warning": 0.08, "critical": 0.2},
+        "kl_divergence": {"warning": 0.12, "critical": 0.4},
+        "null_rate": {"warning": 2.0, "critical": 8.0},
+    }
+    assert "Saved drift thresholds." in str(result[0])
+    assert result[1]
+
+
 def test_save_reference_shared_schedule_callback_updates_shared_job(monkeypatch) -> None:
     monkeypatch.setattr(
         callbacks_module,

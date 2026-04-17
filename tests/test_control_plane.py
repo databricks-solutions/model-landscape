@@ -358,6 +358,7 @@ def test_upsert_monitor_config_keeps_full_feature_and_categorical_metadata() -> 
     assert "ARRAY('segment')" in insert_sql
     assert "ARRAY('f1', 'precision', 'recall')" in insert_sql
     assert "CAST(%s AS DATE) AS baseline_start" in insert_sql
+    assert "CAST(%s AS STRING) AS threshold_overrides" in insert_sql
     assert insert_params[0] == "payments_risk_v1"
     assert insert_params[1] == "Payments Risk"
     assert insert_params[12] == "rolling"
