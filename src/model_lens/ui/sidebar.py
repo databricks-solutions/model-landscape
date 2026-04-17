@@ -28,7 +28,11 @@ def build_sidebar():
                     html.Div(id="sidebar-mode-banner", className="mb-2"),
                     html.Hr(style={"borderColor": COLORS["grid"]}),
                     html.Small("Active Model", className="text-muted d-block mb-1"),
-                    dcc.Dropdown(id="global-model-select", placeholder="Select model...", className="dash-dropdown mb-3"),
+                    dcc.Dropdown(
+                        id="global-model-select",
+                        placeholder="Select model...",
+                        className="dash-dropdown model-lens-sidebar-dropdown mb-3",
+                    ),
                     html.Div(id="sidebar-alert-badge", className="mt-1"),
                 ]
             ),

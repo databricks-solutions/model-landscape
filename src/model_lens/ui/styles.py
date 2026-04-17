@@ -144,6 +144,24 @@ INDEX_STRING = """<!DOCTYPE html>
     .dash-dropdown .Select-control,
     .dash-dropdown .Select-multi-value-wrapper,
     .dash-dropdown .Select-input input { color: #ccc !important; }
+    .model-lens-sidebar-dropdown .Select-control,
+    .model-lens-sidebar-dropdown .Select-value,
+    .model-lens-sidebar-dropdown .Select-value-label,
+    .model-lens-sidebar-dropdown .Select-placeholder {
+        max-width: 100%;
+    }
+    .model-lens-sidebar-dropdown .Select-value-label,
+    .model-lens-sidebar-dropdown .Select-placeholder,
+    .model-lens-sidebar-dropdown .VirtualizedSelectOption,
+    .model-lens-sidebar-dropdown .VirtualizedSelectFocusedOption {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .model-lens-sidebar-dropdown .Select-menu-outer {
+        max-width: 100%;
+    }
     .DateInput_input { background-color: #1e2d42 !important; color: #ccc !important;
                        border-color: #2a2a4a !important; font-size: 0.85rem !important; }
     .DateRangePickerInput { background-color: #1e2d42 !important; }

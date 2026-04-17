@@ -25,6 +25,7 @@ from model_lens.callbacks import (
 )
 from model_lens.pages import data_quality, drift_analysis, feature_deep_dive, incidents, overview, performance, reference
 from model_lens.ui import charts, components, styles
+from model_lens.ui.sidebar import build_sidebar
 
 
 RENDER_WIZARD_CALLBACK = (
@@ -3093,5 +3094,16 @@ def test_sidebar_status_truncates_long_monitor_description_with_ellipsis_css(mon
     description_component = status.children[0]
     assert "model-lens-sidebar-description" in description_component.className
     assert description_component.title == description
+    assert "text-overflow: ellipsis" in styles.INDEX_STRING
+    assert "white-space: nowrap" in styles.INDEX_STRING
+
+
+def test_sidebar_model_dropdown_uses_sidebar_specific_ellipsis_css() -> None:
+    sidebar = build_sidebar()
+    dropdown = sidebar.children[0].children[5]
+
+    assert "model-lens-sidebar-dropdown" in dropdown.className
+    assert ".model-lens-sidebar-dropdown .Select-value-label" in styles.INDEX_STRING
+    assert ".model-lens-sidebar-dropdown .VirtualizedSelectOption" in styles.INDEX_STRING
     assert "text-overflow: ellipsis" in styles.INDEX_STRING
     assert "white-space: nowrap" in styles.INDEX_STRING
