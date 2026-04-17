@@ -5,11 +5,6 @@ from dash import dcc, html
 
 from model_lens.config import settings
 from model_lens.domain.models import DRIFT_CADENCE_PRESETS, PERFORMANCE_CADENCE_PRESETS
-from model_lens.domain.performance_metrics import (
-    default_performance_metric_names,
-    default_primary_performance_metric,
-    performance_metric_options,
-)
 from model_lens.ui.components import make_wizard_step
 
 
@@ -52,24 +47,24 @@ def _workspace_step(form_style: dict) -> dbc.Row:
                             html.Details(
                                 [
                                     html.Summary("Permission checklist", className="fw-semibold"),
-                                            html.Ul(
-                                                [
-                                                    html.Li(
-                                                        "App service principal: CAN_USE on the SQL warehouse, "
-                                                        "source-data USE CATALOG / USE SCHEMA / SELECT, and "
-                                                        "control-plane USE CATALOG / USE SCHEMA / SELECT / MODIFY."
-                                                    ),
-                                                    html.Li(
-                                                        "App service principal: CAN MANAGE on the refresh workflow "
-                                                        "if you want full in-app job control, including shared schedule edits. "
-                                                        "If you only need activation-time bootstrap, CAN MANAGE RUN "
-                                                        "(or CAN_MANAGE_RUN on REFRESH_JOB_ID when you wire by job ID) "
-                                                        "is the minimum direct-trigger grant."
-                                                    ),
-                                                    html.Li(
-                                                        "If setup should create objects: CREATE TABLE in the control-plane schema, "
-                                                        "CREATE SCHEMA if the schema is missing, and CREATE CATALOG only when you enable the toggle."
-                                                    ),
+                                    html.Ul(
+                                        [
+                                            html.Li(
+                                                "App service principal: CAN_USE on the SQL warehouse, "
+                                                "source-data USE CATALOG / USE SCHEMA / SELECT, and "
+                                                "control-plane USE CATALOG / USE SCHEMA / SELECT / MODIFY."
+                                            ),
+                                            html.Li(
+                                                "App service principal: CAN MANAGE on the refresh workflow "
+                                                "if you want full in-app job control, including shared schedule edits. "
+                                                "If you only need activation-time bootstrap, CAN MANAGE RUN "
+                                                "(or CAN_MANAGE_RUN on REFRESH_JOB_ID when you wire by job ID) "
+                                                "is the minimum direct-trigger grant."
+                                            ),
+                                            html.Li(
+                                                "If setup should create objects: CREATE TABLE in the control-plane schema, "
+                                                "CREATE SCHEMA if the schema is missing, and CREATE CATALOG only when you enable the toggle."
+                                            ),
                                             html.Li(
                                                 "Refresh workflow identity: the same warehouse, source-data, and control-plane access as the app."
                                             ),
@@ -416,7 +411,6 @@ def _review_step() -> dbc.Row:
         "daily_7d_repair": "Daily (7-Day Repair)",
         "daily_14d_repair": "Daily (14-Day Repair)",
     }
-    default_metric_options = performance_metric_options("classification")
     return dbc.Row(
         [
             dbc.Col(
@@ -477,8 +471,8 @@ def _review_step() -> dbc.Row:
                                             dbc.Label("Tracked Performance Metrics"),
                                             dcc.Dropdown(
                                                 id="review-performance-metrics-dropdown",
-                                                options=default_metric_options,
-                                                value=list(default_performance_metric_names("classification")),
+                                                options=[],
+                                                value=[],
                                                 multi=True,
                                                 className="dash-dropdown",
                                             ),
@@ -490,8 +484,8 @@ def _review_step() -> dbc.Row:
                                             dbc.Label("Default Performance Metric"),
                                             dbc.Select(
                                                 id="review-default-performance-metric-select",
-                                                options=default_metric_options,
-                                                value=default_primary_performance_metric("classification"),
+                                                options=[],
+                                                value="",
                                             ),
                                         ],
                                         md=4,

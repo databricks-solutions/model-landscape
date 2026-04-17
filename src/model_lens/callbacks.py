@@ -5,7 +5,8 @@ import logging
 import os
 import re
 from datetime import datetime, timezone
-from functools import lru_cache
+from threading import Lock
+from time import monotonic
 from urllib.parse import parse_qs, urlencode
 
 import dash_bootstrap_components as dbc
@@ -18,7 +19,6 @@ from model_lens.domain.models import (
     DRIFT_CADENCE_PRESETS,
     MLflowLineage,
     MonitorConfig,
-    MonitorRuntimeState,
     PERFORMANCE_CADENCE_PRESETS,
 )
 from model_lens.domain.performance_metrics import (
@@ -67,12 +67,18 @@ _SCHEDULE_INTERVAL_LABELS = {
 }
 
 logger = logging.getLogger(__name__)
+_LAKEBASE_INSTANCE_CACHE_TTL_SECONDS = 60.0
+_lakebase_instances_cache: tuple[float, tuple[str, ...]] | None = None
+_lakebase_instances_cache_lock = Lock()
 
-
-@lru_cache(maxsize=1)
 def _workspace_lakebase_instances() -> tuple[str, ...]:
+    global _lakebase_instances_cache
     if not os.getenv("DATABRICKS_APP_PORT"):
         return ()
+    now = monotonic()
+    with _lakebase_instances_cache_lock:
+        if _lakebase_instances_cache and _lakebase_instances_cache[0] > now:
+            return _lakebase_instances_cache[1]
     try:
         from databricks.sdk import WorkspaceClient
 
@@ -83,9 +89,21 @@ def _workspace_lakebase_instances() -> tuple[str, ...]:
                 names.append(name)
             if len(names) >= 5:
                 break
-        return tuple(names)
+        result = tuple(names)
     except Exception:
-        return ()
+        result = ()
+    with _lakebase_instances_cache_lock:
+        _lakebase_instances_cache = (now + _LAKEBASE_INSTANCE_CACHE_TTL_SECONDS, result)
+    return result
+
+
+def _invalidate_workspace_lakebase_instances_cache() -> None:
+    global _lakebase_instances_cache
+    with _lakebase_instances_cache_lock:
+        _lakebase_instances_cache = None
+
+
+_workspace_lakebase_instances.cache_clear = _invalidate_workspace_lakebase_instances_cache  # type: ignore[attr-defined]
 
 
 def _status_alert(message: str, color: str = "info") -> dbc.Alert:
@@ -905,9 +923,26 @@ def _control_plane_ready(
 ) -> bool:
     if not ready_state:
         return False
+    requested_lakebase = bool((lakebase_instance_name or "").strip() or (lakebase_database_name or "").strip())
     recorded_catalog = str(ready_state.get("control_plane_catalog") or "").strip()
     recorded_schema = str(ready_state.get("control_plane_schema") or "").strip()
-    return bool(recorded_catalog and recorded_schema)
+    recorded_lakebase_instance = str(ready_state.get("lakebase_instance_name") or "").strip()
+    recorded_lakebase_database = str(ready_state.get("lakebase_database_name") or "").strip()
+    recorded_lakebase_schema = str(ready_state.get("lakebase_schema") or "").strip()
+    return bool(
+        recorded_catalog
+        and recorded_schema
+        and recorded_catalog == str(control_plane_catalog or "").strip()
+        and recorded_schema == str(control_plane_schema or "").strip()
+        and (
+            not requested_lakebase
+            or (
+                recorded_lakebase_instance == str(lakebase_instance_name or "").strip()
+                and recorded_lakebase_database == str(lakebase_database_name or "").strip()
+                and recorded_lakebase_schema == str(lakebase_schema or "").strip()
+            )
+        )
+    )
 
 
 def _workspace_readiness_mode(readiness_state: dict | None) -> str:
@@ -920,7 +955,17 @@ def _workspace_readiness_for_session(ready_state: dict | None, session_data: dic
         control_plane_ready=_ready_for_session(ready_state, session),
         lakebase_requested=bool(session["lakebase_instance_name"] or session["lakebase_database_name"]),
     )
-    return workspace_readiness_payload(readiness)
+    payload = workspace_readiness_payload(readiness)
+    payload.update(
+        {
+            "control_plane_catalog": session["control_plane_catalog"],
+            "control_plane_schema": session["control_plane_schema"],
+            "lakebase_instance_name": session["lakebase_instance_name"],
+            "lakebase_database_name": session["lakebase_database_name"],
+            "lakebase_schema": session["lakebase_schema"],
+        }
+    )
+    return payload
 
 
 def _render_workspace_readiness(readiness_state: dict | None) -> html.Div:
@@ -1198,11 +1243,23 @@ def _ready_for_session(ready_state: dict | None, session_data: dict | None) -> b
     session = _session_config(session_data)
     recorded_catalog = str(ready_state.get("control_plane_catalog") or "").strip()
     recorded_schema = str(ready_state.get("control_plane_schema") or "").strip()
+    recorded_lakebase_instance = str(ready_state.get("lakebase_instance_name") or "").strip()
+    recorded_lakebase_database = str(ready_state.get("lakebase_database_name") or "").strip()
+    recorded_lakebase_schema = str(ready_state.get("lakebase_schema") or "").strip()
+    requested_lakebase = bool(session["lakebase_instance_name"] or session["lakebase_database_name"])
     return bool(
         recorded_catalog
         and recorded_schema
         and recorded_catalog == session["control_plane_catalog"]
         and recorded_schema == session["control_plane_schema"]
+        and (
+            not requested_lakebase
+            or (
+                recorded_lakebase_instance == session["lakebase_instance_name"]
+                and recorded_lakebase_database == session["lakebase_database_name"]
+                and recorded_lakebase_schema == session["lakebase_schema"]
+            )
+        )
     )
 
 
@@ -1626,7 +1683,6 @@ def register_callbacks(app) -> None:
                 1: not workspace_ready,
                 2: not source_ready,
                 3: not contract_ready,
-                4: True,
             }.get(step, False)
             readiness_issues = [str(item) for item in (workspace_readiness_state or {}).get("blocking_issues", []) if str(item).strip()]
             primary_readiness_issue = readiness_issues[0] if readiness_issues else ""
@@ -1671,7 +1727,6 @@ def register_callbacks(app) -> None:
                 1: "Continue to Source",
                 2: "Continue to Contract",
                 3: "Continue to Review",
-                4: "Continue",
             }
             review = _review_summary(
                 control_plane_catalog=control_plane_catalog,
@@ -1713,7 +1768,7 @@ def register_callbacks(app) -> None:
                 {"display": "none"} if step == 1 else {},
                 {"display": "none"} if step == 4 else {},
                 next_disabled,
-                next_labels[step],
+                next_labels.get(step, "Continue"),
                 not (workspace_ready and contract_ready),
                 review,
             )
@@ -1926,6 +1981,7 @@ def register_callbacks(app) -> None:
                 mlflow_registered_model_name=(mlflow_registered_model_name or "").strip() or None,
             )
         except Exception as error:
+            logger.exception("Scan source table failed", exc_info=error)
             return None, _status_alert(_user_action_error_message("Scan"), "danger"), html.Div()
         columns = list(discovery.columns)
         preview = pd.DataFrame(discovery.preview_rows)
@@ -2301,6 +2357,7 @@ def register_callbacks(app) -> None:
         lakebase_schema,
         create_catalog_value,
     ):
+        _invalidate_workspace_lakebase_instances_cache()
         session = {
             "control_plane_catalog": (control_plane_catalog or "").strip(),
             "control_plane_schema": (control_plane_schema or "").strip(),
@@ -2347,6 +2404,7 @@ def register_callbacks(app) -> None:
         lakebase_schema,
         ready_state,
     ):
+        _invalidate_workspace_lakebase_instances_cache()
         session = {
             "control_plane_catalog": (control_plane_catalog or "").strip(),
             "control_plane_schema": (control_plane_schema or "").strip(),
@@ -2543,6 +2601,7 @@ def register_callbacks(app) -> None:
             backend.repository.upsert_monitor_config(config)
             backend.repository.mark_monitor_bootstrap_pending(config)
         except Exception as error:
+            logger.exception("Save monitor failed", exc_info=error)
             return _status_alert(_user_action_error_message("Save"), "danger"), no_update, no_update
         messages: list[tuple[str, str]] = []
         try:
@@ -2585,29 +2644,35 @@ def register_callbacks(app) -> None:
             overview_data = backend.get_overview_rows(metric="psi")
             if not overview_data:
                 return make_empty_state("No monitors onboarded yet. Go to Onboarding to add your first model.", icon="fas fa-plus-circle")
+            normalized_overview: list[dict[str, object]] = []
+            for row in overview_data:
+                normalized_row = dict(row)
+                normalized_row["max_metric"] = float(normalized_row.get("max_metric", normalized_row.get("max_psi", 0.0)) or 0.0)
+                normalized_row["avg_metric"] = float(normalized_row.get("avg_metric", normalized_row.get("avg_psi", 0.0)) or 0.0)
+                normalized_overview.append(normalized_row)
 
-            computing = sum(1 for row in overview_data if row["computing"])
+            computing = sum(1 for row in normalized_overview if row["computing"])
             healthy = sum(
                 1
-                for row in overview_data
-                if not row["computing"] and row["max_psi"] < float(row.get("threshold_warning") or 0.0)
+                for row in normalized_overview
+                if not row["computing"] and row["max_metric"] < float(row.get("threshold_warning") or 0.0)
             )
             warning = sum(
                 1
-                for row in overview_data
+                for row in normalized_overview
                 if (
                     not row["computing"]
-                    and float(row.get("threshold_warning") or 0.0) <= row["max_psi"] < float(row.get("threshold_critical") or 0.0)
+                    and float(row.get("threshold_warning") or 0.0) <= row["max_metric"] < float(row.get("threshold_critical") or 0.0)
                 )
             )
             critical = sum(
                 1
-                for row in overview_data
-                if not row["computing"] and row["max_psi"] >= float(row.get("threshold_critical") or 0.0)
+                for row in normalized_overview
+                if not row["computing"] and row["max_metric"] >= float(row.get("threshold_critical") or 0.0)
             )
             summary_row = dbc.Row(
                 [
-                    dbc.Col(make_metric_card("Models Monitored", str(len(overview_data)), "Active in production"), md=6, lg=4, xl=2),
+                    dbc.Col(make_metric_card("Models Monitored", str(len(normalized_overview)), "Active in production"), md=6, lg=4, xl=2),
                     dbc.Col(make_metric_card("Healthy", str(healthy), "Below each monitor's warning threshold", "success"), md=6, lg=4, xl=2),
                     dbc.Col(make_metric_card("Warning", str(warning), "Between each monitor's warning and critical thresholds", "warning"), md=6, lg=4, xl=2),
                     dbc.Col(make_metric_card("Critical", str(critical), "At or above each monitor's critical threshold", "danger"), md=6, lg=4, xl=2),
@@ -2615,7 +2680,7 @@ def register_callbacks(app) -> None:
                 ],
                 className="mb-4 g-3",
             )
-            sorted_data = sorted(overview_data, key=lambda item: (not item["computing"], item["max_psi"]), reverse=True)
+            sorted_data = sorted(normalized_overview, key=lambda item: (not item["computing"], item["max_metric"]), reverse=True)
             model_cards = [
                 dbc.Col(
                     dcc.Link(
@@ -2623,12 +2688,14 @@ def register_callbacks(app) -> None:
                             model_name=row["model_name"],
                             model_id=row["model_id"],
                             description=row["description"],
-                            max_psi=row["max_psi"],
-                            avg_psi=row["avg_psi"],
+                            max_metric=row["max_metric"],
+                            avg_metric=row["avg_metric"],
                             drifting_count=row["drifting_features"],
                             total_features=row["total_features"],
                             max_null_rate=None if row["computing"] else row["max_null_rate"],
                             has_labels=row["has_labels"],
+                            metric_label="PSI",
+                            metric_key="psi",
                             thresholds=row.get("thresholds"),
                             computing=row["computing"],
                             freshness_status=row["freshness_status"],
@@ -2647,8 +2714,8 @@ def register_callbacks(app) -> None:
                 [
                     {
                         "model": row["model_name"],
-                        "max_psi": row["max_psi"],
-                        "avg_psi": row["avg_psi"],
+                        "max_metric": row["max_metric"],
+                        "avg_metric": row["avg_metric"],
                         "drifting_features": row["drifting_features"],
                         "computing": row["computing"],
                         "thresholds": row.get("thresholds"),
@@ -2667,16 +2734,16 @@ def register_callbacks(app) -> None:
                             if row["computing"]
                             else (
                                 "Critical"
-                                if row["max_psi"] >= float(row.get("threshold_critical") or 0.0)
+                                if row["max_metric"] >= float(row.get("threshold_critical") or 0.0)
                                 else (
                                     "Warning"
-                                    if row["max_psi"] >= float(row.get("threshold_warning") or 0.0)
+                                    if row["max_metric"] >= float(row.get("threshold_warning") or 0.0)
                                     else "Healthy"
                                 )
                             )
                         ),
-                        "max_psi": "—" if row["computing"] else round(row["max_psi"], 4),
-                        "avg_psi": "—" if row["computing"] else round(row["avg_psi"], 4),
+                        "max_psi": "—" if row["computing"] else round(row["max_metric"], 4),
+                        "avg_psi": "—" if row["computing"] else round(row["avg_metric"], 4),
                         "avg_js": "—" if row["computing"] else round(row["avg_js"], 4),
                         "drifting_features": "Computing/Pending" if row["computing"] else f"{row['drifting_features']} / {row['total_features']}",
                         "top_drifter": row["top_drifter"],
@@ -2826,6 +2893,8 @@ def register_callbacks(app) -> None:
             )
             updated = replace(config, threshold_overrides=threshold_overrides)
             backend.repository.upsert_monitor_config(updated)
+        except ValueError as error:
+            return _status_alert(str(error), "warning"), no_update
         except Exception as error:
             logger.exception("Failed to update drift thresholds for %s", model_id, exc_info=error)
             return _status_alert(_user_action_error_message("Updating drift thresholds"), "danger"), no_update
@@ -3167,11 +3236,11 @@ def register_callbacks(app) -> None:
                     html.Div(
                         _feature_distribution_source_message(
                             str(details.get("distribution_source") or "unavailable"),
-                        )
-                    ),
-                    html.Div(
-                        f"Binning: {normalized_mode.title()}"
-                        + (
+            )
+                ),
+                html.Div(
+                    f"Binning: {normalized_mode.title()}"
+                    + (
                             f" | Bin Count: {_normalize_top_n(bin_count, default=40, minimum=2, maximum=200)}"
                             if normalized_mode == "fixed"
                             else ""
@@ -3182,6 +3251,8 @@ def register_callbacks(app) -> None:
                 ]
             )
             return distribution, dimension_chart, context_children
+        except ValueError as error:
+            return _status_alert(str(error), "warning"), html.Div(), str(error)
         except Exception as error:
             logger.exception("Failed to render feature deep dive", exc_info=error)
             return make_empty_state("Could not load feature detail. Check logs and try again.", icon="fas fa-triangle-exclamation"), html.Div(), "Feature detail is unavailable right now."
@@ -4599,18 +4670,8 @@ def register_callbacks(app) -> None:
                     "null_rate": (null_warning, null_critical),
                 }
             )
-            updated = MonitorConfig(
-                model_key=config.model_key,
-                display_name=config.display_name,
-                source_table=config.source_table,
-                contract=config.contract,
-                baseline=config.baseline,
-                problem_type=config.problem_type,
-                model_id_value=config.model_id_value,
-                model_version_value=config.model_version_value,
-                labels_table=config.labels_table,
-                labels_join_col=config.labels_join_col,
-                labels_order_col=config.labels_order_col,
+            updated = replace(
+                config,
                 performance_metric_names=tuple(performance_metric_names or ()),
                 default_performance_metric=default_performance_metric or None,
                 performance_binning_mode=performance_binning_mode or config.performance_binning_mode,
@@ -4623,36 +4684,13 @@ def register_callbacks(app) -> None:
                 ),
                 schedule_enabled="enabled" in (schedule_enabled or []),
                 threshold_overrides=threshold_overrides,
-                mlflow=config.mlflow,
-                created_by=config.created_by,
-                status=getattr(config, "status", "active"),
             )
             backend.repository.upsert_monitor_config(updated)
-            existing_state = backend.repository.get_monitor_runtime_state(updated.model_key)
-            now_text = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            if existing_state:
-                backend.repository.upsert_monitor_runtime_state(
-                    MonitorRuntimeState(
-                        model_key=existing_state.model_key,
-                        bootstrap_status=existing_state.bootstrap_status,
-                        last_drift_refresh_at=existing_state.last_drift_refresh_at,
-                        last_performance_refresh_at=existing_state.last_performance_refresh_at,
-                        next_drift_due_at=now_text if updated.schedule_enabled else None,
-                        next_performance_due_at=(
-                            now_text
-                            if updated.schedule_enabled and updated.has_labels and updated.performance_cadence_preset != "disabled"
-                            else None
-                        ),
-                        last_label_watermark=existing_state.last_label_watermark,
-                        last_run_status=existing_state.last_run_status,
-                        last_run_error=existing_state.last_run_error,
-                        last_run_started_at=existing_state.last_run_started_at,
-                        last_run_completed_at=existing_state.last_run_completed_at,
-                        backoff_until=existing_state.backoff_until,
-                        consecutive_failures=existing_state.consecutive_failures,
-                    )
-                )
+            backend.repository.ensure_monitor_runtime_state(updated)
+        except ValueError as error:
+            return _status_alert(str(error), "warning"), no_update
         except Exception as error:
+            logger.exception("Failed to update monitor settings for %s", model_id, exc_info=error)
             return _status_alert(_user_action_error_message("Updating monitor settings"), "danger"), no_update
         return (
             _status_alert(f"Updated monitor settings for {updated.display_name}.", "success"),
@@ -4749,7 +4787,10 @@ def register_callbacks(app) -> None:
             return _status_alert(resolution_error, "warning"), no_update
         try:
             backend.repository.archive_monitor(model_id)
+        except KeyError as error:
+            return _status_alert(str(error), "warning"), no_update
         except Exception as error:
+            logger.exception("Archiving monitor %s failed", model_id, exc_info=error)
             return _status_alert(_user_action_error_message("Archiving the monitor"), "danger"), no_update
         resolved_key = str(getattr(config, "model_key", "") or model_id).strip() or model_id
         return (
@@ -4781,7 +4822,10 @@ def register_callbacks(app) -> None:
             return _status_alert(resolution_error, "warning"), no_update
         try:
             backend.repository.restore_monitor(model_id)
+        except KeyError as error:
+            return _status_alert(str(error), "warning"), no_update
         except Exception as error:
+            logger.exception("Restoring monitor %s failed", model_id, exc_info=error)
             return _status_alert(_user_action_error_message("Restoring the monitor"), "danger"), no_update
         resolved_key = str(getattr(config, "model_key", "") or model_id).strip() or model_id
         return (
@@ -4887,7 +4931,10 @@ def register_callbacks(app) -> None:
             ), no_update
         try:
             backend.repository.delete_monitor(model_id)
+        except KeyError as error:
+            return _status_alert(str(error), "warning"), no_update
         except Exception as error:
+            logger.exception("Deleting monitor %s failed", model_id, exc_info=error)
             return _status_alert(_user_action_error_message("Deleting the monitor"), "danger"), no_update
         resolved_key = str(getattr(config, "model_key", "") or model_id).strip() or model_id
         return (

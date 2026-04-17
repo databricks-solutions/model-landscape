@@ -824,3 +824,7 @@ def test_update_shared_workflow_schedule_updates_only_schedule_field(monkeypatch
     assert fake_jobs.update_call["new_settings"].schedule.quartz_cron_expression == "0 0 */12 * * ?"
     assert status.current_interval_hours == 12
     assert status.current_label == "Every 12 Hours"
+
+
+def test_quartz_interval_hours_returns_none_for_fixed_hour_cron() -> None:
+    assert refresh_jobs._quartz_interval_hours("0 0 5 * * ?") is None

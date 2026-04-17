@@ -458,7 +458,7 @@ def build_volume_timeline(daily_volume: dict[str, int]):
 
 
 def build_quality_window_timeline(history_df: pd.DataFrame):
-    if history_df.empty:
+    if history_df.empty or "period" not in history_df.columns or "row_count" not in history_df.columns:
         fig = go.Figure()
         fig.add_annotation(text="No quality history available", showarrow=False)
         return _apply_layout(fig, title="Window Row Count")
@@ -517,7 +517,8 @@ def build_null_rate_chart(
         )
     )
     if rates and show_thresholds:
-        _, critical = get_thresholds("null_rate", thresholds)
+        warning, critical = get_thresholds("null_rate", thresholds)
+        fig.add_vline(x=warning, line_dash="dot", line_color=COLORS["moderate"])
         fig.add_vline(x=critical, line_dash="dash", line_color=COLORS["high"])
     return _apply_layout(
         fig,
@@ -635,33 +636,51 @@ def build_multi_model_summary(model_drift_data: list[dict], metric: str = "psi")
         return _apply_layout(fig, title="Multi-Model Drift Summary")
 
     models = [item["model"] for item in model_drift_data]
-    max_psi = [item["max_psi"] for item in model_drift_data]
+    max_metric = [float(item.get("max_metric", item.get("max_psi", 0.0)) or 0.0) for item in model_drift_data]
     drifting_count = [item["drifting_features"] for item in model_drift_data]
     computing = [bool(item.get("computing")) for item in model_drift_data]
+    metric_label = str(metric or "psi").upper()
 
     fig = make_subplots(
         rows=1,
         cols=2,
-        subplot_titles=(f"Max {metric.upper()} by Model", "Drifting Features Count"),
+        subplot_titles=(f"Max {metric_label} by Model", "Drifting Features Count"),
         horizontal_spacing=0.1,
     )
     colors = [
         COLORS["cyan"]
         if computing[index]
         else _metric_color(value, metric, model_drift_data[index].get("thresholds"))
-        for index, value in enumerate(max_psi)
+        for index, value in enumerate(max_metric)
     ]
     max_trace = go.Bar(
         x=models,
-        y=max_psi,
+        y=max_metric,
         marker_color=colors,
-        name="Max PSI",
-        text=["Computing" if is_computing else None for is_computing in computing],
-        textposition="auto",
+        name=f"Max {metric_label}",
+        text=[None if is_computing else f"{value:.4f}" for is_computing, value in zip(computing, max_metric)],
+        textposition="outside",
         cliponaxis=False,
     )
     fig.add_trace(max_trace, row=1, col=1)
     fig.add_trace(go.Bar(x=models, y=drifting_count, marker_color=COLORS["blue"], name="Features > Warning"), row=1, col=2)
+    computing_models = [model for model, is_computing in zip(models, computing) if is_computing]
+    if computing_models:
+        computing_y = max(max_metric) * 0.08 if max(max_metric) > 0 else 0.02
+        fig.add_trace(
+            go.Scatter(
+                x=computing_models,
+                y=[computing_y] * len(computing_models),
+                mode="text",
+                text=["Computing"] * len(computing_models),
+                textposition="top center",
+                textfont=dict(color=COLORS["cyan"], size=11),
+                showlegend=False,
+                hoverinfo="skip",
+            ),
+            row=1,
+            col=1,
+        )
     fig.update_xaxes(tickangle=-20, automargin=True, row=1, col=1)
     fig.update_xaxes(tickangle=-20, automargin=True, row=1, col=2)
     return _apply_layout(fig, title="Multi-Model Drift Overview", showlegend=False, height=420)
@@ -846,48 +865,75 @@ def build_feature_bin_impact(degradation_df: pd.DataFrame, feature_contributors:
         feature_order = totals.sort_values().index.tolist()
 
     fig = go.Figure()
+    legend_items: dict[str, str] = {}
     for feature in feature_order:
         feature_frame = degradation_df[degradation_df["feature"] == feature].copy()
         feature_frame["_bin_sort"] = feature_frame["bin_label"].apply(_bin_sort_key)
         feature_frame = feature_frame.sort_values(["_bin_sort", "bin_label"]).drop(columns=["_bin_sort"])
         for _, row in feature_frame.iterrows():
-            delta = row["delta"]
-            if delta < -0.02:
+            delta = pd.to_numeric(pd.Series([row["delta"]]), errors="coerce").iloc[0]
+            if pd.isna(delta):
+                color = COLORS["muted"]
+                legend_label = "Unavailable"
+            elif delta < -0.02:
                 color = COLORS["high"]
+                legend_label = "Degraded (delta <= -2%)"
             elif delta < -0.005:
                 color = "#e67e22"
+                legend_label = "Degraded (-2% to -0.5%)"
             elif delta < 0:
                 color = COLORS["moderate"]
+                legend_label = "Degraded (-0.5% to 0%)"
             else:
                 color = COLORS["low"]
+                legend_label = "Improved / stable (delta >= 0)"
+            legend_items.setdefault(legend_label, color)
             bar_width = abs(row["degradation_contribution"])
+            if pd.notna(delta):
+                hovertemplate = (
+                    f"<b>{feature}</b><br>"
+                    f"Bin: {row['bin_label']}<br>"
+                    f"Baseline: {float(row['baseline_metric']):.4f}<br>"
+                    f"Current: {float(row['current_metric']):.4f}<br>"
+                    f"Delta: {delta:+.4f}<br>"
+                    f"Current Window Share: {float(row['current_volume_pct']):.1f}%<br>"
+                    f"Weighted Contribution: {float(row['degradation_contribution']):.4f}"
+                    "<extra></extra>"
+                )
+            else:
+                hovertemplate = (
+                    f"<b>{feature}</b><br>"
+                    f"Bin: {row['bin_label']}<br>"
+                    "Baseline: unavailable<br>"
+                    "Current: unavailable<br>"
+                    "Delta: unavailable<br>"
+                    f"Current Window Share: {float(row['current_volume_pct']):.1f}%<br>"
+                    f"Weighted Contribution: {float(row['degradation_contribution']):.4f}"
+                    "<extra></extra>"
+                )
             fig.add_trace(
                 go.Bar(
-                    x=[bar_width if delta <= 0 else -bar_width],
+                    x=[bar_width if pd.isna(delta) or delta <= 0 else -bar_width],
                     y=[feature],
                     orientation="h",
                     marker_color=color,
                     marker_line=dict(color=COLORS["grid"], width=1.5),
                     opacity=0.96,
                     showlegend=False,
-                    hovertemplate=(
-                        f"<b>{feature}</b><br>"
-                        f"Bin: {row['bin_label']}<br>"
-                        f"Baseline: {row['baseline_metric']:.4f}<br>"
-                        f"Current: {row['current_metric']:.4f}<br>"
-                        f"Delta: {delta:+.4f}<br>"
-                        f"Current Window Share: {row['current_volume_pct']:.1f}%<br>"
-                        f"Weighted Contribution: {row['degradation_contribution']:.4f}"
-                        "<extra></extra>"
-                    ),
+                    hovertemplate=hovertemplate,
                 )
             )
 
-    for label, color in [
-        ("Degraded (delta <= -2%)", COLORS["high"]),
-        ("Degraded (-2% < delta < 0)", COLORS["moderate"]),
-        ("Improved / stable (delta >= 0)", COLORS["low"]),
+    for label in [
+        "Degraded (delta <= -2%)",
+        "Degraded (-2% to -0.5%)",
+        "Degraded (-0.5% to 0%)",
+        "Improved / stable (delta >= 0)",
+        "Unavailable",
     ]:
+        color = legend_items.get(label)
+        if color is None:
+            continue
         fig.add_trace(go.Bar(x=[None], y=[None], orientation="h", marker_color=color, name=label, showlegend=True))
 
     fig.add_vline(x=0, line_color=COLORS["muted"], line_width=1)
@@ -992,7 +1038,7 @@ def build_latest_window_metric_snapshot(snapshot: dict[str, object] | None):
     values = [metrics.get(label.lower()) for label in labels]
     bar_values = [float(value) if value is not None else 0.0 for value in values]
     colors = [COLORS["accent"] if value is not None else COLORS["muted"] for value in values]
-    text = [f"{float(value):.4f}" if value is not None else "N/A" for value in values]
+    text = [f"{float(value):.0%}" if value is not None else "N/A" for value in values]
     fig = go.Figure(
         go.Bar(
             x=labels,
@@ -1000,8 +1046,8 @@ def build_latest_window_metric_snapshot(snapshot: dict[str, object] | None):
             marker_color=colors,
             text=text,
             textposition="outside",
-            hovertemplate="<b>%{x}</b><br>Value: %{text}<extra></extra>",
+            hovertemplate="<b>%{x}</b><br>Value: %{y:.1%}<extra></extra>",
         )
     )
-    fig.update_yaxes(range=[0, 1.05], tickformat=".0%")
+    fig.update_yaxes(range=[0, 1.0], tickformat=".0%")
     return _apply_layout(fig, title=title, xaxis_title="", yaxis_title="Metric Value", height=300)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import timezone
 from typing import Any
 from uuid import uuid4
@@ -142,6 +143,13 @@ def _combine_weighted_mean_std(parts: list[tuple[int, float | None, float | None
     return combined_mean, combined_std
 
 
+def _non_empty_text_bounds(values: list[object] | tuple[object, ...]) -> tuple[str | None, str | None]:
+    normalized = sorted(str(value).strip() for value in values if str(value).strip())
+    if not normalized:
+        return None, None
+    return normalized[0], normalized[-1]
+
+
 def _aggregate_quality_summary_rows(model_key: str, rows: list[dict[str, Any]], computed_at: str) -> list[dict[str, Any]]:
     if not rows:
         return []
@@ -200,8 +208,8 @@ def _is_field_already_exists_error(error: Exception) -> bool:
     return "FIELD_ALREADY_EXISTS" in message or "ALREADY EXISTS" in message
 
 
-def _sql_like_literal(value: str) -> str:
-    return value.replace("'", "''")
+def _show_pattern_literal(value: str) -> str:
+    return re.escape(value).replace("'", "''")
 
 
 def _resolve_source_labels_join_col(
@@ -302,7 +310,7 @@ class ControlPlaneRepository:
         }
 
     def _schema_exists(self) -> bool:
-        schema_name = _sql_like_literal(self._table_names.schema)
+        schema_name = _show_pattern_literal(self._table_names.schema)
         try:
             schemas = self._warehouse.query(
                 f"SHOW SCHEMAS IN {self._table_names.catalog} LIKE '{schema_name}'"
@@ -312,7 +320,7 @@ class ControlPlaneRepository:
         return not schemas.empty
 
     def _table_exists(self, table_name: str) -> bool:
-        table_basename = _sql_like_literal(table_name.rsplit(".", 1)[-1])
+        table_basename = _show_pattern_literal(table_name.rsplit(".", 1)[-1])
         try:
             tables = self._warehouse.query(
                 f"SHOW TABLES IN {self._table_names.namespace} LIKE '{table_basename}'"
@@ -957,6 +965,8 @@ class ControlPlaneRepository:
         return recovered
 
     def archive_monitor(self, model_key: str) -> None:
+        if not self._monitor_exists(model_key):
+            raise KeyError(f"Monitor {model_key!r} does not exist.")
         now = pd.Timestamp.utcnow().isoformat()
         self._warehouse.execute_params(
             f"""
@@ -969,6 +979,8 @@ class ControlPlaneRepository:
         self._sync_read_model()
 
     def restore_monitor(self, model_key: str) -> None:
+        if not self._monitor_exists(model_key):
+            raise KeyError(f"Monitor {model_key!r} does not exist.")
         now = pd.Timestamp.utcnow().isoformat()
         self._warehouse.execute_params(
             f"""
@@ -981,7 +993,9 @@ class ControlPlaneRepository:
         self._sync_read_model()
 
     def delete_monitor(self, model_key: str) -> None:
-        for table_name in (
+        if not self._monitor_exists(model_key):
+            raise KeyError(f"Monitor {model_key!r} does not exist.")
+        table_names = (
             self._table_names.monitor_runtime_state,
             self._table_names.refresh_runs,
             self._table_names.comparison_windows,
@@ -999,12 +1013,30 @@ class ControlPlaneRepository:
             self._table_names.incidents,
             self._table_names.incident_history,
             self._table_names.monitor_configs,
-        ):
-            self._warehouse.execute_params(
-                f"DELETE FROM {table_name} WHERE model_key = %s",
-                (model_key,),
-            )
+        )
+        statements = [
+            f"DELETE FROM {table_name} WHERE model_key = %s;"
+            for table_name in table_names
+        ]
+        atomic_sql = "\n".join(statements)
+        try:
+            self._warehouse.execute_atomic_params(atomic_sql, (model_key,) * len(table_names))
+        except Exception as error:
+            logger.exception("Atomic delete failed for %s", model_key, exc_info=error)
+            raise RuntimeError("Atomic monitor delete failed; no partial delete was applied.") from error
         self._sync_read_model()
+
+    def _monitor_exists(self, model_key: str) -> bool:
+        frame = self._warehouse.query_params(
+            f"""
+            SELECT 1 AS found
+            FROM {self._table_names.monitor_configs}
+            WHERE model_key = %s
+            LIMIT 1
+            """,
+            (model_key,),
+        )
+        return not frame.empty
 
     def _row_to_monitor_config(self, row: pd.Series) -> MonitorConfig:
         contract = InferenceContract(
@@ -1143,6 +1175,51 @@ class ControlPlaneRepository:
                 state.consecutive_failures,
             ),
         )
+
+    def ensure_monitor_runtime_state(self, config: MonitorConfig) -> MonitorRuntimeState:
+        existing = self.get_monitor_runtime_state(config.model_key)
+        now = pd.Timestamp.now(tz=timezone.utc).isoformat()
+        bootstrap_completed = bool(
+            self.get_latest_published_generation_id(config.model_key)
+            or not self._warehouse.query_params(
+                f"""
+                SELECT 1 AS found
+                FROM {self._table_names.comparison_windows}
+                WHERE model_key = %s
+                LIMIT 1
+                """,
+                (config.model_key,),
+            ).empty
+        )
+        state = MonitorRuntimeState(
+            model_key=config.model_key,
+            bootstrap_status=(
+                "completed"
+                if bootstrap_completed
+                else (
+                    existing.bootstrap_status
+                    if existing and existing.bootstrap_status
+                    else "pending"
+                )
+            ),
+            last_drift_refresh_at=existing.last_drift_refresh_at if existing else None,
+            last_performance_refresh_at=existing.last_performance_refresh_at if existing else None,
+            next_drift_due_at=now if config.schedule_enabled else None,
+            next_performance_due_at=(
+                now
+                if config.schedule_enabled and config.has_labels and config.performance_cadence_preset != "disabled"
+                else None
+            ),
+            last_label_watermark=existing.last_label_watermark if existing else None,
+            last_run_status=existing.last_run_status if existing else None,
+            last_run_error=existing.last_run_error if existing else None,
+            last_run_started_at=existing.last_run_started_at if existing else None,
+            last_run_completed_at=existing.last_run_completed_at if existing else None,
+            backoff_until=existing.backoff_until if existing else None,
+            consecutive_failures=existing.consecutive_failures if existing else 0,
+        )
+        self.upsert_monitor_runtime_state(state)
+        return state
 
     def mark_monitor_bootstrap_pending(self, config: MonitorConfig) -> MonitorRuntimeState:
         existing = self.get_monitor_runtime_state(config.model_key)

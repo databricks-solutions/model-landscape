@@ -235,11 +235,7 @@ def _quartz_interval_hours(expression: str) -> int | None:
         except ValueError:
             return None
         return interval if interval in SCHEDULE_INTERVAL_OPTIONS else None
-    try:
-        int(normalized_hour)
-    except ValueError:
-        return None
-    return 24
+    return None
 
 
 def _principal_candidates(workspace_client) -> tuple[set[str], str | None]:

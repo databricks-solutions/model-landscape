@@ -8,6 +8,7 @@ from threading import Lock
 import time
 
 import pandas as pd
+import pytest
 
 from model_lens.config import settings
 from model_lens.domain.models import MLflowLineage, MonitorConfig, RefreshResult
@@ -29,6 +30,7 @@ class FakeWarehouse:
     def __init__(self) -> None:
         self.executed: list[str] = []
         self.executed_params: list[tuple[str, tuple]] = []
+        self.executed_atomic_params: list[tuple[str, tuple]] = []
         self.batch_calls: list[tuple[str, list[tuple]]] = []
         self.queries: list[str] = []
         self.query_param_calls: list[tuple[str, tuple]] = []
@@ -40,6 +42,7 @@ class FakeWarehouse:
         self.table_schemas: dict[str, list[dict[str, str]]] = {}
         self.fail_create_schema = False
         self.fail_create_table = False
+        self.fail_atomic_delete = False
         self.latest_published_generation = "published-1"
         self.comparison_window_rows: list[dict[str, object]] = []
         self.drift_window_rows: list[dict[str, object]] = []
@@ -161,6 +164,11 @@ class FakeWarehouse:
                 "status": params[34],
             }
 
+    def execute_atomic_params(self, sql: str, params: tuple) -> None:
+        if self.fail_atomic_delete:
+            raise RuntimeError("atomic deletes unsupported")
+        self.executed_atomic_params.append((sql, params))
+
     def execute_batch(self, insert_template: str, rows: list[tuple], batch_size: int = 200) -> None:
         del batch_size
         self.batch_calls.append((insert_template, rows))
@@ -168,12 +176,14 @@ class FakeWarehouse:
     def query(self, sql: str, cache: bool = False) -> pd.DataFrame:
         del cache
         self.queries.append(sql)
-        if sql == "SHOW SCHEMAS IN model_observability LIKE 'control_plane'":
-            if self.schema_exists:
+        if sql.startswith("SHOW SCHEMAS IN model_observability LIKE '"):
+            schema_name = sql.split("LIKE '", 1)[1].rsplit("'", 1)[0].replace("\\", "")
+            if schema_name == "control_plane" and self.schema_exists:
                 return pd.DataFrame([{"databaseName": "control_plane"}])
-            return pd.DataFrame(columns=["databaseName"])
+            if schema_name == "control_plane":
+                return pd.DataFrame(columns=["databaseName"])
         if sql.startswith("SHOW TABLES IN model_observability.control_plane LIKE '"):
-            table_name = sql.split("LIKE '", 1)[1].rsplit("'", 1)[0]
+            table_name = sql.split("LIKE '", 1)[1].rsplit("'", 1)[0].replace("\\", "")
             qualified_name = f"model_observability.control_plane.{table_name}"
             if qualified_name in self.existing_tables:
                 return pd.DataFrame([{"tableName": table_name}])
@@ -261,6 +271,10 @@ class FakeWarehouse:
             return pd.DataFrame([{"generation_id": self.latest_published_generation}])
         if "FROM model_observability.control_plane.comparison_windows" in sql:
             return pd.DataFrame(self.comparison_window_rows)
+        if "SELECT 1 AS found" in sql and "FROM model_observability.control_plane.monitor_configs" in sql:
+            if params and params[0] == self.monitor_row["model_key"]:
+                return pd.DataFrame([{"found": 1}])
+            return pd.DataFrame(columns=["found"])
         if "FROM model_observability.control_plane.incidents" in sql and "status = 'open'" in sql:
             return pd.DataFrame([{
                 "model_key": params[0],
@@ -1550,7 +1564,9 @@ def test_delete_monitor_purges_all_monitor_scoped_tables() -> None:
 
     repository.delete_monitor("payments_risk_v1")
 
-    deleted_tables = {sql.split("DELETE FROM ", 1)[1].split(" WHERE", 1)[0] for sql, _ in warehouse.executed_params}
+    assert len(warehouse.executed_atomic_params) == 1
+    atomic_sql, atomic_params = warehouse.executed_atomic_params[0]
+    deleted_tables = {statement.split("DELETE FROM ", 1)[1].split(" WHERE", 1)[0] for statement in atomic_sql.splitlines() if statement.strip()}
     assert {
         "model_observability.control_plane.monitor_runtime_state",
         "model_observability.control_plane.refresh_runs",
@@ -1567,7 +1583,105 @@ def test_delete_monitor_purges_all_monitor_scoped_tables() -> None:
         "model_observability.control_plane.incident_history",
         "model_observability.control_plane.monitor_configs",
     }.issubset(deleted_tables)
+    assert atomic_params == ("payments_risk_v1",) * len(deleted_tables)
     assert len(read_model.synced) == 1
+
+
+def test_archive_restore_and_delete_raise_key_error_for_unknown_monitor() -> None:
+    warehouse = FakeWarehouse()
+    repository = ControlPlaneRepository(
+        warehouse=warehouse,
+        table_names=TableNames("model_observability", "control_plane"),
+    )
+
+    with pytest.raises(KeyError):
+        repository.archive_monitor("missing_model")
+    with pytest.raises(KeyError):
+        repository.restore_monitor("missing_model")
+    with pytest.raises(KeyError):
+        repository.delete_monitor("missing_model")
+
+
+def test_delete_monitor_fails_closed_when_atomic_delete_is_unavailable() -> None:
+    warehouse = FakeWarehouse()
+    warehouse.fail_atomic_delete = True
+    repository = ControlPlaneRepository(
+        warehouse=warehouse,
+        table_names=TableNames("model_observability", "control_plane"),
+    )
+
+    with pytest.raises(RuntimeError, match="Atomic monitor delete failed"):
+        repository.delete_monitor("payments_risk_v1")
+
+    assert warehouse.executed_atomic_params == []
+
+
+def test_ensure_monitor_runtime_state_bootstraps_missing_state_from_published_generation() -> None:
+    warehouse = FakeWarehouse()
+    repository = ControlPlaneRepository(
+        warehouse=warehouse,
+        table_names=TableNames("model_observability", "control_plane"),
+    )
+
+    state = repository.ensure_monitor_runtime_state(_monitor_config())
+
+    assert state.bootstrap_status == "completed"
+    assert state.next_drift_due_at is not None
+
+
+def test_ensure_monitor_runtime_state_upgrades_stale_pending_when_bootstrap_completed() -> None:
+    warehouse = FakeWarehouse()
+    runtime_row = pd.DataFrame([{
+        "model_key": "payments_risk_v1",
+        "bootstrap_status": "pending",
+        "last_drift_refresh_at": None,
+        "last_performance_refresh_at": None,
+        "next_drift_due_at": None,
+        "next_performance_due_at": None,
+        "last_label_watermark": "",
+        "last_run_status": "",
+        "last_run_error": "",
+        "last_run_started_at": None,
+        "last_run_completed_at": None,
+        "backoff_until": None,
+        "consecutive_failures": 0,
+    }])
+
+    class _RuntimeWarehouse(FakeWarehouse):
+        def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
+            if "FROM model_observability.control_plane.monitor_runtime_state" in sql:
+                return runtime_row.copy()
+            return super().query_params(sql, params)
+
+    repository = ControlPlaneRepository(
+        warehouse=_RuntimeWarehouse(),
+        table_names=TableNames("model_observability", "control_plane"),
+    )
+
+    state = repository.ensure_monitor_runtime_state(_monitor_config())
+
+    assert state.bootstrap_status == "completed"
+    runtime_upserts = [
+        params
+        for sql, params in repository._warehouse.executed_params
+        if "INSERT INTO model_observability.control_plane.monitor_runtime_state" in sql
+    ]
+    assert runtime_upserts
+    assert runtime_upserts[-1][1] == "completed"
+
+
+def test_ensure_control_plane_show_probes_do_not_use_escape_clause() -> None:
+    warehouse = FakeWarehouse()
+    repository = ControlPlaneRepository(
+        warehouse=warehouse,
+        table_names=TableNames("model_observability", "control_plane"),
+    )
+
+    repository.ensure_control_plane()
+
+    show_queries = [sql for sql in warehouse.queries if sql.startswith("SHOW SCHEMAS") or sql.startswith("SHOW TABLES")]
+    assert show_queries
+    assert all("ESCAPE" not in sql for sql in show_queries)
 
 
 class StubRepository:

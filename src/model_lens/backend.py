@@ -3,8 +3,9 @@ from __future__ import annotations
 import inspect
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import timezone
+from threading import Lock
 from time import monotonic
 
 import pandas as pd
@@ -31,6 +32,8 @@ _MAX_DASHBOARD_WINDOW_HISTORY = 400
 _MAX_DASHBOARD_PERFORMANCE_WINDOWS = 180
 _MAX_DASHBOARD_DAILY_PROFILE_DAYS = 400
 _EXACT_SOURCE_DAILY_METRIC_CACHE_TTL_SECONDS = 30.0
+_EXACT_SOURCE_DAILY_METRIC_CACHE: dict[tuple[str, str, str, str], tuple[float, pd.DataFrame]] = {}
+_EXACT_SOURCE_DAILY_METRIC_CACHE_LOCK = Lock()
 
 
 def _safe_json_dict(value: object) -> dict:
@@ -43,6 +46,11 @@ def _safe_json_dict(value: object) -> dict:
     except (TypeError, json.JSONDecodeError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def clear_exact_source_daily_metric_cache() -> None:
+    with _EXACT_SOURCE_DAILY_METRIC_CACHE_LOCK:
+        _EXACT_SOURCE_DAILY_METRIC_CACHE.clear()
 
 
 def _safe_json_list(value: object) -> list[float]:
@@ -124,6 +132,33 @@ def _safe_int(value: object) -> int:
     if pd.isna(numeric):
         return 0
     return int(numeric)
+
+
+def _non_empty_text_bounds(values: list[object] | tuple[object, ...]) -> tuple[str | None, str | None]:
+    normalized = sorted(str(value).strip() for value in values if str(value).strip())
+    if not normalized:
+        return None, None
+    return normalized[0], normalized[-1]
+
+
+def _combine_weighted_mean_std(parts: list[tuple[int, float | None, float | None]]) -> tuple[float | None, float | None]:
+    valid_parts = [(count, mean, std) for count, mean, std in parts if count > 0 and mean is not None]
+    if not valid_parts:
+        return None, None
+    total_count = sum(count for count, _, _ in valid_parts)
+    if total_count <= 0:
+        return None, None
+    combined_mean = sum(count * float(mean) for count, mean, _ in valid_parts) / total_count
+    if total_count <= 1:
+        return combined_mean, None
+    total_ss = 0.0
+    for count, mean, std in valid_parts:
+        local_ss = 0.0
+        if std is not None and count > 1:
+            local_ss = (count - 1) * (float(std) ** 2)
+        total_ss += local_ss + (count * ((float(mean) - combined_mean) ** 2))
+    combined_std = (total_ss / (total_count - 1)) ** 0.5 if total_ss > 0 else 0.0
+    return combined_mean, combined_std
 
 
 def _safe_series_min(series: pd.Series) -> float:
@@ -223,23 +258,16 @@ def _quality_summary_from_daily_profiles(model_key: str, rows: list[dict[str, ob
         return {}
     frame["prediction_mean"] = pd.to_numeric(frame["prediction_mean"], errors="coerce")
     frame["prediction_std"] = pd.to_numeric(frame["prediction_std"], errors="coerce")
-    weighted_prediction_sum = (
-        frame["row_count"] * frame["prediction_mean"].fillna(0.0)
-    ).sum()
-    prediction_mean = (weighted_prediction_sum / total_rows) if total_rows else None
-    variance_terms = (
-        frame.apply(
-            lambda row: (
-                ((max(int(row["row_count"]) - 1, 0)) * float(row["prediction_std"] or 0.0) ** 2)
-                + (int(row["row_count"]) * float(row["prediction_mean"] or 0.0) ** 2)
+    prediction_mean, prediction_std = _combine_weighted_mean_std(
+        [
+            (
+                int(row["row_count"]),
+                _safe_optional_float(row["prediction_mean"]),
+                _safe_optional_float(row["prediction_std"]),
             )
-            if pd.notna(row["prediction_mean"])
-            else 0.0,
-            axis=1,
-        ).sum()
+            for _, row in frame.iterrows()
+        ]
     )
-    variance_numerator = max(float(variance_terms) - (total_rows * float(prediction_mean or 0.0) ** 2), 0.0)
-    prediction_std = (variance_numerator / (total_rows - 1)) ** 0.5 if total_rows > 1 else None
     daily_volume = {
         str(row["profile_date_ts"].date()): int(row["row_count"])
         for _, row in frame.sort_values("profile_date_ts").iterrows()
@@ -385,7 +413,6 @@ def _drift_results_from_frame(frame: pd.DataFrame, granularity: str = "daily") -
 @dataclass
 class DashboardBackend:
     repository: ControlPlaneRepository
-    _exact_source_daily_metric_cache: dict[tuple[str, str, str, str], tuple[float, pd.DataFrame]] = field(default_factory=dict, init=False, repr=False)
 
     @property
     def _warehouse(self):
@@ -612,8 +639,20 @@ class DashboardBackend:
             metadata_list = self._get_window_metadata(model_id, start_date=start_date, end_date=end_date)
             if not metadata_list:
                 return _empty_frame_with_reason("missing_class_facts")
-            load_start = min(str(metadata["baseline_start"]) for metadata in metadata_list if str(metadata["baseline_start"]).strip())
-            load_end = max(str(metadata["window_end"]) for metadata in metadata_list if str(metadata["window_end"]).strip())
+            load_start, load_end = _non_empty_text_bounds(
+                [
+                    value
+                    for metadata in metadata_list
+                    for value in (
+                        metadata.get("baseline_start"),
+                        metadata.get("baseline_end"),
+                        metadata.get("window_start"),
+                        metadata.get("window_end"),
+                    )
+                ]
+            )
+            if not load_start or not load_end:
+                return _empty_frame_with_reason("missing_class_facts")
             class_feature_rows = (
                 self.repository.get_daily_class_feature_profile_rows(
                     model_id,
@@ -1252,7 +1291,9 @@ class DashboardBackend:
                     "model_name": model["name"],
                     "description": model["description"],
                     "versions": model["versions"],
+                    "max_metric": _safe_float(drift.get("max_metric")),
                     "max_psi": _safe_float(drift.get("max_metric")),
+                    "avg_metric": _safe_float(drift.get("avg_metric")),
                     "avg_psi": _safe_float(drift.get("avg_metric")),
                     "avg_js": _safe_float(drift.get("avg_js")),
                     "drifting_features": int(drift.get("drifting_features") or 0),
@@ -1263,6 +1304,7 @@ class DashboardBackend:
                     "computing": computing,
                     "freshness_status": model["freshness_status"],
                     "last_run_status": model["last_run_status"],
+                    "metric": metric,
                     "threshold_warning": float(drift.get("threshold_warning") or get_thresholds(metric, threshold_map.get(model["id"]))[0]),
                     "threshold_critical": float(drift.get("threshold_critical") or get_thresholds(metric, threshold_map.get(model["id"]))[1]),
                     "thresholds": threshold_map.get(model["id"], merged_thresholds()),
@@ -1425,26 +1467,16 @@ class DashboardBackend:
         bounds = self._latest_window_bounds(model_id)
         if not bounds:
             return pd.Series(dtype=float), pd.Series(dtype=float), False
-        min_profile_date = min(
-            value
-            for value in (
+        min_profile_date, max_profile_date = _non_empty_text_bounds(
+            (
                 bounds["baseline_start"],
                 bounds["baseline_end"],
                 bounds["window_start"],
                 bounds["window_end"],
             )
-            if value
         )
-        max_profile_date = max(
-            value
-            for value in (
-                bounds["baseline_start"],
-                bounds["baseline_end"],
-                bounds["window_start"],
-                bounds["window_end"],
-            )
-            if value
-        )
+        if not min_profile_date or not max_profile_date:
+            return pd.Series(dtype=float), pd.Series(dtype=float), False
         filters = [
             "model_key = %s",
             "feature_name = %s",
@@ -1713,10 +1745,11 @@ class DashboardBackend:
             return pd.DataFrame()
         generation_id = self._published_generation_id(model_id) or ""
         cache_key = (model_id, start_date, end_date, generation_id)
-        cached = self._exact_source_daily_metric_cache.get(cache_key)
         now = monotonic()
-        if cached and cached[0] > now:
-            return cached[1].copy()
+        with _EXACT_SOURCE_DAILY_METRIC_CACHE_LOCK:
+            cached = _EXACT_SOURCE_DAILY_METRIC_CACHE.get(cache_key)
+            if cached and cached[0] > now:
+                return cached[1].copy()
         try:
             frame = pd.DataFrame(
                 loader(
@@ -1728,14 +1761,16 @@ class DashboardBackend:
         except Exception:
             logger.exception("Failed to derive daily label metrics directly from the source rows", extra={"model_key": model_id})
             return pd.DataFrame()
-        expired_keys = [key for key, (expires_at, _) in self._exact_source_daily_metric_cache.items() if expires_at <= now]
-        for key in expired_keys:
-            self._exact_source_daily_metric_cache.pop(key, None)
+        with _EXACT_SOURCE_DAILY_METRIC_CACHE_LOCK:
+            expired_keys = [key for key, (expires_at, _) in _EXACT_SOURCE_DAILY_METRIC_CACHE.items() if expires_at <= now]
+            for key in expired_keys:
+                _EXACT_SOURCE_DAILY_METRIC_CACHE.pop(key, None)
         if frame.empty:
-            self._exact_source_daily_metric_cache[cache_key] = (
-                now + _EXACT_SOURCE_DAILY_METRIC_CACHE_TTL_SECONDS,
-                pd.DataFrame(),
-            )
+            with _EXACT_SOURCE_DAILY_METRIC_CACHE_LOCK:
+                _EXACT_SOURCE_DAILY_METRIC_CACHE[cache_key] = (
+                    now + _EXACT_SOURCE_DAILY_METRIC_CACHE_TTL_SECONDS,
+                    pd.DataFrame(),
+                )
             return frame
         frame["profile_date_ts"] = pd.to_datetime(frame["profile_date"], errors="coerce")
         for column in (
@@ -1755,10 +1790,11 @@ class DashboardBackend:
             if column in frame.columns:
                 frame[column] = pd.to_numeric(frame[column], errors="coerce")
         normalized = frame.sort_values("profile_date_ts").reset_index(drop=True)
-        self._exact_source_daily_metric_cache[cache_key] = (
-            now + _EXACT_SOURCE_DAILY_METRIC_CACHE_TTL_SECONDS,
-            normalized.copy(),
-        )
+        with _EXACT_SOURCE_DAILY_METRIC_CACHE_LOCK:
+            _EXACT_SOURCE_DAILY_METRIC_CACHE[cache_key] = (
+                now + _EXACT_SOURCE_DAILY_METRIC_CACHE_TTL_SECONDS,
+                normalized.copy(),
+            )
         return normalized
 
     def _resolved_daily_label_metrics(

@@ -363,6 +363,7 @@ Expected result:
 - the `Refresh Diagnostics` recommendations match the recorded timings rather than a generic fixed banner
 - the `Monitor Settings` page also shows recent incident lifecycle rows for that monitor when drift/performance incidents have been opened, escalated, or recovered
 - the `Monitor Settings` page also shows an `Active` / `Archived` / `All` filter plus lifecycle controls; by default it follows the sidebar-selected monitor, old success banners clear when you switch monitors or revisit the page, active monitors show `Archive Monitor`, archived monitors show `Restore Monitor`, and `Delete Monitor And History` remains available in both states
+- lifecycle actions should now be truthful: trying to archive/restore/delete a nonexistent monitor should show a warning instead of a fake success, and deleting a real monitor should either remove all monitor-scoped facts or fail without partial cleanup
 - once incidents exist, the `Incidents` page shows cross-monitor open incidents and recent lifecycle rows, and its monitor/severity/status/metric filters all work without reloading the app
 - after the workflow finishes, Drift and Performance should already show historical windows rather than a single snapshot
 - after the workflow finishes, Data Quality should show window-history charts instead of only the latest summary row
@@ -377,6 +378,7 @@ Expected result:
   - the older unavailable-after-refresh message when class-aware daily facts are genuinely missing
 - Drift chart titles should include the active granularity and any active filters, threshold guides should stay hidden until you enable `Show Threshold Guides`, and very small drift values should switch to scientific notation instead of collapsing into unreadable `0.0000` labels
 - `Drift Analysis` should now expose an inline `Thresholds` accordion for `PSI`, `Jensen-Shannon`, `KL Divergence`, and `Null Rate (%)`; saving there should persist the same per-monitor overrides used by Overview/Data Quality, and `Reset to Defaults` should clear them
+- invalid threshold edits should return the specific validation message in the page banner, not the generic sanitized callback error
 - `Monitor Settings -> Settings` should now expose per-monitor threshold overrides for `PSI`, `Jensen-Shannon Divergence`, `KL Divergence`, and `Null Rate (%)`; saving those values should change Overview/Drift/Data Quality severity semantics for future refreshes without rewriting historical incident history
 - Performance should prefer raw daily metrics from persisted `daily_label_metrics`; if a day has undefined `precision`, `recall`, or `f1`, the timeline should show a gap rather than a forced zero. If the workspace has not backfilled `daily_label_metrics` yet, the page should fall back to persisted weighted daily/window performance history with an explanatory warning instead of showing an empty chart
 - the Performance page should now expose a `Tracked Drift Features` multi-select and a drift-threshold toggle; monitors with a small tracked-feature set should default to showing all of them on the lower drift chart, and that lower drift chart should respect the selected metric's threshold guides
@@ -387,6 +389,7 @@ Expected result:
 - when those exact-sample modes require raw values, the page should either use a bounded raw-window read or explain that exact-sample detail is unavailable
 - Data Quality's lower-right chart should now be `Latest Window Performance Snapshot` for binary classification monitors instead of the old prediction-distribution chart
 - `Monitor Settings -> Admin -> Shared Workflow Schedule` should show the detected shared-job wake interval; if the app service principal has `CAN_MANAGE` on the shared job, the interval should be editable in-app, otherwise the card should stay read-only with explicit guidance
+- fixed-hour cron expressions should display as custom/read-only schedules in that card and must not be silently rewritten to midnight when you reopen the page
 - `Monitor Settings -> Settings -> Compute Guidance` should now explain the current shared wake interval, per-monitor cadence, and recent compute-footprint tier (`Low`, `Elevated`, `High`, or `No compute footprint data yet`)
 - with the scratch dataset and `Baseline Days = 7`, you should have 8 daily comparison windows immediately
 - for very large real-world tables, the first run should use one exact bounded Spark source-range load per monitor scope, persist daily facts and affected derived windows through Spark/Delta writes, and reserve the configured sampling caps for UI/detail fallbacks rather than core refresh correctness

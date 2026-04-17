@@ -7,7 +7,13 @@ import pandas as pd
 import pytest
 
 import model_lens.backend as backend_module
-from model_lens.backend import DashboardBackend, _null_rate_dict, _period_label, _safe_json_list
+from model_lens.backend import (
+    DashboardBackend,
+    _null_rate_dict,
+    _period_label,
+    _safe_json_list,
+    clear_exact_source_daily_metric_cache,
+)
 from model_lens.domain.models import BaselinePolicy, InferenceContract, MonitorConfig
 from model_lens.services.refresh_jobs import SharedWorkflowScheduleStatus
 from model_lens.services.thresholds import get_thresholds
@@ -230,6 +236,11 @@ class _FakeWarehouse:
                 ]
             )
         raise AssertionError(f"Unexpected query: {sql}")
+
+
+@pytest.fixture(autouse=True)
+def _clear_backend_caches() -> None:
+    clear_exact_source_daily_metric_cache()
 
 
 def _with_published_generation(repository, generation_id: str = "published-1"):

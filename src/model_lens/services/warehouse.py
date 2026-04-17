@@ -133,6 +133,12 @@ class WarehouseConnection:
         self._retry(lambda cursor: cursor.execute(resolved_sql, parameters=resolved))
         self._invalidate_cache()
 
+    def execute_atomic_params(self, sql_body: str, params: tuple = ()) -> None:
+        statement = sql_body.strip()
+        if not statement.upper().startswith("BEGIN ATOMIC"):
+            statement = f"BEGIN ATOMIC\n{statement}\nEND"
+        self.execute_params(statement, params)
+
     def execute_batch(self, insert_template: str, rows: list[tuple], batch_size: int = 200) -> None:
         if not rows:
             return

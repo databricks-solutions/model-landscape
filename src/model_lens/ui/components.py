@@ -67,8 +67,10 @@ def make_model_status_card(
     *,
     model_name: str,
     model_id: str,
-    max_psi: float,
-    avg_psi: float,
+    max_metric: float | None = None,
+    avg_metric: float | None = None,
+    max_psi: float | None = None,
+    avg_psi: float | None = None,
     drifting_count: int,
     total_features: int,
     description: str = "",
@@ -81,6 +83,8 @@ def make_model_status_card(
     freshness_status: str = "fresh",
     last_run_status: str = "",
 ):
+    resolved_max_metric = float(max_metric if max_metric is not None else (max_psi or 0.0))
+    resolved_avg_metric = float(avg_metric if avg_metric is not None else (avg_psi or 0.0))
     if computing:
         border = COLORS["cyan"]
         return dbc.Card(
@@ -123,7 +127,7 @@ def make_model_status_card(
             className="h-100",
         )
 
-    status, badge_color, border = get_drift_status(max_psi, metric_key, thresholds)
+    status, badge_color, border = get_drift_status(resolved_max_metric, metric_key, thresholds)
     badges = [dbc.Badge(status, color=badge_color, className="mb-2")]
     freshness_badges = {
         "pending_bootstrap": dbc.Badge("Pending Bootstrap", color="secondary", className="ms-1 mb-2"),
@@ -175,7 +179,7 @@ def make_model_status_card(
                             [
                                 html.Small(f"Max {metric_label}", className="text-muted d-block"),
                                 html.Span(
-                                    f"{max_psi:.4f}",
+                                    f"{resolved_max_metric:.4f}",
                                     style={"color": border, "fontWeight": "600", "fontSize": "1.1rem"},
                                 ),
                             ]
@@ -183,7 +187,7 @@ def make_model_status_card(
                         dbc.Col(
                             [
                                 html.Small(f"Avg {metric_label}", className="text-muted d-block"),
-                                html.Span(f"{avg_psi:.4f}", style={"fontWeight": "600", "fontSize": "1.1rem"}),
+                                html.Span(f"{resolved_avg_metric:.4f}", style={"fontWeight": "600", "fontSize": "1.1rem"}),
                             ]
                         ),
                         dbc.Col(

@@ -587,7 +587,7 @@ def test_control_plane_ready_requires_successful_setup_state() -> None:
             lakebase_database_name=None,
             lakebase_schema=None,
         )
-        is True
+        is False
     )
 
 
@@ -1250,11 +1250,36 @@ def test_feature_bin_impact_sorts_bins_numerically_and_draws_visible_separators(
 
     figure = charts.build_feature_bin_impact(degradation, contributors)
     bar_traces = [trace for trace in figure.data if trace.showlegend is False]
+    legend_traces = [trace for trace in figure.data if trace.showlegend is True]
 
     assert "[0, 10)" in bar_traces[0].hovertemplate
     assert "[10, 20)" in bar_traces[1].hovertemplate
     assert bar_traces[0].marker.line.width == 1.5
     assert bar_traces[1].marker.line.width == 1.5
+    assert [trace.name for trace in legend_traces] == ["Degraded (delta <= -2%)"]
+
+
+def test_feature_bin_impact_marks_nan_delta_as_unavailable() -> None:
+    degradation = pd.DataFrame(
+        [
+            {
+                "feature": "amount",
+                "bin_label": "[0, 10)",
+                "baseline_metric": 0.0,
+                "current_metric": 0.0,
+                "delta": float("nan"),
+                "current_volume_pct": 35.0,
+                "degradation_contribution": 0.07,
+            }
+        ]
+    )
+    contributors = pd.DataFrame([{"feature": "amount", "weighted_delta": 0.07}])
+
+    figure = charts.build_feature_bin_impact(degradation, contributors)
+
+    assert figure.data[0].marker.color == charts.COLORS["muted"]
+    assert "Delta: unavailable" in figure.data[0].hovertemplate
+    assert any(trace.name == "Unavailable" for trace in figure.data if trace.showlegend)
 
 
 def test_demo_chart_layout_defaults_expand_margins_and_cap_heatmap_height() -> None:
@@ -1270,6 +1295,13 @@ def test_demo_chart_layout_defaults_expand_margins_and_cap_heatmap_height() -> N
     assert charts.LAYOUT_DEFAULTS["margin"] == {"l": 80, "r": 40, "t": 70, "b": 60}
     assert figure.layout.height == 1000
     assert figure.layout.yaxis.automargin is True
+
+
+def test_quality_window_timeline_handles_missing_required_columns() -> None:
+    figure = charts.build_quality_window_timeline(pd.DataFrame([{"window_end": "2026-01-21"}]))
+
+    assert figure.layout.title.text == "Window Row Count"
+    assert "No quality history available" in str(figure.layout.annotations[0].text)
 
 
 def test_horizontal_bar_charts_enable_yaxis_automargin_and_shorter_feature_impact_title() -> None:
@@ -1754,7 +1786,8 @@ def test_render_quality_callback_surfaces_history_and_latest_snapshot(monkeypatc
     snapshot_figure = result[3].children[1].children.children.figure
     assert snapshot_figure.layout.title.text == "Latest Window Performance Snapshot"
     assert len(null_rate_figure.layout.shapes or ()) == 0
-    assert len(null_rate_guided.layout.shapes or ()) == 1
+    assert len(null_rate_guided.layout.shapes or ()) == 2
+    assert snapshot_figure.data[0].text[0] == "75%"
 
 
 def test_performance_timeline_uses_distinct_metric_colors() -> None:
@@ -2104,6 +2137,31 @@ def test_render_feature_deep_dive_handles_backend_errors(monkeypatch) -> None:
     assert "Could not load feature detail. Check logs and try again." in str(distribution)
     assert "feature read failed" not in str(distribution)
     assert "Feature detail is unavailable right now." in str(context)
+
+
+def test_render_feature_deep_dive_surfaces_custom_edge_validation(monkeypatch) -> None:
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: SimpleNamespace())
+    app = create_app()
+    fn = _find_callback_by_input_and_output(app, "deepdive-feature-select", "deepdive-distribution-container")
+
+    distribution, dimension, context = fn(
+        "/features",
+        "fraud_model_demo",
+        "amount",
+        "",
+        0,
+        {},
+        1,
+        "custom",
+        20,
+        "1, abc, 2",
+        "off",
+        1.0,
+    )
+
+    assert "Invalid edge value: abc" in str(distribution)
+    assert isinstance(dimension, Component)
+    assert context == "Invalid edge value: abc"
 
 
 def test_render_feature_deep_dive_reports_unsafe_raw_fallback(monkeypatch) -> None:
@@ -2737,6 +2795,7 @@ def test_save_reference_schedule_persists_threshold_overrides(monkeypatch) -> No
             self.repository = SimpleNamespace(
                 upsert_monitor_config=lambda updated: saved.setdefault("config", updated),
                 get_monitor_runtime_state=lambda _: None,
+                ensure_monitor_runtime_state=lambda updated: saved.setdefault("runtime_state", updated.model_key),
             )
 
         def get_monitor_config(self, model_id):
@@ -2851,6 +2910,54 @@ def test_save_drift_thresholds_preserves_existing_monitor_config(monkeypatch) ->
     }
     assert "Saved drift thresholds." in str(result[0])
     assert result[1]
+
+
+def test_save_drift_thresholds_surfaces_validation_message(monkeypatch) -> None:
+    config = callbacks_module.MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.demo.inference",
+        contract=callbacks_module.build_inference_contract(
+            columns=["event_ts", "prediction", "label", "amount"],
+            timestamp_col="event_ts",
+            model_id_col=None,
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=["amount"],
+        ),
+        baseline=callbacks_module.build_default_baseline(n_days=7),
+    )
+
+    class _FakeBackend:
+        def __init__(self):
+            self.repository = SimpleNamespace(upsert_monitor_config=lambda updated: updated)
+
+        def get_monitor_config(self, model_id):
+            assert model_id == "fraud_model_demo"
+            return config
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    monkeypatch.setattr(callbacks_module, "ctx", SimpleNamespace(triggered_id="drift-save-thresholds-btn"))
+    app = create_app()
+    fn = _find_callback_by_input_and_output(app, "drift-save-thresholds-btn", "drift-threshold-status")
+
+    result = fn(
+        1,
+        None,
+        "fraud_model_demo",
+        0.4,
+        0.2,
+        0.08,
+        0.2,
+        0.12,
+        0.4,
+        2.0,
+        8.0,
+        {},
+    )
+
+    assert "PSI Critical must be greater than Warning." in str(result[0])
+    assert result[1] is callbacks_module.no_update
 
 
 def test_save_reference_shared_schedule_callback_updates_shared_job(monkeypatch) -> None:
