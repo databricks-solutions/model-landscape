@@ -3492,6 +3492,42 @@ def register_callbacks(app) -> None:
             return [], []
 
     @app.callback(
+        Output("perf-bin-count-input", "disabled"),
+        Output("perf-custom-edges-input", "disabled"),
+        Output("perf-outlier-value-input", "disabled"),
+        Output("perf-outlier-value-label", "children"),
+        Output("perf-outlier-value-help", "children"),
+        Input("perf-binning-mode-select", "value"),
+        Input("perf-outlier-mode-select", "value"),
+    )
+    def sync_performance_breakdown_controls(binning_mode, outlier_mode):
+        normalized_mode = str(binning_mode or "auto").strip().lower()
+        normalized_outlier_mode = _normalize_outlier_mode(outlier_mode)
+        if normalized_outlier_mode == "percentile_clip":
+            return (
+                normalized_mode != "fixed",
+                normalized_mode != "custom",
+                False,
+                "Trim Percentile P",
+                "Percentile Clip keeps values between P and 100-P.",
+            )
+        if normalized_outlier_mode == "iqr_fence":
+            return (
+                normalized_mode != "fixed",
+                normalized_mode != "custom",
+                False,
+                "IQR Multiplier K",
+                "IQR Fence keeps values inside Q1 - K*IQR and Q3 + K*IQR.",
+            )
+        return (
+            normalized_mode != "fixed",
+            normalized_mode != "custom",
+            True,
+            "Outlier Parameter",
+            "Percentile Clip uses P / 100-P clipping. IQR Fence uses Q1 - K*IQR to Q3 + K*IQR.",
+        )
+
+    @app.callback(
         Output("perf-labels-alert", "children"),
         Output("perf-kpi-cards", "children"),
         Output("perf-timeline-container", "children"),
@@ -3505,11 +3541,33 @@ def register_callbacks(app) -> None:
         Input("perf-drift-metric-select", "value"),
         Input("perf-drift-threshold-toggle", "value"),
         Input("perf-drift-feature-select", "value"),
+        Input("perf-apply-breakdown-controls-btn", "n_clicks"),
         Input("reload-token", "data"),
         Input("session-config-store", "data"),
+        State("perf-binning-mode-select", "value"),
+        State("perf-bin-count-input", "value"),
+        State("perf-custom-edges-input", "value"),
+        State("perf-outlier-mode-select", "value"),
+        State("perf-outlier-value-input", "value"),
         State("perf-feature-select", "value"),
     )
-    def render_performance(pathname, model_id, metric_name, drift_metric, perf_show_thresholds, current_drift_features, _, session_data, current_feature):
+    def render_performance(
+        pathname,
+        model_id,
+        metric_name,
+        drift_metric,
+        perf_show_thresholds,
+        current_drift_features,
+        _apply_breakdown_clicks,
+        _reload_token,
+        session_data,
+        binning_mode,
+        bin_count,
+        custom_edges_text,
+        outlier_mode,
+        outlier_value_raw,
+        current_feature,
+    ):
         if pathname != "/performance":
             return (no_update,) * 7
         try:
@@ -3530,6 +3588,10 @@ def register_callbacks(app) -> None:
                     html.Div(),
                 )
             resolved_metric = metric_name or _default_performance_metric(model_id, backend)
+            normalized_binning_mode = str(binning_mode or "auto").strip().lower()
+            custom_edges = _parse_custom_edges(custom_edges_text) if normalized_binning_mode == "custom" else None
+            normalized_outlier_mode = _normalize_outlier_mode(outlier_mode)
+            outlier_value = _outlier_control_value(normalized_outlier_mode, outlier_value_raw)
             performance = backend.get_performance_summary(model_id, metric_name=resolved_metric)
             latest_bins = performance["latest_bins"]
             all_bins = performance.get("all_bins", pd.DataFrame())
@@ -3580,13 +3642,30 @@ def register_callbacks(app) -> None:
             ]
             contributors = performance["contributors"]
             feature_frame = latest_bins if not latest_bins.empty else all_bins
-            features = sorted(
-                {
-                    str(value)
-                    for value in feature_frame.get("feature", pd.Series(dtype=str)).dropna().tolist()
-                    if str(value).strip()
-                }
+            exact_breakdown = backend.get_exact_performance_breakdown(
+                model_id,
+                metric_name=resolved_metric,
+                binning_mode=normalized_binning_mode,
+                n_bins=_normalize_top_n(bin_count, default=40, minimum=2, maximum=200),
+                custom_edges=custom_edges,
+                outlier_mode=normalized_outlier_mode,
+                outlier_value=outlier_value,
             )
+            breakdown_rows = exact_breakdown.get("rows", pd.DataFrame())
+            breakdown_contributors = exact_breakdown.get("contributors", pd.DataFrame())
+            breakdown_message = str(exact_breakdown.get("message") or "").strip()
+            if not breakdown_rows.empty:
+                feature_frame = breakdown_rows
+                contributors = breakdown_contributors
+            features = sorted({str(value) for value in (config.contract.feature_columns or []) if str(value).strip()})
+            if not features:
+                features = sorted(
+                    {
+                        str(value)
+                        for value in feature_frame.get("feature", pd.Series(dtype=str)).dropna().tolist()
+                        if str(value).strip()
+                    }
+                )
             feature_options = _option_list(features)
             feature_values = {option["value"] for option in feature_options}
             selected_feature = current_feature if current_feature in feature_values else (feature_options[0]["value"] if feature_options else None)
@@ -3604,6 +3683,13 @@ def register_callbacks(app) -> None:
                     timeline_reasons.append(current_reason)
             for current_reason in timeline_reasons:
                 alert_children.append(_status_alert(current_reason, "warning"))
+            if breakdown_message and breakdown_rows.empty:
+                alert_children.append(
+                    _status_alert(
+                        f"{breakdown_message} Showing the stored latest-window breakdown instead.",
+                        "warning",
+                    )
+                )
             if not degradation_detected:
                 alert_children.append(
                     _status_alert(
@@ -3846,7 +3932,7 @@ def register_callbacks(app) -> None:
             return html.Div(
                 [
                     html.Small(
-                        "Configurable binning and outlier handling now live in Feature Deep Dive for this selected feature.",
+                        "Feature Deep Dive lets you inspect this selected feature directly after adjusting the Performance-page breakdown controls above.",
                         className="text-muted d-block mb-2",
                     ),
                     dbc.Button(

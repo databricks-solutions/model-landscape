@@ -76,6 +76,51 @@ def _format_metric_value(metric: str, value: float, values: pd.Series | np.ndarr
     return f"{float(value):.4f}"
 
 
+def _fmt_num(value: float) -> str:
+    if pd.isna(value):
+        return "N/A"
+    numeric = float(value)
+    abs_val = abs(numeric)
+    if abs_val == 0:
+        return "0"
+    if abs_val >= 1:
+        return f"{numeric:,.4f}".rstrip("0").rstrip(".")
+    return f"{numeric:.4f}"
+
+
+def _shared_histogram_edges(
+    reference: np.ndarray,
+    current: np.ndarray,
+    *,
+    binning_mode: str,
+    n_bins: int,
+    custom_edges: list[float] | None,
+) -> np.ndarray:
+    if binning_mode == "custom" and custom_edges and len(custom_edges) >= 2:
+        return np.asarray(custom_edges, dtype=float)
+    combined = np.concatenate([values for values in (reference, current) if values.size > 0])
+    if combined.size == 0:
+        return np.asarray([0.0, 1.0], dtype=float)
+    min_value = float(np.nanmin(combined))
+    max_value = float(np.nanmax(combined))
+    if not np.isfinite(min_value) or not np.isfinite(max_value):
+        return np.asarray([0.0, 1.0], dtype=float)
+    if min_value == max_value:
+        padding = max(abs(min_value) * 0.05, 1.0)
+        return np.asarray([min_value - padding, max_value + padding], dtype=float)
+    if binning_mode == "fixed":
+        return np.histogram_bin_edges(combined, bins=max(int(n_bins), 2))
+    return np.histogram_bin_edges(combined, bins="auto")
+
+
+def _step_histogram_xy(counts: np.ndarray, edges: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    if len(edges) < 2:
+        return np.asarray([], dtype=float), np.asarray([], dtype=float)
+    x_values = np.repeat(edges, 2)[1:-1]
+    y_values = np.repeat(counts.astype(float), 2)
+    return x_values, y_values
+
+
 def _apply_percentile_trim(values: np.ndarray, percentile: float | None) -> np.ndarray:
     if percentile is None or percentile <= 0 or percentile >= 50 or values.size == 0:
         return values
@@ -405,42 +450,48 @@ def build_feature_distribution(
         fig.add_annotation(text="No data available", showarrow=False)
         return _apply_layout(fig, title=f"Distribution: {feature_name}")
 
+    edges = _shared_histogram_edges(
+        ref_clean,
+        cur_clean,
+        binning_mode=binning_mode,
+        n_bins=n_bins,
+        custom_edges=custom_edges,
+    )
+    baseline_hist = np.histogram(ref_clean, bins=edges, density=True)[0] if ref_clean.size else np.zeros(len(edges) - 1)
+    current_hist = np.histogram(cur_clean, bins=edges, density=True)[0] if cur_clean.size else np.zeros(len(edges) - 1)
+    baseline_x, baseline_y = _step_histogram_xy(baseline_hist, edges)
+    current_x, current_y = _step_histogram_xy(current_hist, edges)
+
     fig = go.Figure()
-    if binning_mode == "custom" and custom_edges and len(custom_edges) >= 2:
-        baseline_hist, edges = np.histogram(ref_clean, bins=np.asarray(custom_edges, dtype=float), density=True)
-        current_hist, _ = np.histogram(cur_clean, bins=np.asarray(custom_edges, dtype=float), density=True)
-        centers = (edges[:-1] + edges[1:]) / 2.0
-        widths = np.diff(edges)
-        fig.add_trace(go.Bar(x=centers, y=baseline_hist, width=widths, name="Baseline", opacity=0.55, marker_color=COLORS["blue"]))
-        fig.add_trace(go.Bar(x=centers, y=current_hist, width=widths, name="Current", opacity=0.55, marker_color=COLORS["highlight"]))
-    else:
-        histogram_kwargs = {} if binning_mode == "auto" else {"nbinsx": max(int(n_bins), 2)}
-        fig.add_trace(
-            go.Histogram(
-                x=ref_clean,
-                name="Baseline",
-                opacity=0.6,
-                marker_color=COLORS["blue"],
-                histnorm="probability density",
-                **histogram_kwargs,
-            )
+    fig.add_trace(
+        go.Scatter(
+            x=baseline_x,
+            y=baseline_y,
+            mode="lines",
+            name="Baseline",
+            line=dict(color="rgb(52, 152, 219)", width=2),
+            fill="tozeroy",
+            fillcolor="rgba(52, 152, 219, 0.25)",
+            hovertemplate="<b>Baseline</b><br>Value: %{x:.4g}<br>Density: %{y:.4g}<extra></extra>",
         )
-        fig.add_trace(
-            go.Histogram(
-                x=cur_clean,
-                name="Current",
-                opacity=0.6,
-                marker_color=COLORS["highlight"],
-                histnorm="probability density",
-                **histogram_kwargs,
-            )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=current_x,
+            y=current_y,
+            mode="lines",
+            name="Current",
+            line=dict(color="rgb(233, 69, 96)", width=2.5),
+            fill="tozeroy",
+            fillcolor="rgba(233, 69, 96, 0.15)",
+            hovertemplate="<b>Current</b><br>Value: %{x:.4g}<br>Density: %{y:.4g}<extra></extra>",
         )
+    )
     return _apply_layout(
         fig,
         title=f"Distribution: {feature_name}",
         xaxis_title="Value",
         yaxis_title="Density",
-        barmode="overlay",
         legend=dict(bgcolor="rgba(0,0,0,0.5)"),
         height=350,
     )
@@ -727,7 +778,7 @@ def build_dimension_breakdown(breakdown_df: pd.DataFrame, feature_name: str, dim
             marker=dict(size=7),
             text=(
                 [
-                    f"Median={p50:.4g}<br>P75={p75:.4g}<br>P25={p25:.4g}"
+                    f"Median={_fmt_num(p50)}<br>P75={_fmt_num(p75)}<br>P25={_fmt_num(p25)}"
                     for p50, p75, p25 in zip(
                         working["feature_p50"].fillna(np.nan),
                         working["feature_p75"].fillna(np.nan),

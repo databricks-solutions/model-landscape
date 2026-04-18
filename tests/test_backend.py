@@ -954,6 +954,94 @@ def test_get_performance_summary_falls_back_to_comparison_window_rows_when_exact
     assert performance["timeline_unavailable_reason"] == ""
 
 
+def test_get_exact_performance_breakdown_rebins_latest_window_with_requested_controls() -> None:
+    config = MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.model_lens_demo.inference_logs",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=("amount", "velocity_7d"),
+        ),
+        baseline=BaselinePolicy(n_days=7),
+        model_id_value="fraud_model_v1",
+    )
+
+    class _BoundsWarehouse:
+        def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
+            if "FROM comparison_windows" in sql:
+                return pd.DataFrame(
+                    [
+                        {
+                            "baseline_start": "2026-01-01",
+                            "baseline_end": "2026-01-02",
+                            "window_start": "2026-01-08",
+                            "window_end": "2026-01-09",
+                        }
+                    ]
+                )
+            return pd.DataFrame()
+
+    captured: dict[str, object] = {}
+
+    def _load_monitor_frame(
+        current_config,
+        *,
+        start_date=None,
+        end_date=None,
+        feature_columns=None,
+        sample_rows_per_day=None,
+        max_total_rows=None,
+    ) -> pd.DataFrame:
+        captured["start_date"] = start_date
+        captured["end_date"] = end_date
+        captured["feature_columns"] = feature_columns
+        captured["max_total_rows"] = max_total_rows
+        assert current_config.model_key == "fraud_model_demo"
+        return pd.DataFrame(
+            [
+                {"event_ts": "2026-01-01", "prediction": 1, "label": 1, "amount": 1.0, "velocity_7d": 10.0},
+                {"event_ts": "2026-01-01", "prediction": 0, "label": 1, "amount": 2.0, "velocity_7d": 12.0},
+                {"event_ts": "2026-01-02", "prediction": 1, "label": 0, "amount": 6.0, "velocity_7d": 30.0},
+                {"event_ts": "2026-01-02", "prediction": 1, "label": 1, "amount": 7.0, "velocity_7d": 35.0},
+                {"event_ts": "2026-01-08", "prediction": 1, "label": 1, "amount": 1.5, "velocity_7d": 11.0},
+                {"event_ts": "2026-01-08", "prediction": 1, "label": 0, "amount": 2.5, "velocity_7d": 13.0},
+                {"event_ts": "2026-01-09", "prediction": 1, "label": 1, "amount": 6.5, "velocity_7d": 31.0},
+                {"event_ts": "2026-01-09", "prediction": 1, "label": 0, "amount": 7.5, "velocity_7d": 36.0},
+            ]
+        )
+
+    repository = SimpleNamespace(
+        _warehouse=_BoundsWarehouse(),
+        table_names=SimpleNamespace(comparison_windows="comparison_windows"),
+        list_monitor_configs=lambda status="active": [config],
+        get_monitor_summary=lambda: pd.DataFrame(),
+        load_monitor_frame=_load_monitor_frame,
+    )
+    backend = DashboardBackend(repository=_with_published_generation(repository))
+
+    breakdown = backend.get_exact_performance_breakdown(
+        "fraud_model_demo",
+        metric_name="precision",
+        binning_mode="fixed",
+        n_bins=2,
+        outlier_mode="off",
+    )
+
+    assert captured["start_date"] == "2026-01-01"
+    assert captured["end_date"] == "2026-01-09"
+    assert captured["feature_columns"] == ("amount", "velocity_7d")
+    assert captured["max_total_rows"] == backend_module.settings.feature_detail_max_rows
+    assert breakdown["message"] == ""
+    assert set(breakdown["contributors"]["feature"]) == {"amount", "velocity_7d"}
+    assert set(breakdown["rows"]["feature"]) == {"amount", "velocity_7d"}
+    assert all(str(value).startswith("[") for value in breakdown["rows"]["bin_label"])
+    assert (breakdown["rows"].groupby("feature").size() >= 2).all()
+
+
 def test_get_latest_window_metrics_aggregates_latest_daily_label_facts() -> None:
     config = MonitorConfig(
         model_key="fraud_model_demo",

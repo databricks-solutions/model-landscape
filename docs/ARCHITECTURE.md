@@ -143,7 +143,7 @@ When those persisted class-aware quality facts are missing or stale, the Data Qu
 `monitor_configs` now also stores the monitor's configured performance metric set and default Performance-tab metric. The persisted performance tables stay generic on `metric_name`, so refresh and readback can handle different built-in metric combinations per monitor without changing the warehouse schema again.
 Monitor config writes are now atomic Delta `MERGE` operations keyed by `model_key`, so app-side saves no longer rely on a delete-then-insert gap. Monitor delete now follows the same fail-closed principle: Model Lens uses one `BEGIN ATOMIC ... END` block for all monitor-scoped deletes and refuses to run a partial cleanup sequence if that atomic path fails.
 
-The Performance page no longer carries a second independent bin-detail chart. The per-bin impact chart remains the high-level “what hurts the metric” surface, and deeper configurable binning/outlier inspection is delegated to Feature Deep Dive through a prefilled handoff for the selected feature.
+The Performance page no longer carries a second independent bin-detail chart. The per-bin impact chart remains the high-level “what hurts the metric” surface, but it now re-bins the latest comparison window live with the same binning and outlier controls exposed on the page. Feature Deep Dive remains the feature-specific follow-up path through a prefilled handoff for the selected feature.
 
 ### 4. Lakebase Read Model
 

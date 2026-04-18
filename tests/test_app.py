@@ -49,6 +49,33 @@ RENDER_QUALITY_CALLBACK = (
 )
 
 
+def _performance_callback_args(
+    metric: str = "f1",
+    drift_metric: str = "psi",
+    current_drift_features=None,
+    current_feature=None,
+    *,
+    pathname: str = "/performance",
+) -> tuple:
+    return (
+        pathname,
+        "fraud_model_demo",
+        metric,
+        drift_metric,
+        False,
+        current_drift_features,
+        0,
+        0,
+        {},
+        "fixed",
+        4,
+        None,
+        "off",
+        1.0,
+        current_feature,
+    )
+
+
 def _walk(component: Component) -> Iterator[Component]:
     yield component
     children = getattr(component, "children", None)
@@ -1183,7 +1210,7 @@ def test_render_performance_callback_surfaces_zero_delta_state(monkeypatch) -> N
     class _FakeBackend:
         def get_monitor_config(self, model_id):
             return SimpleNamespace(
-                contract=SimpleNamespace(label_col="label"),
+                contract=SimpleNamespace(label_col="label", feature_columns=("amount",)),
                 problem_type="classification",
                 performance_metric_names=("f1", "precision", "recall"),
             )
@@ -1200,6 +1227,34 @@ def test_render_performance_callback_surfaces_zero_delta_state(monkeypatch) -> N
                 "timeline_unavailable_reason": "",
             }
 
+        def get_exact_performance_breakdown(self, model_id, **kwargs):
+            return {
+                "rows": pd.DataFrame(
+                    [
+                        {
+                            "feature": "amount",
+                            "bin_label": "[0, 10)",
+                            "baseline_metric": 0.9,
+                            "current_metric": 0.7,
+                            "delta": -0.2,
+                            "current_volume_pct": 35.0,
+                            "degradation_contribution": -0.07,
+                        },
+                        {
+                            "feature": "amount",
+                            "bin_label": "[10, 20)",
+                            "baseline_metric": 0.88,
+                            "current_metric": 0.78,
+                            "delta": -0.1,
+                            "current_volume_pct": 25.0,
+                            "degradation_contribution": -0.025,
+                        },
+                    ]
+                ),
+                "contributors": pd.DataFrame([{"feature": "amount", "weighted_delta": -0.095}]),
+                "message": "",
+            }
+
         def get_drift_results(self, model_id, granularity="daily"):
             assert granularity == "daily"
             return pd.DataFrame(
@@ -1213,7 +1268,7 @@ def test_render_performance_callback_surfaces_zero_delta_state(monkeypatch) -> N
     callback = app.callback_map[RENDER_PERFORMANCE_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn("/performance", "fraud_model_demo", "f1", "psi", False, None, 0, {}, None)
+    result = fn(*_performance_callback_args())
 
     assert "Feature impact metric: F1 Score" in str(result[0])
     assert "no significant degradation" in str(result[0]).lower()
@@ -1221,6 +1276,7 @@ def test_render_performance_callback_surfaces_zero_delta_state(monkeypatch) -> N
     assert "PSI Over Time (All Tracked Features)" in str(result[3])
     assert "Latest Bin Metrics" in str(result[3])
     assert "Weighted Contribution = Delta x Current Window Share" in str(result[3])
+    assert "[0, 10)" in str(result[3])
     assert "Only one comparison window is available" in str(result[6])
 
 
@@ -1426,7 +1482,7 @@ def test_render_performance_callback_handles_partial_window_note_and_missing_met
     class _FakeBackend:
         def get_monitor_config(self, model_id):
             return SimpleNamespace(
-                contract=SimpleNamespace(label_col="label"),
+                contract=SimpleNamespace(label_col="label", feature_columns=("amount",)),
                 problem_type="classification",
                 performance_metric_names=("f1", "precision", "recall"),
             )
@@ -1450,6 +1506,13 @@ def test_render_performance_callback_handles_partial_window_note_and_missing_met
                 "timeline_unavailable_reason": reason_map.get(metric_name, ""),
             }
 
+        def get_exact_performance_breakdown(self, model_id, **kwargs):
+            return {
+                "rows": pd.DataFrame(),
+                "contributors": pd.DataFrame(),
+                "message": "Exact bounded performance rows are unavailable for this monitor.",
+            }
+
         def get_drift_results(self, model_id, granularity="daily"):
             assert granularity == "daily"
             return pd.DataFrame(
@@ -1463,9 +1526,10 @@ def test_render_performance_callback_handles_partial_window_note_and_missing_met
     callback = app.callback_map[RENDER_PERFORMANCE_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn("/performance", "fraud_model_demo", "precision", "psi", False, None, 0, {}, None)
+    result = fn(*_performance_callback_args(metric="precision"))
 
     assert "unavailable until daily labeled facts are populated" in str(result[0]).lower()
+    assert "showing the stored latest-window breakdown instead" in str(result[0]).lower()
     assert "Latest comparison window end: 2026-01-21" in str(result[6])
     assert "Performance Metrics Over Time" in str(result[2])
     assert "Chart gaps mean the metric was undefined on those days, not zero." in str(result[6])
@@ -1491,7 +1555,7 @@ def test_render_performance_callback_uses_selected_drift_metric(monkeypatch) -> 
     class _FakeBackend:
         def get_monitor_config(self, model_id):
             return SimpleNamespace(
-                contract=SimpleNamespace(label_col="label"),
+                contract=SimpleNamespace(label_col="label", feature_columns=("amount",)),
                 problem_type="classification",
                 performance_metric_names=("f1", "precision", "recall"),
             )
@@ -1508,6 +1572,13 @@ def test_render_performance_callback_uses_selected_drift_metric(monkeypatch) -> 
                 "timeline_unavailable_reason": "",
             }
 
+        def get_exact_performance_breakdown(self, model_id, **kwargs):
+            return {
+                "rows": pd.DataFrame(),
+                "contributors": pd.DataFrame(),
+                "message": "Exact bounded performance rows are unavailable for this monitor.",
+            }
+
         def get_drift_results(self, model_id, granularity="daily"):
             assert granularity == "daily"
             return pd.DataFrame(
@@ -1522,7 +1593,7 @@ def test_render_performance_callback_uses_selected_drift_metric(monkeypatch) -> 
     callback = app.callback_map[RENDER_PERFORMANCE_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn("/performance", "fraud_model_demo", "f1", "js_divergence", False, None, 0, {}, None)
+    result = fn(*_performance_callback_args(drift_metric="js_divergence"))
 
     assert "Jensen-Shannon Divergence Over Time (All Tracked Features)" in str(result[3])
     assert "Compare the Jensen-Shannon Divergence trend below" in str(result[3])
@@ -1548,7 +1619,7 @@ def test_render_performance_callback_ignores_invalid_timeline_periods(monkeypatc
     class _FakeBackend:
         def get_monitor_config(self, model_id):
             return SimpleNamespace(
-                contract=SimpleNamespace(label_col="label"),
+                contract=SimpleNamespace(label_col="label", feature_columns=("amount",)),
                 problem_type="classification",
                 performance_metric_names=("f1", "precision", "recall"),
             )
@@ -1568,6 +1639,9 @@ def test_render_performance_callback_ignores_invalid_timeline_periods(monkeypatc
                 "timeline_unavailable_reason": "",
             }
 
+        def get_exact_performance_breakdown(self, model_id, **kwargs):
+            return {"rows": latest_bins.copy(), "contributors": pd.DataFrame([{"feature": "amount", "weighted_delta": -0.01}]), "message": ""}
+
         def get_drift_results(self, model_id, granularity="daily"):
             assert granularity == "daily"
             return pd.DataFrame(
@@ -1581,7 +1655,7 @@ def test_render_performance_callback_ignores_invalid_timeline_periods(monkeypatc
     callback = app.callback_map[RENDER_PERFORMANCE_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn("/performance", "fraud_model_demo", "f1", "psi", False, None, 0, {}, None)
+    result = fn(*_performance_callback_args())
 
     timeline_figure = result[2].children.children.figure
     assert list(timeline_figure.data[0].x) == ["2026-01-21"]
@@ -1607,7 +1681,19 @@ def test_render_performance_callback_defaults_drift_chart_to_all_available_featu
     class _FakeBackend:
         def get_monitor_config(self, model_id):
             return SimpleNamespace(
-                contract=SimpleNamespace(label_col="label"),
+                contract=SimpleNamespace(
+                    label_col="label",
+                    feature_columns=(
+                        "device_score",
+                        "velocity_7d",
+                        "amount",
+                        "account_age",
+                        "country",
+                        "device_type",
+                        "channel",
+                        "segment",
+                    ),
+                ),
                 problem_type="classification",
                 performance_metric_names=("f1", "precision", "recall"),
             )
@@ -1623,6 +1709,9 @@ def test_render_performance_callback_defaults_drift_chart_to_all_available_featu
                 "worst_weighted_delta": -0.01,
                 "timeline_unavailable_reason": "",
             }
+
+        def get_exact_performance_breakdown(self, model_id, **kwargs):
+            return {"rows": latest_bins.copy(), "contributors": pd.DataFrame([{"feature": "amount", "weighted_delta": -0.01}]), "message": ""}
 
         def get_drift_results(self, model_id, granularity="daily"):
             assert granularity == "daily"
@@ -1652,7 +1741,7 @@ def test_render_performance_callback_defaults_drift_chart_to_all_available_featu
     callback = app.callback_map[RENDER_PERFORMANCE_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn("/performance", "fraud_model_demo", "f1", "psi", False, None, 0, {}, None)
+    result = fn(*_performance_callback_args())
 
     drift_card = result[3].children[2]
     drift_figure = drift_card.children.children.figure
@@ -1689,6 +1778,59 @@ def test_build_dimension_breakdown_adds_explicit_quartile_labels_for_small_dimen
     assert "Median=47" in figure.data[1].text[0]
     assert "P75=56" in figure.data[1].text[0]
     assert "P25=37" in figure.data[1].text[0]
+
+
+def test_build_dimension_breakdown_avoids_scientific_notation_in_labels() -> None:
+    breakdown = pd.DataFrame(
+        [
+            {
+                "dimension_value": "europe-west3",
+                "feature_average": 30500.0,
+                "feature_p25": 28040.0,
+                "feature_p50": 29960.0,
+                "feature_p75": 32110.0,
+                "row_count": 120,
+            },
+        ]
+    )
+
+    figure = charts.build_dimension_breakdown(breakdown, "latency_ms", "region")
+
+    assert "Median=29,960" in figure.data[1].text[0]
+    assert "P75=32,110" in figure.data[1].text[0]
+    assert "P25=28,040" in figure.data[1].text[0]
+    assert "e+" not in figure.data[1].text[0].lower()
+
+
+def test_build_feature_distribution_uses_step_overlay_traces_for_fixed_bins() -> None:
+    figure = charts.build_feature_distribution(
+        reference=[1.0, 1.5, 2.0, 2.5],
+        current=[1.2, 1.8, 2.2, 2.8],
+        feature_name="amount",
+        binning_mode="fixed",
+        n_bins=4,
+    )
+
+    assert len(figure.data) == 2
+    assert all(trace.type == "scatter" for trace in figure.data)
+    assert all(trace.fill == "tozeroy" for trace in figure.data)
+    assert figure.data[0].line.width == 2
+    assert figure.data[1].line.width == 2.5
+    assert figure.layout.barmode is None
+
+
+def test_build_feature_distribution_uses_custom_edges_for_step_overlay() -> None:
+    figure = charts.build_feature_distribution(
+        reference=[0.0, 0.5, 1.5],
+        current=[0.25, 1.0, 1.75],
+        feature_name="amount",
+        binning_mode="custom",
+        custom_edges=[0.0, 1.0, 2.0],
+    )
+
+    expected_x = [0.0, 1.0, 1.0, 2.0]
+    assert list(figure.data[0].x) == expected_x
+    assert list(figure.data[1].x) == expected_x
 
 
 def test_make_model_status_card_truncates_long_model_name_and_description() -> None:
@@ -3107,3 +3249,20 @@ def test_sidebar_model_dropdown_uses_sidebar_specific_ellipsis_css() -> None:
     assert ".model-lens-sidebar-dropdown .VirtualizedSelectOption" in styles.INDEX_STRING
     assert "text-overflow: ellipsis" in styles.INDEX_STRING
     assert "white-space: nowrap" in styles.INDEX_STRING
+
+
+def test_performance_layout_keeps_controls_outside_loading_wrapper() -> None:
+    page = performance.layout()
+
+    assert page.children[2].id == "perf-labels-alert"
+    assert page.children[3].children[0].children[0].children == "Primary Metric (Feature Impact)"
+    loading = page.children[4]
+    assert isinstance(loading, dcc.Loading)
+    loading_child = loading.children
+    assert loading_child.children[0].id == "perf-kpi-cards"
+    assert loading_child.children[1].id == "perf-timeline-container"
+    assert loading_child.children[2].id == "perf-contributors-container"
+    assert page.children[5].children == "Per-Bin Breakdown Controls"
+    assert page.children[7].children[0].children[0].children == "Binning Mode"
+    assert page.children[8].children[0].children[0].children == "Outlier Parameter"
+    assert page.children[9].children == "Feature Deep Dive Shortcut"

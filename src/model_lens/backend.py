@@ -8,8 +8,10 @@ from datetime import timezone
 from threading import Lock
 from time import monotonic
 
+import numpy as np
 import pandas as pd
 
+from model_lens.analytics.performance import compute_classification_metrics, compute_regression_metrics
 from model_lens.config import settings
 from model_lens.domain.models import MonitorConfig, MonitorDiscoveryResult, MonitorRuntimeState
 from model_lens.services.class_filters import normalize_class_filter, supports_binary_class_filters
@@ -166,6 +168,55 @@ def _safe_series_min(series: pd.Series) -> float:
     if numeric.empty:
         return 0.0
     return float(numeric.min())
+
+
+def _apply_feature_outlier_filter(
+    frame: pd.DataFrame,
+    feature: str,
+    *,
+    mode: str,
+    value: float | None,
+) -> pd.DataFrame:
+    if frame.empty or feature not in frame.columns:
+        return pd.DataFrame(columns=frame.columns)
+    numeric = pd.to_numeric(frame[feature], errors="coerce")
+    valid_mask = numeric.notna()
+    if not valid_mask.any():
+        return frame.iloc[0:0].copy()
+    clean = numeric.loc[valid_mask].to_numpy(dtype=float, copy=False)
+    normalized_mode = str(mode or "off").strip().lower()
+    if normalized_mode == "percentile_clip" and value is not None and value > 0:
+        lower = float(np.nanpercentile(clean, value))
+        upper = float(np.nanpercentile(clean, 100.0 - value))
+        valid_mask &= numeric.between(lower, upper, inclusive="both")
+    elif normalized_mode == "iqr_fence" and value is not None and value > 0:
+        q1 = float(np.nanpercentile(clean, 25.0))
+        q3 = float(np.nanpercentile(clean, 75.0))
+        iqr = q3 - q1
+        if np.isfinite(iqr) and iqr > 0:
+            lower = q1 - (float(value) * iqr)
+            upper = q3 + (float(value) * iqr)
+            valid_mask &= numeric.between(lower, upper, inclusive="both")
+    return frame.loc[valid_mask].copy()
+
+
+def _resolve_dynamic_bin_edges(
+    baseline_values: np.ndarray,
+    current_values: np.ndarray,
+    *,
+    binning_mode: str,
+    n_bins: int,
+    custom_edges: list[float] | None,
+) -> np.ndarray:
+    normalized_mode = str(binning_mode or "auto").strip().lower()
+    if normalized_mode == "custom" and custom_edges and len(custom_edges) >= 2:
+        return np.asarray(custom_edges, dtype=float)
+    combined = np.concatenate([values for values in (baseline_values, current_values) if values.size > 0])
+    if combined.size == 0:
+        return np.asarray([], dtype=float)
+    if normalized_mode == "fixed":
+        return np.histogram_bin_edges(combined, bins=max(int(n_bins), 2))
+    return np.histogram_bin_edges(combined, bins="auto")
 
 
 def _aggregated_classification_metrics(frame: pd.DataFrame) -> dict[str, float | None]:
@@ -1575,6 +1626,184 @@ class DashboardBackend:
             "distribution_source": "bounded_window_read",
             "approximate": False,
             "window_label": window_label,
+        }
+
+    def get_exact_performance_breakdown(
+        self,
+        model_id: str,
+        *,
+        metric_name: str = "f1",
+        binning_mode: str = "auto",
+        n_bins: int = 40,
+        custom_edges: list[float] | None = None,
+        outlier_mode: str = "off",
+        outlier_value: float | None = None,
+    ) -> dict[str, object]:
+        config = self.get_monitor_config(model_id, status=None)
+        if not config or not config.contract.label_col:
+            return {
+                "rows": pd.DataFrame(),
+                "contributors": pd.DataFrame(),
+                "message": "This monitor does not have labels configured for performance binning.",
+            }
+        bounds = self._latest_window_bounds(model_id)
+        if not bounds:
+            return {
+                "rows": pd.DataFrame(),
+                "contributors": pd.DataFrame(),
+                "message": "No comparison window is available yet.",
+            }
+        feature_columns = tuple(config.contract.feature_columns or ())
+        if not feature_columns:
+            return {
+                "rows": pd.DataFrame(),
+                "contributors": pd.DataFrame(),
+                "message": "No tracked feature columns are configured for this monitor.",
+            }
+        frame = self._load_monitor_frame_bounded(
+            config,
+            start_date=bounds.get("baseline_start") or None,
+            end_date=bounds.get("window_end") or None,
+            feature_columns=feature_columns,
+        )
+        if frame.empty or config.contract.timestamp_col not in frame.columns:
+            return {
+                "rows": pd.DataFrame(),
+                "contributors": pd.DataFrame(),
+                "message": "Exact bounded performance rows are unavailable for this monitor.",
+            }
+        working = frame.copy()
+        ts_col = config.contract.timestamp_col
+        working["_model_lens_ts"] = pd.to_datetime(working[ts_col], errors="coerce")
+        working = working[working["_model_lens_ts"].notna()].copy()
+        if working.empty:
+            return {
+                "rows": pd.DataFrame(),
+                "contributors": pd.DataFrame(),
+                "message": "No timestamped rows are available in the latest comparison window.",
+            }
+        baseline_start = pd.to_datetime(bounds.get("baseline_start") or "", errors="coerce")
+        baseline_end = pd.to_datetime(bounds.get("baseline_end") or "", errors="coerce")
+        window_start = pd.to_datetime(bounds.get("window_start") or "", errors="coerce")
+        window_end = pd.to_datetime(bounds.get("window_end") or "", errors="coerce")
+        baseline = working[
+            working["_model_lens_ts"].between(baseline_start, baseline_end, inclusive="both")
+        ].copy()
+        current = working[
+            working["_model_lens_ts"].between(window_start, window_end, inclusive="both")
+        ].copy()
+        regression_mode = (config.problem_type or "classification").strip().lower() == "regression"
+        rows: list[dict[str, object]] = []
+        for feature in feature_columns:
+            if feature not in baseline.columns or feature not in current.columns:
+                continue
+            feature_baseline = _apply_feature_outlier_filter(
+                baseline,
+                feature,
+                mode=outlier_mode,
+                value=outlier_value,
+            )
+            feature_current = _apply_feature_outlier_filter(
+                current,
+                feature,
+                mode=outlier_mode,
+                value=outlier_value,
+            )
+            baseline_values = pd.to_numeric(feature_baseline.get(feature), errors="coerce").dropna().to_numpy(dtype=float, copy=False)
+            current_values = pd.to_numeric(feature_current.get(feature), errors="coerce").dropna().to_numpy(dtype=float, copy=False)
+            edges = _resolve_dynamic_bin_edges(
+                baseline_values,
+                current_values,
+                binning_mode=binning_mode,
+                n_bins=n_bins,
+                custom_edges=custom_edges,
+            )
+            if len(edges) < 2:
+                continue
+            baseline_numeric = pd.to_numeric(feature_baseline[feature], errors="coerce")
+            current_numeric = pd.to_numeric(feature_current[feature], errors="coerce")
+            baseline_valid = baseline_numeric.notna()
+            current_valid = current_numeric.notna()
+            if not baseline_valid.any() or not current_valid.any():
+                continue
+            baseline_slice_frame = feature_baseline.loc[baseline_valid].copy()
+            current_slice_frame = feature_current.loc[current_valid].copy()
+            baseline_bins = np.digitize(
+                baseline_numeric.loc[baseline_valid].to_numpy(dtype=float, copy=False),
+                edges[1:-1],
+                right=False,
+            )
+            current_bins = np.digitize(
+                current_numeric.loc[current_valid].to_numpy(dtype=float, copy=False),
+                edges[1:-1],
+                right=False,
+            )
+            total_current = max(len(current_slice_frame), 1)
+            for index in range(len(edges) - 1):
+                base_slice = baseline_slice_frame.iloc[np.where(baseline_bins == index)[0]]
+                cur_slice = current_slice_frame.iloc[np.where(current_bins == index)[0]]
+                if base_slice.empty or cur_slice.empty:
+                    continue
+                if regression_mode:
+                    base_metrics = compute_regression_metrics(base_slice, config.contract.prediction_col, config.contract.label_col)
+                    cur_metrics = compute_regression_metrics(cur_slice, config.contract.prediction_col, config.contract.label_col)
+                else:
+                    base_metrics = compute_classification_metrics(
+                        base_slice,
+                        config.contract.prediction_col,
+                        config.contract.label_col,
+                        prediction_score_col=config.contract.prediction_score_col,
+                    )
+                    cur_metrics = compute_classification_metrics(
+                        cur_slice,
+                        config.contract.prediction_col,
+                        config.contract.label_col,
+                        prediction_score_col=config.contract.prediction_score_col,
+                    )
+                baseline_metric = base_metrics.get(metric_name) if base_metrics else None
+                current_metric = cur_metrics.get(metric_name) if cur_metrics else None
+                if baseline_metric is None or current_metric is None:
+                    continue
+                delta = (
+                    baseline_metric - current_metric
+                    if regression_mode
+                    else current_metric - baseline_metric
+                )
+                current_share = float(len(cur_slice) / total_current * 100.0)
+                rows.append(
+                    {
+                        "feature": feature,
+                        "bin_label": f"[{edges[index]:.4g}, {edges[index + 1]:.4g})",
+                        "baseline_metric": float(baseline_metric),
+                        "current_metric": float(current_metric),
+                        "delta": round(float(delta), 4),
+                        "current_volume_pct": round(current_share, 2),
+                        "degradation_contribution": round(float(delta) * current_share / 100.0, 4),
+                        "baseline_count": int(len(base_slice)),
+                        "current_count": int(len(cur_slice)),
+                    }
+                )
+        result = pd.DataFrame(rows)
+        if not result.empty:
+            result["_bin_sort"] = result["bin_label"].str.extract(r"\[([^,]+),", expand=False).apply(_safe_float)
+            result = result.sort_values(["feature", "_bin_sort", "bin_label"]).drop(columns=["_bin_sort"]).reset_index(drop=True)
+        contributors = (
+            result.groupby("feature", as_index=False)["degradation_contribution"]
+            .sum()
+            .rename(columns={"degradation_contribution": "weighted_delta"})
+            .sort_values("weighted_delta")
+            .reset_index(drop=True)
+            if not result.empty
+            else pd.DataFrame(columns=["feature", "weighted_delta"])
+        )
+        return {
+            "rows": result,
+            "contributors": contributors,
+            "message": (
+                ""
+                if not result.empty
+                else "No valid bin-level performance slices are available with the current controls."
+            ),
         }
 
     def get_dimension_breakdown(self, model_id: str, feature: str, dimension: str) -> pd.DataFrame:
