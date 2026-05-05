@@ -276,6 +276,7 @@ def _make_backend() -> DashboardBackend:
             quality_metrics="quality_metrics",
             quality_history="quality_history",
             performance_metrics="performance_metrics",
+            refresh_runs="refresh_runs",
         ),
         list_monitor_configs=lambda status="active": [config],
         get_monitor_summary=lambda: pd.DataFrame(
@@ -378,6 +379,36 @@ def test_get_drift_results_limits_to_recent_windows_in_sql() -> None:
     sql, _ = warehouse.query_param_calls[-1]
     assert "recent_windows" in sql
     assert "LIMIT 400" in sql
+
+
+def test_get_drift_results_date_range_reads_all_published_generations() -> None:
+    class _RecordingWarehouse(_FakeWarehouse):
+        def __init__(self) -> None:
+            self.query_param_calls: list[tuple[str, tuple]] = []
+
+        def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
+            self.query_param_calls.append((sql, params))
+            return super().query_params(sql, params)
+
+    backend = _make_backend()
+    warehouse = _RecordingWarehouse()
+    backend.repository._warehouse = warehouse
+
+    drift = backend.get_drift_results(
+        "fraud_model_demo",
+        granularity="daily",
+        start_date="2026-04-01",
+        end_date="2026-04-30",
+    )
+
+    assert not drift.empty
+    sql, params = warehouse.query_param_calls[-1]
+    normalized_sql = " ".join(sql.split())
+    assert "published_runs AS" in normalized_sql
+    assert "source_run_id IN (SELECT generation_id FROM published_runs)" in normalized_sql
+    assert "source_run_id = %s" not in normalized_sql
+    assert "ROW_NUMBER() OVER" in normalized_sql
+    assert params == ("fraud_model_demo", "fraud_model_demo", "2026-04-01", "2026-04-30")
 
 
 def test_get_quality_stats_parses_json_payloads() -> None:
@@ -1040,6 +1071,136 @@ def test_get_exact_performance_breakdown_rebins_latest_window_with_requested_con
     assert set(breakdown["rows"]["feature"]) == {"amount", "velocity_7d"}
     assert all(str(value).startswith("[") for value in breakdown["rows"]["bin_label"])
     assert (breakdown["rows"].groupby("feature").size() >= 2).all()
+
+
+def test_get_exact_performance_breakdown_scopes_features_and_reuses_cache() -> None:
+    config = MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.model_lens_demo.inference_logs",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=("amount", "velocity_7d"),
+        ),
+        baseline=BaselinePolicy(n_days=7),
+        model_id_value="fraud_model_v1",
+    )
+
+    class _BoundsWarehouse:
+        def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
+            if "FROM comparison_windows" in sql:
+                return pd.DataFrame([
+                    {
+                        "baseline_start": "2026-01-01",
+                        "baseline_end": "2026-01-01",
+                        "window_start": "2026-01-08",
+                        "window_end": "2026-01-08",
+                    }
+                ])
+            return pd.DataFrame()
+
+    load_calls: list[tuple[str, ...] | None] = []
+
+    def _load_monitor_frame(current_config, **kwargs) -> pd.DataFrame:
+        del current_config
+        load_calls.append(kwargs.get("feature_columns"))
+        return pd.DataFrame(
+            [
+                {"event_ts": "2026-01-01", "prediction": 1, "label": 1, "amount": 1.0, "velocity_7d": 10.0},
+                {"event_ts": "2026-01-01", "prediction": 1, "label": 0, "amount": 2.0, "velocity_7d": 12.0},
+                {"event_ts": "2026-01-08", "prediction": 1, "label": 1, "amount": 1.5, "velocity_7d": 11.0},
+                {"event_ts": "2026-01-08", "prediction": 1, "label": 0, "amount": 2.5, "velocity_7d": 13.0},
+            ]
+        )
+
+    repository = SimpleNamespace(
+        _warehouse=_BoundsWarehouse(),
+        table_names=SimpleNamespace(comparison_windows="comparison_windows"),
+        list_monitor_configs=lambda status=None: [config],
+        load_monitor_frame=_load_monitor_frame,
+    )
+    backend = DashboardBackend(repository=_with_published_generation(repository))
+
+    first = backend.get_exact_performance_breakdown(
+        "fraud_model_demo",
+        metric_name="precision",
+        feature_columns=("amount",),
+        binning_mode="custom",
+        custom_edges=[0.0, 5.0],
+    )
+    second = backend.get_exact_performance_breakdown(
+        "fraud_model_demo",
+        metric_name="precision",
+        feature_columns=("amount",),
+        binning_mode="custom",
+        custom_edges=[0.0, 5.0],
+    )
+
+    assert load_calls == [("amount",)]
+    assert set(first["rows"]["feature"]) == {"amount"}
+    assert set(second["rows"]["feature"]) == {"amount"}
+
+
+def test_get_exact_performance_breakdown_keeps_zero_detection_slice() -> None:
+    config = MonitorConfig(
+        model_key="fraud_model_demo",
+        display_name="Fraud Model Demo",
+        source_table="main.model_lens_demo.inference_logs",
+        contract=InferenceContract(
+            timestamp_col="event_ts",
+            prediction_col="prediction",
+            label_col="label",
+            feature_columns=("amount",),
+        ),
+        baseline=BaselinePolicy(n_days=7),
+    )
+
+    class _BoundsWarehouse:
+        def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
+            if "FROM comparison_windows" in sql:
+                return pd.DataFrame([
+                    {
+                        "baseline_start": "2026-01-01",
+                        "baseline_end": "2026-01-01",
+                        "window_start": "2026-01-08",
+                        "window_end": "2026-01-08",
+                    }
+                ])
+            return pd.DataFrame()
+
+    def _load_monitor_frame(current_config, **kwargs) -> pd.DataFrame:
+        del current_config, kwargs
+        return pd.DataFrame(
+            [
+                {"event_ts": "2026-01-01", "prediction": 1, "label": 1, "amount": 1.0},
+                {"event_ts": "2026-01-08", "prediction": 0, "label": 1, "amount": 1.0},
+            ]
+        )
+
+    repository = SimpleNamespace(
+        _warehouse=_BoundsWarehouse(),
+        table_names=SimpleNamespace(comparison_windows="comparison_windows"),
+        list_monitor_configs=lambda status=None: [config],
+        load_monitor_frame=_load_monitor_frame,
+    )
+    backend = DashboardBackend(repository=_with_published_generation(repository))
+
+    breakdown = backend.get_exact_performance_breakdown(
+        "fraud_model_demo",
+        metric_name="precision",
+        binning_mode="custom",
+        custom_edges=[0.0, 2.0],
+    )
+
+    assert len(breakdown["rows"]) == 1
+    row = breakdown["rows"].iloc[0]
+    assert row["baseline_metric"] == 1.0
+    assert pd.isna(row["current_metric"])
+    assert row["metric_status"] == "undefined_zero_detections"
+    assert row["delta"] == -1.0
 
 
 def test_get_latest_window_metrics_aggregates_latest_daily_label_facts() -> None:

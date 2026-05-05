@@ -105,6 +105,8 @@ Example for a Hive Metastore deployment:
 --var "control_plane_schema=model_lens_control_plane"
 ```
 
+Hive Metastore remains supported for setup, refresh, and archive/restore workflows, but permanent monitor deletion is disabled there because Model Lens cannot assume atomic multi-table cleanup. Use Unity Catalog managed control-plane tables if operators need `Delete Monitor And History`.
+
 Optional but important when you do not want the default names:
 
 - `app_name`

@@ -13,7 +13,7 @@ import pytest
 from model_lens.config import settings
 from model_lens.domain.models import MLflowLineage, MonitorConfig, RefreshResult
 from model_lens.services import refresh_runner as refresh_runner_module
-from model_lens.services.control_plane import ControlPlaneRepository
+from model_lens.services.control_plane import ControlPlaneRepository, PermanentDeleteUnsupportedError
 from model_lens.services.inference_contracts import build_inference_contract as build_contract
 from model_lens.services.onboarding import build_default_baseline, build_fixed_baseline
 from model_lens.services.refresh_engine import (
@@ -568,6 +568,52 @@ def test_load_monitor_frame_uses_shared_labels_join_when_entity_id_is_absent() -
 
     assert not frame.empty
     data_query, params = warehouse.query_param_calls[-1]
+    assert "ON s.`gc_transaction` = l.`gc_transaction`" in data_query
+    assert params == ("m1",)
+
+
+def test_load_monitor_frame_sampling_keeps_external_label_join_column() -> None:
+    class _SharedJoinWarehouse(FakeWarehouse):
+        def get_columns(self, table_name: str) -> list[str]:
+            if table_name == "catalog.schema.labels":
+                return ["gc_transaction", "label", "label_timestamp"]
+            return ["event_ts", "model_id", "prediction", "gc_transaction", "amount"]
+
+    warehouse = _SharedJoinWarehouse()
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    contract = build_contract(
+        columns=["event_ts", "model_id", "prediction", "gc_transaction", "label", "amount"],
+        timestamp_col="event_ts",
+        model_id_col="model_id",
+        prediction_col="prediction",
+        label_col="label",
+        entity_id_col=None,
+        feature_columns=["amount"],
+    )
+    config = MonitorConfig(
+        model_key="payments_risk_v1",
+        display_name="Payments Risk",
+        source_table="catalog.schema.inference_logs",
+        contract=contract,
+        baseline=build_default_baseline(),
+        problem_type="classification",
+        model_id_value="m1",
+        labels_table="catalog.schema.labels",
+        labels_join_col="gc_transaction",
+        labels_order_col="label_timestamp",
+    )
+
+    frame = repository.load_monitor_frame(
+        config,
+        feature_columns=("amount",),
+        sample_rows_per_day=50,
+        max_total_rows=200,
+    )
+
+    assert not frame.empty
+    data_query, params = warehouse.query_param_calls[-1]
+    assert "ROW_NUMBER() OVER" in data_query
+    assert "SELECT `event_ts`, `prediction`, `model_id`, `amount`, `gc_transaction`" in data_query
     assert "ON s.`gc_transaction` = l.`gc_transaction`" in data_query
     assert params == ("m1",)
 
@@ -1611,6 +1657,19 @@ def test_delete_monitor_fails_closed_when_atomic_delete_is_unavailable() -> None
     )
 
     with pytest.raises(RuntimeError, match="Atomic monitor delete failed"):
+        repository.delete_monitor("payments_risk_v1")
+
+    assert warehouse.executed_atomic_params == []
+
+
+def test_delete_monitor_is_disabled_for_hive_metastore_control_plane() -> None:
+    warehouse = FakeWarehouse()
+    repository = ControlPlaneRepository(
+        warehouse=warehouse,
+        table_names=TableNames("hive_metastore", "control_plane"),
+    )
+
+    with pytest.raises(PermanentDeleteUnsupportedError, match="Unity Catalog"):
         repository.delete_monitor("payments_risk_v1")
 
     assert warehouse.executed_atomic_params == []

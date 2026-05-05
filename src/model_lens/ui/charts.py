@@ -88,6 +88,13 @@ def _fmt_num(value: float) -> str:
     return f"{numeric:.4f}"
 
 
+def _fmt_optional_metric(value) -> str:
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        return "undefined"
+    return f"{float(numeric):.4f}"
+
+
 def _shared_histogram_edges(
     reference: np.ndarray,
     current: np.ndarray,
@@ -941,11 +948,18 @@ def build_feature_bin_impact(degradation_df: pd.DataFrame, feature_contributors:
             legend_items.setdefault(legend_label, color)
             bar_width = abs(row["degradation_contribution"])
             if pd.notna(delta):
+                metric_status = str(row.get("metric_status") or "").strip()
+                status_line = (
+                    "Metric status: undefined because there were no positive detections<br>"
+                    if metric_status == "undefined_zero_detections"
+                    else ""
+                )
                 hovertemplate = (
                     f"<b>{feature}</b><br>"
                     f"Bin: {row['bin_label']}<br>"
-                    f"Baseline: {float(row['baseline_metric']):.4f}<br>"
-                    f"Current: {float(row['current_metric']):.4f}<br>"
+                    f"Baseline: {_fmt_optional_metric(row.get('baseline_metric'))}<br>"
+                    f"Current: {_fmt_optional_metric(row.get('current_metric'))}<br>"
+                    f"{status_line}"
                     f"Delta: {delta:+.4f}<br>"
                     f"Current Window Share: {float(row['current_volume_pct']):.1f}%<br>"
                     f"Weighted Contribution: {float(row['degradation_contribution']):.4f}"

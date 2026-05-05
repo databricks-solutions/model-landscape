@@ -29,6 +29,7 @@ from model_lens.domain.performance_metrics import (
 )
 from model_lens.pages import onboarding
 from model_lens.services.class_filters import normalize_class_filter, supports_binary_class_filters
+from model_lens.services.control_plane import PermanentDeleteUnsupportedError
 from model_lens.services.inference_contracts import build_inference_contract
 from model_lens.services.onboarding import baseline_label, build_default_baseline, build_fixed_baseline
 from model_lens.services.refresh_jobs import (
@@ -3642,21 +3643,6 @@ def register_callbacks(app) -> None:
             ]
             contributors = performance["contributors"]
             feature_frame = latest_bins if not latest_bins.empty else all_bins
-            exact_breakdown = backend.get_exact_performance_breakdown(
-                model_id,
-                metric_name=resolved_metric,
-                binning_mode=normalized_binning_mode,
-                n_bins=_normalize_top_n(bin_count, default=40, minimum=2, maximum=200),
-                custom_edges=custom_edges,
-                outlier_mode=normalized_outlier_mode,
-                outlier_value=outlier_value,
-            )
-            breakdown_rows = exact_breakdown.get("rows", pd.DataFrame())
-            breakdown_contributors = exact_breakdown.get("contributors", pd.DataFrame())
-            breakdown_message = str(exact_breakdown.get("message") or "").strip()
-            if not breakdown_rows.empty:
-                feature_frame = breakdown_rows
-                contributors = breakdown_contributors
             features = sorted({str(value) for value in (config.contract.feature_columns or []) if str(value).strip()})
             if not features:
                 features = sorted(
@@ -3669,6 +3655,27 @@ def register_callbacks(app) -> None:
             feature_options = _option_list(features)
             feature_values = {option["value"] for option in feature_options}
             selected_feature = current_feature if current_feature in feature_values else (feature_options[0]["value"] if feature_options else None)
+            exact_feature_columns = (
+                (selected_feature,)
+                if normalized_binning_mode == "custom" and selected_feature
+                else None
+            )
+            exact_breakdown = backend.get_exact_performance_breakdown(
+                model_id,
+                metric_name=resolved_metric,
+                feature_columns=exact_feature_columns,
+                binning_mode=normalized_binning_mode,
+                n_bins=_normalize_top_n(bin_count, default=40, minimum=2, maximum=200),
+                custom_edges=custom_edges,
+                outlier_mode=normalized_outlier_mode,
+                outlier_value=outlier_value,
+            )
+            breakdown_rows = exact_breakdown.get("rows", pd.DataFrame())
+            breakdown_contributors = exact_breakdown.get("contributors", pd.DataFrame())
+            breakdown_message = str(exact_breakdown.get("message") or "").strip()
+            if not breakdown_rows.empty:
+                feature_frame = breakdown_rows
+                contributors = breakdown_contributors
             degradation_detected = bool(performance.get("has_significant_degradation"))
             alert_children: list[object] = [
                 html.Small(
@@ -3676,6 +3683,13 @@ def register_callbacks(app) -> None:
                     className="text-muted d-block mb-2",
                 )
             ]
+            if normalized_binning_mode == "custom" and selected_feature:
+                alert_children.append(
+                    html.Small(
+                        f"Custom bin edges are applied only to {selected_feature}. Use Auto or Fixed Bin Count to compare all tracked features together.",
+                        className="text-muted d-block mb-2",
+                    )
+                )
             timeline_reasons: list[str] = []
             for current_metric in timeline_metric_names:
                 current_reason = str(timeline_summaries.get(current_metric, {}).get("timeline_unavailable_reason") or "").strip()
@@ -5017,6 +5031,8 @@ def register_callbacks(app) -> None:
             ), no_update
         try:
             backend.repository.delete_monitor(model_id)
+        except PermanentDeleteUnsupportedError as error:
+            return _status_alert(str(error), "warning"), no_update
         except KeyError as error:
             return _status_alert(str(error), "warning"), no_update
         except Exception as error:

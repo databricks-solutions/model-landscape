@@ -51,6 +51,10 @@ logger = logging.getLogger(__name__)
 _MAX_DAILY_HISTORY_DAYS = 400
 
 
+class PermanentDeleteUnsupportedError(RuntimeError):
+    """Raised when the configured control-plane tables cannot safely support permanent delete."""
+
+
 def _as_text(value: Any) -> str:
     if value is None:
         return ""
@@ -995,6 +999,11 @@ class ControlPlaneRepository:
     def delete_monitor(self, model_key: str) -> None:
         if not self._monitor_exists(model_key):
             raise KeyError(f"Monitor {model_key!r} does not exist.")
+        if str(getattr(self._table_names, "catalog", "") or "").strip().lower() == "hive_metastore":
+            raise PermanentDeleteUnsupportedError(
+                "Permanent delete requires Unity Catalog control-plane tables so the cleanup can run atomically. "
+                "Archive this monitor instead, or move the Model Lens control plane to a Unity Catalog managed schema before deleting."
+            )
         table_names = (
             self._table_names.monitor_runtime_state,
             self._table_names.refresh_runs,
@@ -1345,6 +1354,14 @@ class ControlPlaneRepository:
         if config.contract.label_col and not config.labels_table:
             source_label_column = config.contract.label_col
             select_columns.append(config.contract.label_col)
+        source_columns = self._warehouse.get_columns(config.source_table) if config.labels_table else []
+        source_join_col = _resolve_source_labels_join_col(
+            source_columns,
+            config.contract.entity_id_col,
+            config.labels_join_col,
+        )
+        if config.labels_table and config.contract.label_col and source_join_col and config.labels_join_col:
+            select_columns.append(source_join_col)
 
         deduped_columns = list(dict.fromkeys(select_columns))
         source_projection = ", ".join(
@@ -1354,12 +1371,6 @@ class ControlPlaneRepository:
 
         label_projection = ""
         join_sql = ""
-        source_columns = self._warehouse.get_columns(config.source_table) if config.labels_table else []
-        source_join_col = _resolve_source_labels_join_col(
-            source_columns,
-            config.contract.entity_id_col,
-            config.labels_join_col,
-        )
         if config.labels_table and config.contract.label_col and source_join_col and config.labels_join_col:
             validate_identifier(config.labels_table)
             label_col = validate_identifier(config.contract.label_col)

@@ -11,7 +11,10 @@ from time import monotonic
 import numpy as np
 import pandas as pd
 
-from model_lens.analytics.performance import compute_classification_metrics, compute_regression_metrics
+from model_lens.analytics.performance import (
+    compute_daily_classification_metrics,
+    compute_regression_metrics,
+)
 from model_lens.config import settings
 from model_lens.domain.models import MonitorConfig, MonitorDiscoveryResult, MonitorRuntimeState
 from model_lens.services.class_filters import normalize_class_filter, supports_binary_class_filters
@@ -36,6 +39,9 @@ _MAX_DASHBOARD_DAILY_PROFILE_DAYS = 400
 _EXACT_SOURCE_DAILY_METRIC_CACHE_TTL_SECONDS = 30.0
 _EXACT_SOURCE_DAILY_METRIC_CACHE: dict[tuple[str, str, str, str], tuple[float, pd.DataFrame]] = {}
 _EXACT_SOURCE_DAILY_METRIC_CACHE_LOCK = Lock()
+_EXACT_PERFORMANCE_BREAKDOWN_CACHE_TTL_SECONDS = 30.0
+_EXACT_PERFORMANCE_BREAKDOWN_CACHE: dict[tuple[object, ...], tuple[float, dict[str, object]]] = {}
+_EXACT_PERFORMANCE_BREAKDOWN_CACHE_LOCK = Lock()
 
 
 def _safe_json_dict(value: object) -> dict:
@@ -53,6 +59,15 @@ def _safe_json_dict(value: object) -> dict:
 def clear_exact_source_daily_metric_cache() -> None:
     with _EXACT_SOURCE_DAILY_METRIC_CACHE_LOCK:
         _EXACT_SOURCE_DAILY_METRIC_CACHE.clear()
+    with _EXACT_PERFORMANCE_BREAKDOWN_CACHE_LOCK:
+        _EXACT_PERFORMANCE_BREAKDOWN_CACHE.clear()
+
+
+def _copy_breakdown_payload(payload: dict[str, object]) -> dict[str, object]:
+    copied: dict[str, object] = {}
+    for key, value in payload.items():
+        copied[key] = value.copy() if isinstance(value, pd.DataFrame) else value
+    return copied
 
 
 def _safe_json_list(value: object) -> list[float]:
@@ -257,6 +272,21 @@ def _weighted_average(values: pd.Series, weights: pd.Series) -> float | None:
     if total_weight <= 0:
         return None
     return weighted_sum / total_weight
+
+
+def _classification_metric_effective_value(
+    metrics: dict[str, float | int | None],
+    metric_name: str,
+) -> tuple[float | None, str]:
+    metric_key = str(metric_name or "").strip().lower()
+    raw_value = metrics.get(metric_key)
+    if raw_value is not None:
+        return float(raw_value), "defined"
+    predicted_positive_count = int(metrics.get("predicted_positive_count") or 0)
+    actual_positive_count = int(metrics.get("actual_positive_count") or 0)
+    if metric_key in {"precision", "recall", "f1"} and predicted_positive_count == 0 and actual_positive_count > 0:
+        return 0.0, "undefined_zero_detections"
+    return None, "undefined"
 
 
 def _null_rate_dict(value: object) -> dict[str, float]:
@@ -622,13 +652,26 @@ class DashboardBackend:
         comparison_windows = getattr(self.repository.table_names, "comparison_windows", "")
         if not comparison_windows:
             return []
-        filters = ["model_key = %s"]
-        params: list[object] = [model_id]
         generation_id = self._published_generation_id(model_id)
         if not generation_id:
             return []
-        filters.append("source_run_id = %s")
-        params.append(generation_id)
+        refresh_runs = getattr(self.repository.table_names, "refresh_runs", "")
+        params: list[object] = []
+        published_runs_cte = ""
+        filters = ["model_key = %s"]
+        if refresh_runs:
+            published_runs_cte = f"""
+            published_runs AS (
+                SELECT generation_id
+                FROM {refresh_runs}
+                WHERE model_key = %s
+                  AND status = 'completed'
+                  AND published_at IS NOT NULL
+            ),
+            """
+            params.append(model_id)
+            filters.append("source_run_id IN (SELECT generation_id FROM published_runs)")
+        params.append(model_id)
         if start_date:
             filters.append("window_end >= CAST(%s AS DATE)")
             params.append(start_date)
@@ -637,20 +680,37 @@ class DashboardBackend:
             params.append(end_date)
         frame = self._warehouse.query_params(
             f"""
-            WITH filtered_windows AS (
-                SELECT window_id, model_key, window_grain, window_start, window_end, baseline_start, baseline_end, baseline_kind
+            WITH {published_runs_cte} filtered_windows AS (
+                SELECT
+                    window_id,
+                    model_key,
+                    window_grain,
+                    window_start,
+                    window_end,
+                    baseline_start,
+                    baseline_end,
+                    baseline_kind,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY model_key, window_grain, window_start, window_end, baseline_start, baseline_end
+                        ORDER BY created_at DESC, source_run_id DESC
+                    ) AS model_lens_window_rank
                 FROM {comparison_windows}
                 WHERE {' AND '.join(filters)}
             ),
+            deduped_windows AS (
+                SELECT window_id, model_key, window_grain, window_start, window_end, baseline_start, baseline_end, baseline_kind
+                FROM filtered_windows
+                WHERE model_lens_window_rank = 1
+            ),
             recent_window_ends AS (
                 SELECT window_end
-                FROM filtered_windows
+                FROM deduped_windows
                 GROUP BY window_end
                 ORDER BY window_end DESC
                 LIMIT {_MAX_DASHBOARD_WINDOW_HISTORY}
             )
             SELECT window_id, model_key, window_grain, window_start, window_end, baseline_start, baseline_end, baseline_kind
-            FROM filtered_windows
+            FROM deduped_windows
             WHERE window_end IN (SELECT window_end FROM recent_window_ends)
             ORDER BY window_end, window_start
             """,
@@ -752,12 +812,25 @@ class DashboardBackend:
             )
             return _drift_results_from_frame(pd.DataFrame(derived.drift_rows), granularity=granularity)
         filters = ["model_key = %s"]
-        params: list[object] = [model_id]
+        params: list[object] = []
         generation_id = self._published_generation_id(model_id)
         if not generation_id:
             return pd.DataFrame()
-        filters.append("source_run_id = %s")
-        params.append(generation_id)
+        refresh_runs = getattr(self.repository.table_names, "refresh_runs", "")
+        published_runs_cte = ""
+        if refresh_runs:
+            published_runs_cte = f"""
+            published_runs AS (
+                SELECT generation_id
+                FROM {refresh_runs}
+                WHERE model_key = %s
+                  AND status = 'completed'
+                  AND published_at IS NOT NULL
+            ),
+            """
+            params.append(model_id)
+            filters.append("source_run_id IN (SELECT generation_id FROM published_runs)")
+        params.append(model_id)
         if start_date:
             filters.append("window_end >= CAST(%s AS DATE)")
             params.append(start_date)
@@ -766,7 +839,32 @@ class DashboardBackend:
             params.append(end_date)
         frame = self._warehouse.query_params(
             f"""
-            WITH filtered_metrics AS (
+            WITH {published_runs_cte} filtered_metrics AS (
+                SELECT
+                    feature_name,
+                    metric_name,
+                    metric_value,
+                    window_start,
+                    window_end,
+                    baseline_start,
+                    baseline_end,
+                    ref_mean,
+                    cur_mean,
+                    ref_std,
+                    cur_std,
+                    ref_null_pct,
+                    cur_null_pct,
+                    ref_count,
+                    cur_count,
+                    computed_at,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY feature_name, metric_name, window_start, window_end, baseline_start, baseline_end
+                        ORDER BY computed_at DESC, source_run_id DESC
+                    ) AS model_lens_metric_rank
+                FROM {self.repository.table_names.drift_metrics}
+                WHERE {' AND '.join(filters)}
+            ),
+            deduped_metrics AS (
                 SELECT
                     feature_name,
                     metric_name,
@@ -784,12 +882,12 @@ class DashboardBackend:
                     ref_count,
                     cur_count,
                     computed_at
-                FROM {self.repository.table_names.drift_metrics}
-                WHERE {' AND '.join(filters)}
+                FROM filtered_metrics
+                WHERE model_lens_metric_rank = 1
             ),
             recent_windows AS (
                 SELECT window_end
-                FROM filtered_metrics
+                FROM deduped_metrics
                 GROUP BY window_end
                 ORDER BY window_end DESC
                 LIMIT {_MAX_DASHBOARD_WINDOW_HISTORY}
@@ -811,7 +909,7 @@ class DashboardBackend:
                 ref_count,
                 cur_count,
                 computed_at
-            FROM filtered_metrics
+            FROM deduped_metrics
             WHERE window_end IN (SELECT window_end FROM recent_windows)
             ORDER BY window_end, feature_name, metric_name
             """,
@@ -1633,6 +1731,7 @@ class DashboardBackend:
         model_id: str,
         *,
         metric_name: str = "f1",
+        feature_columns: tuple[str, ...] | None = None,
         binning_mode: str = "auto",
         n_bins: int = 40,
         custom_edges: list[float] | None = None,
@@ -1653,18 +1752,37 @@ class DashboardBackend:
                 "contributors": pd.DataFrame(),
                 "message": "No comparison window is available yet.",
             }
-        feature_columns = tuple(config.contract.feature_columns or ())
-        if not feature_columns:
+        requested_features = tuple(feature_columns or config.contract.feature_columns or ())
+        if not requested_features:
             return {
                 "rows": pd.DataFrame(),
                 "contributors": pd.DataFrame(),
                 "message": "No tracked feature columns are configured for this monitor.",
             }
+        cache_key = (
+            model_id,
+            metric_name,
+            tuple(sorted(requested_features)),
+            str(binning_mode or "auto").strip().lower(),
+            int(n_bins),
+            tuple(float(value) for value in custom_edges) if custom_edges else (),
+            str(outlier_mode or "off").strip().lower(),
+            None if outlier_value is None else float(outlier_value),
+            bounds.get("baseline_start") or "",
+            bounds.get("baseline_end") or "",
+            bounds.get("window_start") or "",
+            bounds.get("window_end") or "",
+        )
+        now = monotonic()
+        with _EXACT_PERFORMANCE_BREAKDOWN_CACHE_LOCK:
+            cached = _EXACT_PERFORMANCE_BREAKDOWN_CACHE.get(cache_key)
+            if cached and cached[0] > now:
+                return _copy_breakdown_payload(cached[1])
         frame = self._load_monitor_frame_bounded(
             config,
             start_date=bounds.get("baseline_start") or None,
             end_date=bounds.get("window_end") or None,
-            feature_columns=feature_columns,
+            feature_columns=requested_features,
         )
         if frame.empty or config.contract.timestamp_col not in frame.columns:
             return {
@@ -1694,7 +1812,7 @@ class DashboardBackend:
         ].copy()
         regression_mode = (config.problem_type or "classification").strip().lower() == "regression"
         rows: list[dict[str, object]] = []
-        for feature in feature_columns:
+        for feature in requested_features:
             if feature not in baseline.columns or feature not in current.columns:
                 continue
             feature_baseline = _apply_feature_outlier_filter(
@@ -1747,40 +1865,54 @@ class DashboardBackend:
                 if regression_mode:
                     base_metrics = compute_regression_metrics(base_slice, config.contract.prediction_col, config.contract.label_col)
                     cur_metrics = compute_regression_metrics(cur_slice, config.contract.prediction_col, config.contract.label_col)
+                    baseline_metric = base_metrics.get(metric_name) if base_metrics else None
+                    current_metric = cur_metrics.get(metric_name) if cur_metrics else None
+                    baseline_effective = float(baseline_metric) if baseline_metric is not None else None
+                    current_effective = float(current_metric) if current_metric is not None else None
+                    metric_status = "defined"
                 else:
-                    base_metrics = compute_classification_metrics(
+                    base_metrics = compute_daily_classification_metrics(
                         base_slice,
                         config.contract.prediction_col,
                         config.contract.label_col,
                         prediction_score_col=config.contract.prediction_score_col,
                     )
-                    cur_metrics = compute_classification_metrics(
+                    cur_metrics = compute_daily_classification_metrics(
                         cur_slice,
                         config.contract.prediction_col,
                         config.contract.label_col,
                         prediction_score_col=config.contract.prediction_score_col,
                     )
-                baseline_metric = base_metrics.get(metric_name) if base_metrics else None
-                current_metric = cur_metrics.get(metric_name) if cur_metrics else None
-                if baseline_metric is None or current_metric is None:
+                    baseline_metric = base_metrics.get(metric_name) if base_metrics else None
+                    current_metric = cur_metrics.get(metric_name) if cur_metrics else None
+                    baseline_effective, baseline_status = _classification_metric_effective_value(base_metrics, metric_name)
+                    current_effective, current_status = _classification_metric_effective_value(cur_metrics, metric_name)
+                    if "undefined_zero_detections" in {baseline_status, current_status}:
+                        metric_status = "undefined_zero_detections"
+                    elif "undefined" in {baseline_status, current_status}:
+                        metric_status = "undefined"
+                    else:
+                        metric_status = "defined"
+                if baseline_effective is None or current_effective is None:
                     continue
                 delta = (
-                    baseline_metric - current_metric
+                    baseline_effective - current_effective
                     if regression_mode
-                    else current_metric - baseline_metric
+                    else current_effective - baseline_effective
                 )
                 current_share = float(len(cur_slice) / total_current * 100.0)
                 rows.append(
                     {
                         "feature": feature,
                         "bin_label": f"[{edges[index]:.4g}, {edges[index + 1]:.4g})",
-                        "baseline_metric": float(baseline_metric),
-                        "current_metric": float(current_metric),
+                        "baseline_metric": float(baseline_metric) if baseline_metric is not None else None,
+                        "current_metric": float(current_metric) if current_metric is not None else None,
                         "delta": round(float(delta), 4),
                         "current_volume_pct": round(current_share, 2),
                         "degradation_contribution": round(float(delta) * current_share / 100.0, 4),
                         "baseline_count": int(len(base_slice)),
                         "current_count": int(len(cur_slice)),
+                        "metric_status": metric_status,
                     }
                 )
         result = pd.DataFrame(rows)
@@ -1796,7 +1928,7 @@ class DashboardBackend:
             if not result.empty
             else pd.DataFrame(columns=["feature", "weighted_delta"])
         )
-        return {
+        payload = {
             "rows": result,
             "contributors": contributors,
             "message": (
@@ -1805,6 +1937,19 @@ class DashboardBackend:
                 else "No valid bin-level performance slices are available with the current controls."
             ),
         }
+        with _EXACT_PERFORMANCE_BREAKDOWN_CACHE_LOCK:
+            expired_keys = [
+                key
+                for key, (expires_at, _) in _EXACT_PERFORMANCE_BREAKDOWN_CACHE.items()
+                if expires_at <= now
+            ]
+            for key in expired_keys:
+                _EXACT_PERFORMANCE_BREAKDOWN_CACHE.pop(key, None)
+            _EXACT_PERFORMANCE_BREAKDOWN_CACHE[cache_key] = (
+                now + _EXACT_PERFORMANCE_BREAKDOWN_CACHE_TTL_SECONDS,
+                _copy_breakdown_payload(payload),
+            )
+        return payload
 
     def get_dimension_breakdown(self, model_id: str, feature: str, dimension: str) -> pd.DataFrame:
         config, current = self._load_current_window_frame(model_id, feature_columns=(feature, dimension))

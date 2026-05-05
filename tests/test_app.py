@@ -1152,6 +1152,37 @@ def test_render_drift_callback_respects_top_n_selection(monkeypatch) -> None:
     assert top_5_figure.data[0].marker.color != threshold_bar.data[0].marker.color
 
 
+def test_render_drift_callback_passes_custom_date_range_to_backend(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeBackend:
+        def get_monitor_config(self, model_id):
+            return SimpleNamespace(
+                contract=SimpleNamespace(categorical_columns=(), label_col="label"),
+                problem_type="classification",
+            )
+
+        def get_drift_results(self, model_id, granularity="daily", **kwargs):
+            captured.update(kwargs)
+            return pd.DataFrame(
+                [
+                    {"feature": "amount", "period": "2026-04-01", "psi": 0.05, "js_divergence": 0.01, "kl_divergence": 0.01},
+                    {"feature": "amount", "period": "2026-04-30", "psi": 0.07, "js_divergence": 0.02, "kl_divergence": 0.01},
+                ]
+            )
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    callback = app.callback_map[RENDER_DRIFT_CALLBACK]["callback"]
+    fn = getattr(callback, "__wrapped__", callback)
+
+    result = fn("/drift", "fraud_model_demo", 0, {}, 1, "js_divergence", "daily", 5, "2026-04-01", "2026-04-30", "all", "all", False)
+
+    assert captured["start_date"] == "2026-04-01"
+    assert captured["end_date"] == "2026-04-30"
+    assert "Date range: 2026-04-01 to 2026-04-30" in str(result[1])
+
+
 def test_describe_drift_heatmap_scale_caps_large_outliers() -> None:
     drift = pd.DataFrame(
         [
@@ -1337,6 +1368,29 @@ def test_feature_bin_impact_marks_nan_delta_as_unavailable() -> None:
     assert figure.data[0].marker.color == charts.COLORS["muted"]
     assert "Delta: unavailable" in figure.data[0].hovertemplate
     assert any(trace.name == "Unavailable" for trace in figure.data if trace.showlegend)
+
+
+def test_feature_bin_impact_explains_zero_detection_metric_status() -> None:
+    degradation = pd.DataFrame(
+        [
+            {
+                "feature": "amount",
+                "bin_label": "[0, 10)",
+                "baseline_metric": 1.0,
+                "current_metric": None,
+                "delta": -1.0,
+                "current_volume_pct": 50.0,
+                "degradation_contribution": -0.5,
+                "metric_status": "undefined_zero_detections",
+            }
+        ]
+    )
+    contributors = pd.DataFrame([{"feature": "amount", "weighted_delta": -0.5}])
+
+    figure = charts.build_feature_bin_impact(degradation, contributors)
+
+    assert "Current: undefined" in figure.data[0].hovertemplate
+    assert "no positive detections" in figure.data[0].hovertemplate
 
 
 def test_demo_chart_layout_defaults_expand_margins_and_cap_heatmap_height() -> None:
@@ -3146,6 +3200,33 @@ def test_delete_reference_monitor_callback_deletes_selected_monitor(monkeypatch)
     assert repository.deleted == ["fraud_model_demo"]
     assert "Deleted Fraud Model Demo (fraud_model_demo)" in str(result[0])
     assert result[1]
+
+
+def test_delete_reference_monitor_callback_surfaces_unsupported_delete(monkeypatch) -> None:
+    repository = SimpleNamespace()
+
+    def delete_monitor(model_id):
+        raise callbacks_module.PermanentDeleteUnsupportedError("Permanent delete requires Unity Catalog control-plane tables.")
+
+    repository.delete_monitor = delete_monitor
+    config = SimpleNamespace(display_name="Fraud Model Demo", model_key="fraud_model_demo")
+
+    class _FakeBackend:
+        def __init__(self):
+            self.repository = repository
+
+        def get_monitor_config(self, model_id):
+            assert model_id == "fraud_model_demo"
+            return config
+
+    monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
+    app = create_app()
+    fn = _find_callback_by_input_and_output(app, "reference-delete-confirm-btn", "reference-page-status")
+
+    result = fn(1, "fraud_model_demo", None, "fraud_model_demo", {})
+
+    assert "Permanent delete requires Unity Catalog" in str(result[0])
+    assert result[1] is no_update
 
 
 def test_delete_reference_monitor_callback_blocks_when_model_key_is_ambiguous(monkeypatch) -> None:
