@@ -1741,7 +1741,49 @@ class ControlPlaneRepository:
         ts_col = quote_column(validate_identifier(config.contract.timestamp_col))
         prediction_col = quote_column(validate_identifier(config.contract.prediction_col))
         label_count_sql = "0 AS label_row_count"
-        if config.contract.label_col and not config.labels_table:
+        join_sql = ""
+        if config.labels_table and config.contract.label_col:
+            source_columns = self._warehouse.get_columns(config.source_table)
+            source_join_col = _resolve_source_labels_join_col(
+                source_columns,
+                config.contract.entity_id_col,
+                config.labels_join_col,
+            )
+            if source_join_col and config.labels_join_col:
+                validate_identifier(config.labels_table)
+                label_col = validate_identifier(config.contract.label_col)
+                join_col = validate_identifier(config.labels_join_col)
+                label_expr = f"l.{quote_column(label_col)}"
+                if config.labels_order_col:
+                    order_col = validate_identifier(config.labels_order_col)
+                    join_source = f"""
+                        (
+                            SELECT {quote_column(join_col)}, {quote_column(label_col)}
+                            FROM (
+                                SELECT
+                                    {quote_column(join_col)},
+                                    {quote_column(label_col)},
+                                    ROW_NUMBER() OVER (
+                                        PARTITION BY {quote_column(join_col)}
+                                        ORDER BY {quote_column(order_col)} DESC
+                                    ) AS {quote_column("model_lens_label_rank")}
+                                FROM {config.labels_table}
+                            ) ranked_labels
+                            WHERE {quote_column("model_lens_label_rank")} = 1
+                        ) l
+                    """
+                else:
+                    join_source = f"{config.labels_table} l"
+                join_sql = (
+                    f" LEFT JOIN {join_source}"
+                    f" ON s.{quote_column(source_join_col)}"
+                    f" = l.{quote_column(join_col)}"
+                )
+                label_count_sql = (
+                    f"SUM(CASE WHEN {label_expr} IS NOT NULL THEN 1 ELSE 0 END) "
+                    "AS label_row_count"
+                )
+        elif config.contract.label_col:
             label_count_sql = (
                 f"SUM(CASE WHEN s.{quote_column(validate_identifier(config.contract.label_col))} IS NOT NULL THEN 1 ELSE 0 END) "
                 "AS label_row_count"
@@ -1757,6 +1799,7 @@ class ControlPlaneRepository:
                 STDDEV_SAMP(CAST(s.{prediction_col} AS DOUBLE)) AS prediction_std,
                 {label_count_sql}
             FROM {config.source_table} s
+            {join_sql}
             {where_sql}
             """,
             tuple(params),
@@ -1770,6 +1813,7 @@ class ControlPlaneRepository:
                 STDDEV_SAMP(CAST(s.{prediction_col} AS DOUBLE)) AS prediction_std,
                 {label_count_sql}
             FROM {config.source_table} s
+            {join_sql}
             {where_sql}
             """
         )

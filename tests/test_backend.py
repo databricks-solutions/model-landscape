@@ -1122,7 +1122,9 @@ def test_get_exact_performance_breakdown_scopes_features_and_reuses_cache() -> N
         list_monitor_configs=lambda status=None: [config],
         load_monitor_frame=_load_monitor_frame,
     )
-    backend = DashboardBackend(repository=_with_published_generation(repository))
+    generation = {"value": "published-1"}
+    repository.get_latest_published_generation_id = lambda model_key: generation["value"]
+    backend = DashboardBackend(repository=repository)
 
     first = backend.get_exact_performance_breakdown(
         "fraud_model_demo",
@@ -1138,10 +1140,19 @@ def test_get_exact_performance_breakdown_scopes_features_and_reuses_cache() -> N
         binning_mode="custom",
         custom_edges=[0.0, 5.0],
     )
+    generation["value"] = "published-2"
+    third = backend.get_exact_performance_breakdown(
+        "fraud_model_demo",
+        metric_name="precision",
+        feature_columns=("amount",),
+        binning_mode="custom",
+        custom_edges=[0.0, 5.0],
+    )
 
-    assert load_calls == [("amount",)]
+    assert load_calls == [("amount",), ("amount",)]
     assert set(first["rows"]["feature"]) == {"amount"}
     assert set(second["rows"]["feature"]) == {"amount"}
+    assert set(third["rows"]["feature"]) == {"amount"}
 
 
 def test_get_exact_performance_breakdown_keeps_zero_detection_slice() -> None:

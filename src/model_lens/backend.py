@@ -1759,8 +1759,10 @@ class DashboardBackend:
                 "contributors": pd.DataFrame(),
                 "message": "No tracked feature columns are configured for this monitor.",
             }
+        generation_id = self._published_generation_id(model_id) or ""
         cache_key = (
             model_id,
+            generation_id,
             metric_name,
             tuple(sorted(requested_features)),
             str(binning_mode or "auto").strip().lower(),

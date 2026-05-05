@@ -10,6 +10,7 @@ from model_lens.ui.styles import DROPDOWN_STYLE
 def layout():
     return html.Div(
         [
+            dcc.Store(id="perf-breakdown-state"),
             html.H4("Performance Degradation Analysis", className="text-light mb-1"),
             html.Div(id="perf-model-banner", className="mb-3"),
             html.Div(id="perf-labels-alert"),
@@ -79,7 +80,7 @@ def layout():
                     [
                         dbc.Row(id="perf-kpi-cards", className="mb-3"),
                         html.Div(id="perf-timeline-container", className="mb-3"),
-                        html.Div(id="perf-contributors-container", className="mb-4"),
+                        html.Div(id="perf-drift-container", className="mb-4"),
                     ]
                 ),
             ),
@@ -176,6 +177,10 @@ def layout():
                     ),
                 ],
                 className="mb-4",
+            ),
+            dcc.Loading(
+                type="default",
+                children=html.Div(id="perf-contributors-container", className="mb-4"),
             ),
             html.H6("Feature Deep Dive Shortcut", className="text-light mb-2"),
             html.P(

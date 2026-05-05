@@ -95,6 +95,7 @@ Important:
 
 - the generated `app.yaml` and the generated `refresh-job.json` must use the same `control_plane_catalog` and `control_plane_schema`
 - on Hive Metastore workspaces, that often means `hive_metastore` plus a schema such as `model_lens_control_plane`
+- Hive Metastore control planes can set up, refresh, archive, and restore monitors, but permanent delete is disabled there because atomic multi-table cleanup requires Unity Catalog managed control-plane tables
 - do not rely on any repo default for the control-plane namespace; pass it explicitly every time
 
 ## What You Need

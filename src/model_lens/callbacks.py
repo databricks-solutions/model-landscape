@@ -287,7 +287,7 @@ def _parse_custom_edges(value: object) -> list[float] | None:
     for token in text.split(","):
         token = token.strip()
         if not token:
-            continue
+            raise ValueError("Custom bin edges cannot contain empty values.")
         numeric = pd.to_numeric(pd.Series([token]), errors="coerce").iloc[0]
         if pd.isna(numeric):
             raise ValueError(f"Invalid edge value: {token}")
@@ -318,6 +318,49 @@ def _outlier_control_value(mode: object, raw_value: object) -> float | None:
     if pd.isna(numeric) or float(numeric) <= 0:
         return 1.5
     return float(numeric)
+
+
+def _frame_numeric_min(frame: pd.DataFrame, column: str) -> float | None:
+    if frame.empty or column not in frame.columns:
+        return None
+    numeric = pd.to_numeric(frame[column], errors="coerce").dropna()
+    if numeric.empty:
+        return None
+    return float(numeric.min())
+
+
+def _breakdown_has_degradation(feature_frame: pd.DataFrame, contributors: pd.DataFrame) -> bool:
+    weighted_min = _frame_numeric_min(contributors, "weighted_delta")
+    if weighted_min is not None and weighted_min < 0:
+        return True
+    delta_min = _frame_numeric_min(feature_frame, "delta")
+    return bool(delta_min is not None and delta_min < 0)
+
+
+def _breakdown_state_matches(state: object, *, model_id: str, metric_name: str) -> bool:
+    if not isinstance(state, dict):
+        return False
+    return (
+        str(state.get("model_id") or "") == str(model_id or "")
+        and str(state.get("metric_name") or "") == str(metric_name or "")
+    )
+
+
+def _breakdown_state_payload(
+    *,
+    model_id: str,
+    metric_name: str,
+    source: str,
+    degradation_detected: bool,
+    worst_weighted_delta: float | None,
+) -> dict[str, object]:
+    return {
+        "model_id": model_id,
+        "metric_name": metric_name,
+        "source": source,
+        "degradation_detected": bool(degradation_detected),
+        "worst_weighted_delta": 0.0 if worst_weighted_delta is None else float(worst_weighted_delta),
+    }
 
 
 def _analysis_filter_summary(
@@ -3532,7 +3575,7 @@ def register_callbacks(app) -> None:
         Output("perf-labels-alert", "children"),
         Output("perf-kpi-cards", "children"),
         Output("perf-timeline-container", "children"),
-        Output("perf-contributors-container", "children"),
+        Output("perf-drift-container", "children"),
         Output("perf-feature-select", "options"),
         Output("perf-feature-select", "value"),
         Output("perf-date-range-note", "children"),
@@ -3542,14 +3585,9 @@ def register_callbacks(app) -> None:
         Input("perf-drift-metric-select", "value"),
         Input("perf-drift-threshold-toggle", "value"),
         Input("perf-drift-feature-select", "value"),
-        Input("perf-apply-breakdown-controls-btn", "n_clicks"),
         Input("reload-token", "data"),
         Input("session-config-store", "data"),
-        State("perf-binning-mode-select", "value"),
-        State("perf-bin-count-input", "value"),
-        State("perf-custom-edges-input", "value"),
-        State("perf-outlier-mode-select", "value"),
-        State("perf-outlier-value-input", "value"),
+        Input("perf-breakdown-state", "data"),
         State("perf-feature-select", "value"),
     )
     def render_performance(
@@ -3559,14 +3597,9 @@ def register_callbacks(app) -> None:
         drift_metric,
         perf_show_thresholds,
         current_drift_features,
-        _apply_breakdown_clicks,
         _reload_token,
         session_data,
-        binning_mode,
-        bin_count,
-        custom_edges_text,
-        outlier_mode,
-        outlier_value_raw,
+        breakdown_state,
         current_feature,
     ):
         if pathname != "/performance":
@@ -3589,10 +3622,6 @@ def register_callbacks(app) -> None:
                     html.Div(),
                 )
             resolved_metric = metric_name or _default_performance_metric(model_id, backend)
-            normalized_binning_mode = str(binning_mode or "auto").strip().lower()
-            custom_edges = _parse_custom_edges(custom_edges_text) if normalized_binning_mode == "custom" else None
-            normalized_outlier_mode = _normalize_outlier_mode(outlier_mode)
-            outlier_value = _outlier_control_value(normalized_outlier_mode, outlier_value_raw)
             performance = backend.get_performance_summary(model_id, metric_name=resolved_metric)
             latest_bins = performance["latest_bins"]
             all_bins = performance.get("all_bins", pd.DataFrame())
@@ -3655,41 +3684,18 @@ def register_callbacks(app) -> None:
             feature_options = _option_list(features)
             feature_values = {option["value"] for option in feature_options}
             selected_feature = current_feature if current_feature in feature_values else (feature_options[0]["value"] if feature_options else None)
-            exact_feature_columns = (
-                (selected_feature,)
-                if normalized_binning_mode == "custom" and selected_feature
-                else None
-            )
-            exact_breakdown = backend.get_exact_performance_breakdown(
-                model_id,
-                metric_name=resolved_metric,
-                feature_columns=exact_feature_columns,
-                binning_mode=normalized_binning_mode,
-                n_bins=_normalize_top_n(bin_count, default=40, minimum=2, maximum=200),
-                custom_edges=custom_edges,
-                outlier_mode=normalized_outlier_mode,
-                outlier_value=outlier_value,
-            )
-            breakdown_rows = exact_breakdown.get("rows", pd.DataFrame())
-            breakdown_contributors = exact_breakdown.get("contributors", pd.DataFrame())
-            breakdown_message = str(exact_breakdown.get("message") or "").strip()
-            if not breakdown_rows.empty:
-                feature_frame = breakdown_rows
-                contributors = breakdown_contributors
-            degradation_detected = bool(performance.get("has_significant_degradation"))
+            if _breakdown_state_matches(breakdown_state, model_id=model_id, metric_name=resolved_metric):
+                degradation_detected = bool(breakdown_state.get("degradation_detected"))
+                worst_weighted_delta = float(breakdown_state.get("worst_weighted_delta") or 0.0)
+            else:
+                degradation_detected = bool(performance.get("has_significant_degradation"))
+                worst_weighted_delta = float(performance.get("worst_weighted_delta", 0.0) or 0.0)
             alert_children: list[object] = [
                 html.Small(
                     f"Feature impact metric: {performance_metric_label(resolved_metric)}",
                     className="text-muted d-block mb-2",
                 )
             ]
-            if normalized_binning_mode == "custom" and selected_feature:
-                alert_children.append(
-                    html.Small(
-                        f"Custom bin edges are applied only to {selected_feature}. Use Auto or Fixed Bin Count to compare all tracked features together.",
-                        className="text-muted d-block mb-2",
-                    )
-                )
             timeline_reasons: list[str] = []
             for current_metric in timeline_metric_names:
                 current_reason = str(timeline_summaries.get(current_metric, {}).get("timeline_unavailable_reason") or "").strip()
@@ -3697,13 +3703,6 @@ def register_callbacks(app) -> None:
                     timeline_reasons.append(current_reason)
             for current_reason in timeline_reasons:
                 alert_children.append(_status_alert(current_reason, "warning"))
-            if breakdown_message and breakdown_rows.empty:
-                alert_children.append(
-                    _status_alert(
-                        f"{breakdown_message} Showing the stored latest-window breakdown instead.",
-                        "warning",
-                    )
-                )
             if not degradation_detected:
                 alert_children.append(
                     _status_alert(
@@ -3712,37 +3711,12 @@ def register_callbacks(app) -> None:
                     )
                 )
             alert = html.Div(alert_children)
-            latest_bin_table = pd.DataFrame()
-            if not feature_frame.empty:
-                latest_bin_table = feature_frame[
-                    [
-                        column
-                        for column in (
-                            "feature",
-                            "bin_label",
-                            "baseline_metric",
-                            "current_metric",
-                            "delta",
-                            "current_volume_pct",
-                            "degradation_contribution",
-                        )
-                        if column in feature_frame.columns
-                    ]
-                ].rename(
-                    columns={
-                        "bin_label": "bin",
-                        "baseline_metric": "baseline",
-                        "current_metric": "current",
-                        "current_volume_pct": "volume_pct",
-                        "degradation_contribution": "impact",
-                    }
-                )
             kpi_cards = [
                 dbc.Col(make_metric_card("Tracked Features", str(len(feature_options)), "With labeled performance bins"), md=4),
                 dbc.Col(
                     make_metric_card(
                         "Worst Weighted Delta",
-                        f"{float(performance.get('worst_weighted_delta', 0.0)):.4f}",
+                        f"{worst_weighted_delta:.4f}",
                         "Most degraded feature" if degradation_detected else "Stable latest window",
                     ),
                     md=4,
@@ -3799,6 +3773,189 @@ def register_callbacks(app) -> None:
                         className="text-muted d-block",
                     )
                 )
+            return (
+                alert,
+                kpi_cards,
+                make_chart_card(
+                    charts.build_performance_timeline(
+                        combined_timeline,
+                        metric_name=resolved_metric,
+                        metric_names=timeline_metric_names,
+                    )
+                ),
+                html.Div(
+                    [
+                        html.H6("Drift vs Time", className="text-light mt-3 mb-2"),
+                        html.P(
+                            f"Compare the {drift_metric_label} trend below with the performance metrics above to spot time-aligned drift and metric shifts. Showing {len(drift_features)} of {len(drift_feature_order) or len(drift_features)} tracked features.",
+                            className="text-muted",
+                            style={"fontSize": "0.8rem"},
+                        ),
+                        make_chart_card(
+                            charts.build_drift_timeline(
+                                drift,
+                                drift_features,
+                                metric=selected_drift_metric,
+                                show_thresholds=bool(perf_show_thresholds),
+                                thresholds=resolved_thresholds,
+                                title=f"{drift_metric_label} Over Time ({drift_scope_label})",
+                            ),
+                            class_name="mb-3",
+                        ),
+                    ]
+                ),
+                feature_options,
+                selected_feature,
+                html.Div(note_parts),
+            )
+        except Exception as error:
+            logger.exception("Failed to render performance analysis", exc_info=error)
+            return _status_alert(_callback_error_message("performance analysis", error), "danger"), html.Div(), html.Div(), html.Div(), [], None, html.Div()
+
+    @app.callback(
+        Output("perf-breakdown-state", "data"),
+        Output("perf-contributors-container", "children"),
+        Input("url", "pathname"),
+        Input("global-model-select", "value"),
+        Input("perf-metric-select", "value"),
+        Input("perf-apply-breakdown-controls-btn", "n_clicks"),
+        Input("reload-token", "data"),
+        Input("session-config-store", "data"),
+        Input("perf-feature-select", "value"),
+        State("perf-binning-mode-select", "value"),
+        State("perf-bin-count-input", "value"),
+        State("perf-custom-edges-input", "value"),
+        State("perf-outlier-mode-select", "value"),
+        State("perf-outlier-value-input", "value"),
+    )
+    def render_performance_breakdown(
+        pathname,
+        model_id,
+        metric_name,
+        _apply_breakdown_clicks,
+        _reload_token,
+        session_data,
+        current_feature,
+        binning_mode,
+        bin_count,
+        custom_edges_text,
+        outlier_mode,
+        outlier_value_raw,
+    ):
+        if pathname != "/performance":
+            return no_update, no_update
+        empty_state = _breakdown_state_payload(
+            model_id=str(model_id or ""),
+            metric_name=str(metric_name or ""),
+            source="empty",
+            degradation_detected=False,
+            worst_weighted_delta=0.0,
+        )
+        try:
+            if not model_id:
+                return empty_state, html.Div()
+            backend = _make_backend(session_data)
+            config = backend.get_monitor_config(model_id)
+            if not config or not config.contract.label_col:
+                return empty_state, html.Div()
+            resolved_metric = metric_name or _default_performance_metric(model_id, backend)
+            performance = backend.get_performance_summary(model_id, metric_name=resolved_metric)
+            latest_bins = performance["latest_bins"]
+            all_bins = performance.get("all_bins", pd.DataFrame())
+            if all_bins.empty:
+                return (
+                    _breakdown_state_payload(
+                        model_id=model_id,
+                        metric_name=resolved_metric,
+                        source="empty",
+                        degradation_detected=False,
+                        worst_weighted_delta=0.0,
+                    ),
+                    html.Div(),
+                )
+
+            feature_frame = latest_bins if not latest_bins.empty else all_bins
+            contributors = performance["contributors"]
+            features = sorted({str(value) for value in (config.contract.feature_columns or []) if str(value).strip()})
+            if not features:
+                features = sorted(
+                    {
+                        str(value)
+                        for value in feature_frame.get("feature", pd.Series(dtype=str)).dropna().tolist()
+                        if str(value).strip()
+                    }
+                )
+            selected_feature = current_feature if current_feature in set(features) else (features[0] if features else None)
+            normalized_binning_mode = str(binning_mode or "auto").strip().lower()
+            custom_edges = _parse_custom_edges(custom_edges_text) if normalized_binning_mode == "custom" else None
+            normalized_outlier_mode = _normalize_outlier_mode(outlier_mode)
+            outlier_value = _outlier_control_value(normalized_outlier_mode, outlier_value_raw)
+            exact_feature_columns = (
+                (selected_feature,)
+                if normalized_binning_mode == "custom" and selected_feature
+                else None
+            )
+            exact_breakdown = backend.get_exact_performance_breakdown(
+                model_id,
+                metric_name=resolved_metric,
+                feature_columns=exact_feature_columns,
+                binning_mode=normalized_binning_mode,
+                n_bins=_normalize_top_n(bin_count, default=40, minimum=2, maximum=200),
+                custom_edges=custom_edges,
+                outlier_mode=normalized_outlier_mode,
+                outlier_value=outlier_value,
+            )
+            breakdown_rows = exact_breakdown.get("rows", pd.DataFrame())
+            breakdown_contributors = exact_breakdown.get("contributors", pd.DataFrame())
+            breakdown_message = str(exact_breakdown.get("message") or "").strip()
+            source = "stored"
+            if isinstance(breakdown_rows, pd.DataFrame) and not breakdown_rows.empty:
+                feature_frame = breakdown_rows
+                contributors = breakdown_contributors if isinstance(breakdown_contributors, pd.DataFrame) else pd.DataFrame()
+                source = "exact"
+
+            if source == "exact":
+                degradation_detected = _breakdown_has_degradation(feature_frame, contributors)
+            else:
+                degradation_detected = bool(performance.get("has_significant_degradation"))
+            worst_weighted_delta = _frame_numeric_min(contributors, "weighted_delta")
+            if worst_weighted_delta is None:
+                worst_weighted_delta = float(performance.get("worst_weighted_delta", 0.0) or 0.0)
+            state = _breakdown_state_payload(
+                model_id=model_id,
+                metric_name=resolved_metric,
+                source=source,
+                degradation_detected=degradation_detected,
+                worst_weighted_delta=worst_weighted_delta,
+            )
+
+            latest_bin_table = pd.DataFrame()
+            if not feature_frame.empty:
+                latest_bin_table = feature_frame[
+                    [
+                        column
+                        for column in (
+                            "feature",
+                            "bin_label",
+                            "baseline_metric",
+                            "current_metric",
+                            "delta",
+                            "current_volume_pct",
+                            "degradation_contribution",
+                        )
+                        if column in feature_frame.columns
+                    ]
+                ].rename(
+                    columns={
+                        "feature": "Feature",
+                        "bin_label": "Bin",
+                        "baseline_metric": "Baseline",
+                        "current_metric": "Current",
+                        "delta": "Delta",
+                        "current_volume_pct": "Current Window Share (%)",
+                        "degradation_contribution": "Weighted Contribution (Delta x Share)",
+                    }
+                )
             impact_help_button = dbc.Button(
                 html.I(className="fas fa-circle-question"),
                 id="perf-feature-impact-help-btn",
@@ -3834,46 +3991,26 @@ def register_callbacks(app) -> None:
                 trigger="click",
                 placement="auto",
             )
-            latest_bin_table = latest_bin_table.rename(
-                columns={
-                    "feature": "Feature",
-                    "bin": "Bin",
-                        "baseline": "Baseline",
-                        "current": "Current",
-                        "delta": "Delta",
-                        "volume_pct": "Current Window Share (%)",
-                        "impact": "Weighted Contribution (Delta x Share)",
-                    }
+            messages: list[object] = []
+            if normalized_binning_mode == "custom" and selected_feature:
+                messages.append(
+                    html.Small(
+                        f"Custom bin edges are applied only to {selected_feature}. Use Auto or Fixed Bin Count to compare all tracked features together.",
+                        className="text-muted d-block mb-2",
+                    )
+                )
+            if breakdown_message and source != "exact":
+                messages.append(
+                    _status_alert(
+                        f"{breakdown_message} Showing the stored latest-window breakdown instead.",
+                        "warning",
+                    )
                 )
             return (
-                alert,
-                kpi_cards,
-                make_chart_card(
-                    charts.build_performance_timeline(
-                        combined_timeline,
-                        metric_name=resolved_metric,
-                        metric_names=timeline_metric_names,
-                    )
-                ),
+                state,
                 html.Div(
                     [
-                        html.H6("Drift vs Time", className="text-light mt-3 mb-2"),
-                        html.P(
-                            f"Compare the {drift_metric_label} trend below with the performance metrics above to spot time-aligned drift and metric shifts. Showing {len(drift_features)} of {len(drift_feature_order) or len(drift_features)} tracked features.",
-                            className="text-muted",
-                            style={"fontSize": "0.8rem"},
-                        ),
-                        make_chart_card(
-                            charts.build_drift_timeline(
-                                drift,
-                                drift_features,
-                                metric=selected_drift_metric,
-                                show_thresholds=bool(perf_show_thresholds),
-                                thresholds=resolved_thresholds,
-                                title=f"{drift_metric_label} Over Time ({drift_scope_label})",
-                            ),
-                            class_name="mb-3",
-                        ),
+                        *messages,
                         html.Div(
                             [
                                 html.Div(
@@ -3919,13 +4056,12 @@ def register_callbacks(app) -> None:
                         ),
                     ]
                 ),
-                feature_options,
-                selected_feature,
-                html.Div(note_parts),
             )
+        except ValueError as error:
+            return no_update, _status_alert(str(error), "warning")
         except Exception as error:
-            logger.exception("Failed to render performance analysis", exc_info=error)
-            return _status_alert(_callback_error_message("performance analysis", error), "danger"), html.Div(), html.Div(), html.Div(), [], None, html.Div()
+            logger.exception("Failed to render performance breakdown", exc_info=error)
+            return no_update, _status_alert(_callback_error_message("performance breakdown", error), "danger")
 
     @app.callback(
         Output("perf-bin-detail-container", "children"),

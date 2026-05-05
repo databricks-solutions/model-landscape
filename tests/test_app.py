@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 from dash import dcc, no_update
 from dash.development.base_component import Component
 
@@ -20,6 +21,7 @@ from model_lens.app import (
 from model_lens.callbacks import (
     _format_runtime_setting_value,
     _outlier_control_value,
+    _parse_custom_edges,
     _ready_for_session,
     _setup_retry_message,
 )
@@ -40,8 +42,11 @@ RENDER_DRIFT_CALLBACK = (
 )
 RENDER_PERFORMANCE_CALLBACK = (
     "..perf-labels-alert.children...perf-kpi-cards.children...perf-timeline-container.children"
-    "...perf-contributors-container.children...perf-feature-select.options...perf-feature-select.value"
+    "...perf-drift-container.children...perf-feature-select.options...perf-feature-select.value"
     "...perf-date-range-note.children.."
+)
+RENDER_PERFORMANCE_BREAKDOWN_CALLBACK = (
+    "..perf-breakdown-state.data...perf-contributors-container.children.."
 )
 RENDER_QUALITY_CALLBACK = (
     "..quality-kpi-cards.children...quality-volume-container.children...quality-null-rates-container.children"
@@ -54,6 +59,7 @@ def _performance_callback_args(
     drift_metric: str = "psi",
     current_drift_features=None,
     current_feature=None,
+    breakdown_state=None,
     *,
     pathname: str = "/performance",
 ) -> tuple:
@@ -65,14 +71,36 @@ def _performance_callback_args(
         False,
         current_drift_features,
         0,
+        {},
+        breakdown_state,
+        current_feature,
+    )
+
+
+def _performance_breakdown_callback_args(
+    metric: str = "f1",
+    current_feature=None,
+    *,
+    pathname: str = "/performance",
+    binning_mode: str = "fixed",
+    bin_count: int = 4,
+    custom_edges=None,
+    outlier_mode: str = "off",
+    outlier_value: float = 1.0,
+) -> tuple:
+    return (
+        pathname,
+        "fraud_model_demo",
+        metric,
+        0,
         0,
         {},
-        "fixed",
-        4,
-        None,
-        "off",
-        1.0,
         current_feature,
+        binning_mode,
+        bin_count,
+        custom_edges,
+        outlier_mode,
+        outlier_value,
     )
 
 
@@ -663,6 +691,15 @@ def test_setup_retry_message_tells_user_to_click_setup_again() -> None:
 def test_percentile_clip_outlier_control_normalizes_zero_to_safe_minimum() -> None:
     assert _outlier_control_value("percentile_clip", 0.0) == 1.0
     assert _outlier_control_value("percentile_clip", -4.0) == 1.0
+
+
+def test_parse_custom_edges_rejects_empty_tokens() -> None:
+    assert _parse_custom_edges("") is None
+    assert _parse_custom_edges("   ") is None
+
+    for value in ("1, , 2", "1,,2", "1,2,"):
+        with pytest.raises(ValueError, match="Custom bin edges cannot contain empty values."):
+            _parse_custom_edges(value)
 
 
 def test_render_onboarding_wizard_callback_executes_for_step_two() -> None:
@@ -1296,18 +1333,22 @@ def test_render_performance_callback_surfaces_zero_delta_state(monkeypatch) -> N
 
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
     app = create_app()
-    callback = app.callback_map[RENDER_PERFORMANCE_CALLBACK]["callback"]
-    fn = getattr(callback, "__wrapped__", callback)
+    breakdown_callback = app.callback_map[RENDER_PERFORMANCE_BREAKDOWN_CALLBACK]["callback"]
+    breakdown_fn = getattr(breakdown_callback, "__wrapped__", breakdown_callback)
+    main_callback = app.callback_map[RENDER_PERFORMANCE_CALLBACK]["callback"]
+    main_fn = getattr(main_callback, "__wrapped__", main_callback)
 
-    result = fn(*_performance_callback_args())
+    breakdown_result = breakdown_fn(*_performance_breakdown_callback_args())
+    result = main_fn(*_performance_callback_args(breakdown_state=breakdown_result[0]))
 
     assert "Feature impact metric: F1 Score" in str(result[0])
-    assert "no significant degradation" in str(result[0]).lower()
+    assert "no significant degradation" not in str(result[0]).lower()
+    assert "Most degraded feature" in str(result[1])
     assert "Performance Metrics Over Time" in str(result[2])
     assert "PSI Over Time (All Tracked Features)" in str(result[3])
-    assert "Latest Bin Metrics" in str(result[3])
-    assert "Weighted Contribution = Delta x Current Window Share" in str(result[3])
-    assert "[0, 10)" in str(result[3])
+    assert "Latest Bin Metrics" in str(breakdown_result[1])
+    assert "Weighted Contribution = Delta x Current Window Share" in str(breakdown_result[1])
+    assert "[0, 10)" in str(breakdown_result[1])
     assert "Only one comparison window is available" in str(result[6])
 
 
@@ -1579,11 +1620,14 @@ def test_render_performance_callback_handles_partial_window_note_and_missing_met
     app = create_app()
     callback = app.callback_map[RENDER_PERFORMANCE_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
+    breakdown_callback = app.callback_map[RENDER_PERFORMANCE_BREAKDOWN_CALLBACK]["callback"]
+    breakdown_fn = getattr(breakdown_callback, "__wrapped__", breakdown_callback)
 
     result = fn(*_performance_callback_args(metric="precision"))
+    breakdown_result = breakdown_fn(*_performance_breakdown_callback_args(metric="precision"))
 
     assert "unavailable until daily labeled facts are populated" in str(result[0]).lower()
-    assert "showing the stored latest-window breakdown instead" in str(result[0]).lower()
+    assert "showing the stored latest-window breakdown instead" in str(breakdown_result[1]).lower()
     assert "Latest comparison window end: 2026-01-21" in str(result[6])
     assert "Performance Metrics Over Time" in str(result[2])
     assert "Chart gaps mean the metric was undefined on those days, not zero." in str(result[6])
@@ -1627,11 +1671,7 @@ def test_render_performance_callback_uses_selected_drift_metric(monkeypatch) -> 
             }
 
         def get_exact_performance_breakdown(self, model_id, **kwargs):
-            return {
-                "rows": pd.DataFrame(),
-                "contributors": pd.DataFrame(),
-                "message": "Exact bounded performance rows are unavailable for this monitor.",
-            }
+            raise AssertionError("drift-only controls must not recompute exact performance breakdown")
 
         def get_drift_results(self, model_id, granularity="daily"):
             assert granularity == "daily"
@@ -3335,15 +3375,19 @@ def test_sidebar_model_dropdown_uses_sidebar_specific_ellipsis_css() -> None:
 def test_performance_layout_keeps_controls_outside_loading_wrapper() -> None:
     page = performance.layout()
 
-    assert page.children[2].id == "perf-labels-alert"
-    assert page.children[3].children[0].children[0].children == "Primary Metric (Feature Impact)"
-    loading = page.children[4]
+    assert page.children[0].id == "perf-breakdown-state"
+    assert page.children[3].id == "perf-labels-alert"
+    assert page.children[4].children[0].children[0].children == "Primary Metric (Feature Impact)"
+    loading = page.children[5]
     assert isinstance(loading, dcc.Loading)
     loading_child = loading.children
     assert loading_child.children[0].id == "perf-kpi-cards"
     assert loading_child.children[1].id == "perf-timeline-container"
-    assert loading_child.children[2].id == "perf-contributors-container"
-    assert page.children[5].children == "Per-Bin Breakdown Controls"
-    assert page.children[7].children[0].children[0].children == "Binning Mode"
-    assert page.children[8].children[0].children[0].children == "Outlier Parameter"
-    assert page.children[9].children == "Feature Deep Dive Shortcut"
+    assert loading_child.children[2].id == "perf-drift-container"
+    assert page.children[6].children == "Per-Bin Breakdown Controls"
+    assert page.children[8].children[0].children[0].children == "Binning Mode"
+    assert page.children[9].children[0].children[0].children == "Outlier Parameter"
+    breakdown_loading = page.children[10]
+    assert isinstance(breakdown_loading, dcc.Loading)
+    assert breakdown_loading.children.id == "perf-contributors-container"
+    assert page.children[11].children == "Feature Deep Dive Shortcut"

@@ -834,6 +834,28 @@ def test_get_source_profile_uses_sql_aggregates_instead_of_loading_rows() -> Non
     assert any("ROUND(AVG(CASE WHEN s.`amount` IS NULL" in sql for sql, _ in warehouse.query_param_calls)
 
 
+def test_get_source_profile_counts_external_labels_with_latest_label_join() -> None:
+    warehouse = FakeWarehouse()
+    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+
+    profile = repository.get_source_profile(
+        _monitor_config(with_external_labels=True, labels_order_col="label_timestamp"),
+        start_date="2026-01-01",
+        end_date="2026-01-21",
+    )
+
+    summary_sql = next(
+        sql
+        for sql, _ in warehouse.query_param_calls
+        if "COUNT(*) AS total_rows" in sql and "FROM catalog.schema.inference_logs s" in sql
+    )
+    assert profile["label_row_count"] == 15
+    assert "LEFT JOIN" in summary_sql
+    assert "ROW_NUMBER() OVER" in summary_sql
+    assert "ORDER BY `label_timestamp` DESC" in summary_sql
+    assert "SUM(CASE WHEN l.`label` IS NOT NULL THEN 1 ELSE 0 END) AS label_row_count" in summary_sql
+
+
 def test_ensure_control_plane_ignores_field_already_exists_during_migration() -> None:
     warehouse = FakeWarehouse()
     warehouse.alter_field_already_exists = True
