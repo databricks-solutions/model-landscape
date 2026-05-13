@@ -1,0 +1,228 @@
+Databricks Model Landscape
+Copyright 2026 Databricks, Inc.
+
+This product is licensed under the Databricks License. See the LICENSE.md
+file for the full license text.
+
+This product includes software developed by third parties. Below is a list
+of those third-party components and their respective licenses.
+
+================================================================================
+
+MIT License (https://opensource.org/licenses/MIT)
+
+  dash
+  https://github.com/plotly/dash
+  Copyright (c) 2017-present Plotly, Inc.
+
+  plotly
+  https://github.com/plotly/plotly.py
+  Copyright (c) 2016-present Plotly, Inc.
+
+  pydantic
+  https://github.com/pydantic/pydantic
+  Copyright (c) 2017-present Samuel Colvin and contributors
+
+  pydantic-core
+  https://github.com/pydantic/pydantic
+  Copyright (c) 2023-present Samuel Colvin and contributors
+
+  annotated-types
+  https://github.com/annotated-types/annotated-types
+  Copyright (c) 2022 Adrian Garcia Badaracco, Samuel Colvin
+
+  urllib3
+  https://github.com/urllib3/urllib3
+  Copyright (c) 2008-present Andrey Petrov and contributors
+
+  cachetools
+  https://github.com/tkem/cachetools
+  Copyright (c) 2014-present Thomas Kemmer
+
+  pytz
+  http://pythonhosted.org/pytz
+  Copyright (c) 2003-present Stuart Bishop
+
+  six
+  https://github.com/benjaminp/six
+  Copyright (c) 2010-present Benjamin Peterson
+
+  certifi
+  https://github.com/certifi/python-certifi
+  Copyright (c) Kenneth Reitz (MPL-2.0)
+
+  charset-normalizer
+  https://github.com/Ousret/charset_normalizer
+  Copyright (c) 2019-present Ahmed TAHRI
+
+================================================================================
+
+BSD 3-Clause License (https://opensource.org/licenses/BSD-3-Clause)
+
+  numpy
+  https://github.com/numpy/numpy
+  Copyright (c) 2005-present NumPy Developers
+
+  pandas
+  https://github.com/pandas-dev/pandas
+  Copyright (c) 2008-present AQR Capital Management and pandas contributors
+
+  scikit-learn
+  https://github.com/scikit-learn/scikit-learn
+  Copyright (c) 2007-present scikit-learn developers
+
+  scipy
+  https://github.com/scipy/scipy
+  Copyright (c) 2001-present SciPy Developers
+
+  Flask
+  https://github.com/pallets/flask
+  Copyright (c) 2010-present Pallets
+
+  Werkzeug
+  https://github.com/pallets/werkzeug
+  Copyright (c) 2007-present Pallets
+
+  Jinja2
+  https://github.com/pallets/jinja
+  Copyright (c) 2007-present Pallets
+
+  MarkupSafe
+  https://github.com/pallets/markupsafe
+  Copyright (c) 2010-present Pallets
+
+  click
+  https://github.com/pallets/click
+  Copyright (c) 2014-present Pallets
+
+  itsdangerous
+  https://github.com/pallets/itsdangerous
+  Copyright (c) 2011-present Pallets
+
+  idna
+  https://github.com/kjd/idna
+  Copyright (c) 2013-present Kim Davies
+
+  cloudpickle
+  https://github.com/cloudpipe/cloudpickle
+  Copyright (c) 2012 Regents of the University of California
+
+  joblib
+  https://github.com/joblib/joblib
+  Copyright (c) 2008-present Gael Varoquaux
+
+  threadpoolctl
+  https://github.com/joblib/threadpoolctl
+  Copyright (c) 2019-present Thomas Moreau
+
+  oauthlib
+  https://github.com/oauthlib/oauthlib
+  Copyright (c) 2019 The OAuthlib Community
+
+  lz4
+  https://github.com/python-lz4/python-lz4
+  Copyright (c) 2012-present Jonathan Underwood
+
+  nest-asyncio
+  https://github.com/erdewit/nest_asyncio
+  Copyright (c) 2018-present Ewald R. de Wit
+
+  protobuf
+  https://github.com/protocolbuffers/protobuf
+  Copyright (c) 2008-present Google LLC
+
+================================================================================
+
+BSD 2-Clause License (https://opensource.org/licenses/BSD-2-Clause)
+
+  pyasn1
+  https://github.com/pyasn1/pyasn1
+  Copyright (c) 2005-present Ilya Etingof
+
+  pyasn1-modules
+  https://github.com/pyasn1/pyasn1-modules
+  Copyright (c) 2005-present Ilya Etingof
+
+================================================================================
+
+Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0)
+
+  databricks-sdk
+  https://github.com/databricks/databricks-sdk-py
+  Copyright (c) 2023-present Databricks, Inc.
+
+  databricks-sql-connector
+  https://github.com/databricks/databricks-sql-python
+  Copyright (c) 2021-present Databricks, Inc.
+
+  mlflow-skinny
+  https://github.com/mlflow/mlflow
+  Copyright (c) 2018-present Databricks, Inc.
+
+  requests
+  https://github.com/psf/requests
+  Copyright (c) 2011-present Kenneth Reitz
+
+  google-auth
+  https://github.com/googleapis/google-auth-library-python
+  Copyright (c) 2016-present Google LLC
+
+  pyarrow
+  https://github.com/apache/arrow
+  Copyright (c) 2016-present The Apache Software Foundation
+
+  thrift
+  https://github.com/apache/thrift
+  Copyright (c) 2006-present The Apache Software Foundation
+
+  tenacity
+  https://github.com/jd/tenacity
+  Copyright (c) 2016-present Julien Danjou
+
+  retrying
+  https://github.com/groodt/retrying
+  Copyright (c) 2013-present Ray Holder
+
+  packaging
+  https://github.com/pypa/packaging
+  Copyright (c) Donald Stufft and individual contributors
+
+  dash-bootstrap-components
+  https://github.com/facultyai/dash-bootstrap-components
+  Copyright (c) 2018-present Faculty Science Ltd
+
+  tzdata
+  https://github.com/python/tzdata
+  Copyright (c) Python Software Foundation
+
+  rsa
+  https://github.com/sybrenstuvel/python-rsa
+  Copyright (c) 2006-present Sybren A. Stuvel
+
+  xgboost (tutorial runtime dependency)
+  https://github.com/dmlc/xgboost
+  Copyright (c) 2015-present XGBoost contributors
+
+================================================================================
+
+PSF License (https://docs.python.org/3/license.html)
+
+  typing-extensions
+  https://github.com/python/typing_extensions
+  Copyright (c) 2001-present Python Software Foundation
+
+  python-dateutil
+  https://github.com/dateutil/dateutil
+  Copyright (c) 2003-present Gustavo Niemeyer (Apache-2.0 / BSD dual license)
+
+================================================================================
+
+LGPL-3.0 License (https://www.gnu.org/licenses/lgpl-3.0.html)
+
+  psycopg (psycopg3)
+  https://github.com/psycopg/psycopg
+  Copyright (c) 2020-present Daniele Varrazzo
+
+  psycopg-binary
+  https://github.com/psycopg/psycopg
+  Copyright (c) 2020-present Daniele Varrazzo
