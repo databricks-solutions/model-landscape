@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "model-landscape"
+version = "0.1.0"
+description = "Model Landscape: Databricks-native model observability"
+requires-python = ">=3.10"
+dependencies = [
+  "dash>=2.18,<3.0",
+  "dash-bootstrap-components>=1.6,<2.0",
+  "databricks-sdk>=0.81,<1.0",
+  "databricks-sql-connector>=3.0,<4.0",
+  "mlflow-skinny>=2.20,<3.0",
+  "numpy>=1.26,<3.0",
+  "pandas>=2.2,<3.0",
+  "plotly>=5.24,<6.0",
+  "psycopg[binary]>=3.2,<4.0",
+  "scikit-learn>=1.5,<2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pyspark>=3.5,<4.0",
+  "pytest>=8.3,<10.0",
+]
+
+[project.scripts]
+model-landscape = "model_landscape.app:main"
+model-landscape-refresh = "model_landscape.workflows.refresh_job:main"
+model-landscape-setup = "model_landscape.workflows.setup_control_plane:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

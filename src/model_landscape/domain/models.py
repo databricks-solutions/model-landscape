@@ -1,0 +1,248 @@
+from __future__ import annotations
+
+from datetime import date
+from dataclasses import dataclass, field
+from typing import Any
+
+from model_landscape.domain.performance_metrics import (
+    default_primary_performance_metric,
+    normalize_performance_metric_names,
+    normalize_problem_type,
+    resolve_default_performance_metric,
+)
+from model_landscape.services.thresholds import normalize_threshold_overrides
+
+
+REQUIRED_INFERENCE_COLUMNS = ("event_ts", "prediction")
+OPTIONAL_INFERENCE_COLUMNS = ("model_version", "prediction_proba", "label", "entity_id")
+DRIFT_CADENCE_PRESETS = ("hourly", "6h", "daily", "manual")
+PERFORMANCE_CADENCE_PRESETS = ("disabled", "6h_3d_repair", "daily_7d_repair", "daily_14d_repair", "manual")
+PERFORMANCE_BINNING_MODES = ("quantile", "fixed_width")
+
+
+@dataclass(frozen=True)
+class InferenceContract:
+    timestamp_col: str
+    prediction_col: str
+    model_id_col: str | None = None
+    model_version_col: str | None = None
+    prediction_score_col: str | None = None
+    label_col: str | None = None
+    entity_id_col: str | None = None
+    feature_columns: tuple[str, ...] = field(default_factory=tuple)
+    slice_columns: tuple[str, ...] = field(default_factory=tuple)
+    categorical_columns: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class BaselinePolicy:
+    kind: str = "rolling"
+    n_days: int = 7
+    max_comparison_days: int = 90
+    baseline_start: str | None = None
+    baseline_end: str | None = None
+
+    def __post_init__(self) -> None:
+        normalized_kind = (self.kind or "rolling").strip().lower()
+        if normalized_kind == "rolling_n_days":
+            normalized_kind = "rolling"
+        if normalized_kind not in {"rolling", "fixed"}:
+            raise ValueError("Baseline kind must be 'rolling' or 'fixed'.")
+        object.__setattr__(self, "kind", normalized_kind)
+
+        if self.max_comparison_days < 1:
+            raise ValueError("max_comparison_days must be positive")
+
+        if normalized_kind == "rolling":
+            if self.n_days < 1:
+                raise ValueError("n_days must be positive")
+            object.__setattr__(self, "baseline_start", None)
+            object.__setattr__(self, "baseline_end", None)
+            return
+
+        start = _coerce_iso_date(self.baseline_start)
+        end = _coerce_iso_date(self.baseline_end)
+        if not start or not end:
+            raise ValueError("Fixed baselines require baseline_start and baseline_end.")
+        if end < start:
+            raise ValueError("baseline_end must be on or after baseline_start.")
+        object.__setattr__(self, "baseline_start", start)
+        object.__setattr__(self, "baseline_end", end)
+        object.__setattr__(self, "n_days", (date.fromisoformat(end) - date.fromisoformat(start)).days + 1)
+
+    @property
+    def is_fixed(self) -> bool:
+        return self.kind == "fixed"
+
+    @property
+    def label(self) -> str:
+        if self.is_fixed and self.baseline_start and self.baseline_end:
+            return f"Fixed: {self.baseline_start} to {self.baseline_end}"
+        return f"Rolling: {self.n_days} days"
+
+
+def _coerce_iso_date(value: str | None) -> str | None:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if "T" in text:
+        text = text.split("T", 1)[0]
+    return date.fromisoformat(text).isoformat()
+
+
+@dataclass(frozen=True)
+class MLflowLineage:
+    experiment_name: str | None = None
+    experiment_id: str | None = None
+    run_id: str | None = None
+    registered_model_name: str | None = None
+    model_version: str | None = None
+
+    @property
+    def connected(self) -> bool:
+        return any(
+            [
+                self.experiment_name,
+                self.experiment_id,
+                self.run_id,
+                self.registered_model_name,
+                self.model_version,
+            ]
+        )
+
+
+@dataclass(frozen=True)
+class MonitorConfig:
+    model_key: str
+    display_name: str
+    source_table: str
+    contract: InferenceContract
+    baseline: BaselinePolicy = field(default_factory=BaselinePolicy)
+    problem_type: str = "classification"
+    model_id_value: str | None = None
+    model_version_value: str | None = None
+    labels_table: str | None = None
+    labels_join_col: str | None = None
+    labels_order_col: str | None = None
+    performance_metric_names: tuple[str, ...] = field(default_factory=tuple)
+    default_performance_metric: str | None = None
+    performance_binning_mode: str = "quantile"
+    performance_binning_clip_percentile: float | None = None
+    drift_cadence_preset: str = "6h"
+    performance_cadence_preset: str = "disabled"
+    schedule_enabled: bool = True
+    threshold_overrides: dict[str, dict[str, float]] = field(default_factory=dict)
+    mlflow: MLflowLineage = field(default_factory=MLflowLineage)
+    created_by: str = "app"
+    status: str = "active"
+
+    def __post_init__(self) -> None:
+        problem_type = normalize_problem_type(self.problem_type)
+        drift = (self.drift_cadence_preset or "6h").strip().lower()
+        performance = (self.performance_cadence_preset or "disabled").strip().lower()
+        binning_mode = (self.performance_binning_mode or "quantile").strip().lower()
+        status = (self.status or "active").strip().lower()
+        if drift not in DRIFT_CADENCE_PRESETS:
+            raise ValueError(f"Unsupported drift cadence preset: {self.drift_cadence_preset!r}")
+        if performance not in PERFORMANCE_CADENCE_PRESETS:
+            raise ValueError(f"Unsupported performance cadence preset: {self.performance_cadence_preset!r}")
+        if binning_mode not in PERFORMANCE_BINNING_MODES:
+            raise ValueError(f"Unsupported performance binning mode: {self.performance_binning_mode!r}")
+        if status not in {"active", "inactive"}:
+            raise ValueError(f"Unsupported monitor status: {self.status!r}")
+        if self.model_id_value and not self.contract.model_id_col:
+            raise ValueError("Monitored Model ID Value requires a mapped Model ID Column.")
+        clip_percentile = None if self.performance_binning_clip_percentile in (None, "") else float(self.performance_binning_clip_percentile)
+        if clip_percentile is not None and not (0.0 < clip_percentile < 50.0):
+            raise ValueError("performance_binning_clip_percentile must be between 0 and 50.")
+        normalized_metric_names = normalize_performance_metric_names(problem_type, self.performance_metric_names)
+        default_metric = resolve_default_performance_metric(problem_type, normalized_metric_names, self.default_performance_metric)
+        object.__setattr__(self, "problem_type", problem_type)
+        object.__setattr__(self, "performance_metric_names", normalized_metric_names)
+        object.__setattr__(self, "default_performance_metric", default_metric or default_primary_performance_metric(problem_type))
+        object.__setattr__(self, "performance_binning_mode", binning_mode)
+        object.__setattr__(self, "performance_binning_clip_percentile", clip_percentile)
+        object.__setattr__(self, "drift_cadence_preset", drift)
+        object.__setattr__(self, "performance_cadence_preset", performance)
+        object.__setattr__(self, "status", status)
+        object.__setattr__(self, "threshold_overrides", normalize_threshold_overrides(self.threshold_overrides))
+
+    @property
+    def has_labels(self) -> bool:
+        return bool(self.contract.label_col)
+
+
+@dataclass(frozen=True)
+class MLflowDiscovery:
+    lineage: MLflowLineage = field(default_factory=MLflowLineage)
+    feature_columns: tuple[str, ...] = field(default_factory=tuple)
+    problem_type: str | None = None
+    warnings: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class MonitorDiscoveryResult:
+    config: MonitorConfig
+    columns: tuple[str, ...] = field(default_factory=tuple)
+    schema_rows: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    preview_rows: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    label_columns: tuple[str, ...] = field(default_factory=tuple)
+    label_schema_rows: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    label_preview_rows: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    label_validation: dict[str, Any] = field(default_factory=dict)
+    confidence: str = "high"
+    requires_review: bool = False
+    warnings: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class IncidentKey:
+    model_key: str
+    feature_name: str
+    metric_name: str
+
+
+@dataclass(frozen=True)
+class IncidentRecord:
+    key: IncidentKey
+    severity: str
+    status: str
+    metric_value: float
+    observed_at: str
+
+
+@dataclass(frozen=True)
+class MonitorRuntimeState:
+    model_key: str
+    bootstrap_status: str = "pending"
+    last_drift_refresh_at: str | None = None
+    last_performance_refresh_at: str | None = None
+    next_drift_due_at: str | None = None
+    next_performance_due_at: str | None = None
+    last_label_watermark: str | None = None
+    last_run_status: str | None = None
+    last_run_error: str | None = None
+    last_run_started_at: str | None = None
+    last_run_completed_at: str | None = None
+    backoff_until: str | None = None
+    consecutive_failures: int = 0
+
+
+@dataclass(frozen=True)
+class RefreshResult:
+    drift_rows: list[dict[str, Any]]
+    quality_rows: list[dict[str, Any]]
+    performance_rows: list[dict[str, Any]]
+    incident_rows: list[dict[str, Any]]
+    incident_history_rows: list[dict[str, Any]] = field(default_factory=list)
+    quality_history_rows: list[dict[str, Any]] = field(default_factory=list)
+    window_rows: list[dict[str, Any]] = field(default_factory=list)
+    daily_quality_profile_rows: list[dict[str, Any]] = field(default_factory=list)
+    daily_class_quality_profile_rows: list[dict[str, Any]] = field(default_factory=list)
+    daily_feature_profile_rows: list[dict[str, Any]] = field(default_factory=list)
+    daily_class_feature_profile_rows: list[dict[str, Any]] = field(default_factory=list)
+    daily_performance_profile_rows: list[dict[str, Any]] = field(default_factory=list)
+    daily_label_metric_rows: list[dict[str, Any]] = field(default_factory=list)
+    performance_bin_specs: dict[str, tuple[float, ...]] = field(default_factory=dict)

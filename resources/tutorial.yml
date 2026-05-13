@@ -1,0 +1,95 @@
+resources:
+  jobs:
+    tutorial_mlops:
+      name: ${var.app_name}-tutorial
+      max_concurrent_runs: 1
+      queue:
+        enabled: true
+      parameters:
+        - name: catalog
+          default: ${var.control_plane_catalog}
+        - name: schema
+          default: model_landscape_tutorial
+        - name: sql_warehouse_id
+          default: ${var.sql_warehouse_id}
+      tasks:
+        - task_key: 01_build_features
+          notebook_task:
+            notebook_path: ../tutorial/01_build_features.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+            source: WORKSPACE
+          environment_key: tutorial_runtime
+
+        - task_key: 02_train_and_promote
+          depends_on:
+            - task_key: 01_build_features
+          notebook_task:
+            notebook_path: ../tutorial/02_train_and_promote.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+            source: WORKSPACE
+          environment_key: tutorial_runtime
+
+        - task_key: 03_production_inference
+          depends_on:
+            - task_key: 02_train_and_promote
+          notebook_task:
+            notebook_path: ../tutorial/03_production_inference.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+            source: WORKSPACE
+          environment_key: tutorial_runtime
+
+        - task_key: 04_monitor
+          depends_on:
+            - task_key: 03_production_inference
+          notebook_task:
+            notebook_path: ../tutorial/04_monitor.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              sql_warehouse_id: "{{job.parameters.sql_warehouse_id}}"
+            source: WORKSPACE
+          environment_key: monitor_runtime
+
+        - task_key: 05_close_the_loop
+          depends_on:
+            - task_key: 04_monitor
+          notebook_task:
+            notebook_path: ../tutorial/05_close_the_loop.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+            source: WORKSPACE
+          environment_key: tutorial_runtime
+
+      environments:
+        - environment_key: tutorial_runtime
+          spec:
+            client: "1"
+            dependencies:
+              - ../dist/*.whl
+              - mlflow>=2.10
+              - xgboost>=2.0
+              - scikit-learn>=1.5
+              - numpy>=1.26
+              - pandas>=2.2
+        - environment_key: monitor_runtime
+          spec:
+            client: "1"
+            dependencies:
+              - ../dist/*.whl
+              - dash>=2.18,<3.0
+              - dash-bootstrap-components>=1.6,<2.0
+              - databricks-sdk>=0.81,<1.0
+              - databricks-sql-connector>=3.0,<4.0
+              - mlflow>=2.10
+              - numpy>=1.26,<3.0
+              - pandas>=2.2,<3.0
+              - plotly>=5.24,<6.0
+              - psycopg[binary]>=3.2,<4.0
+              - scikit-learn>=1.5,<2.0

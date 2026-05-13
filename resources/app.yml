@@ -1,0 +1,11 @@
+resources:
+  apps:
+    control_plane:
+      name: ${var.app_name}
+      description: Model Landscape model observability app for Databricks
+      source_code_path: .
+      resources:
+        - name: sql_warehouse
+          sql_warehouse:
+            id: ${var.sql_warehouse_id}
+            permission: CAN_USE

@@ -1,0 +1,28 @@
+command:
+  - python
+  - -m
+  - model_landscape.app
+
+env:
+  - name: APP_TITLE
+    value: Model Landscape
+  - name: PYTHONPATH
+    value: src
+  - name: CONTROL_PLANE_CATALOG
+    value: ""
+  - name: CONTROL_PLANE_SCHEMA
+    value: ""
+  - name: SQL_WAREHOUSE_ID
+    value: ""
+  - name: LAKEBASE_SCHEMA
+    value: model_landscape_ui
+  - name: REFRESH_JOB_ID
+    value: ""
+  - name: REFRESH_JOB_NAME
+    value: model-landscape-refresh
+  - name: BOOTSTRAP_REFRESH_JOB_ID
+    value: ""
+  - name: BOOTSTRAP_REFRESH_JOB_NAME
+    value: ""
+  - name: GENIE_SPACE_ID
+    value: ""
