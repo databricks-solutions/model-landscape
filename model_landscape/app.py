@@ -4,17 +4,29 @@ import dash
 import dash_bootstrap_components as dbc
 from dash import Input, Output, dcc, html
 
+# Private callbacks re-exported here so `tests/test_app.py` can import them
+# from a single stable location. Don't drop the noqa comments — ruff will
+# flag them as unused otherwise.
 from model_landscape.callbacks import (
-    _control_plane_ready,
-    _feature_candidates,
-    _non_numeric_features,
-    _selected_model_from_search,
+    _control_plane_ready,  # noqa: F401
+    _feature_candidates,  # noqa: F401
+    _non_numeric_features,  # noqa: F401
+    _selected_model_from_search,  # noqa: F401
     _session_config,
-    _workspace_lakebase_instances,
+    _workspace_lakebase_instances,  # noqa: F401
     register_callbacks,
 )
 from model_landscape.config import settings
-from model_landscape.pages import data_quality, drift_analysis, feature_deep_dive, incidents, onboarding, overview, performance, reference
+from model_landscape.pages import (
+    data_quality,
+    drift_analysis,
+    feature_deep_dive,
+    incidents,
+    onboarding,
+    overview,
+    performance,
+    reference,
+)
 from model_landscape.ui.sidebar import build_sidebar
 from model_landscape.ui.styles import INDEX_STRING
 

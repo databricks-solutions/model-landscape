@@ -66,15 +66,15 @@ def _build(
     )
 
     data = {
-        "test": [
-            {"y_pred": float(p), "residual": float(r)} for p, r in zip(y_pred, res)
-        ],
+        "test": [{"y_pred": float(p), "residual": float(r)} for p, r in zip(y_pred, res)],
         "r2": r2,
     }
     if y_true_train is not None:
         data["train"] = [
             {"y_pred": float(p), "residual": float(r)}
-            for p, r in zip(y_pred_train, _residuals(np.asarray(y_true_train, dtype=float), y_pred_train))
+            for p, r in zip(
+                y_pred_train, _residuals(np.asarray(y_true_train, dtype=float), y_pred_train)
+            )
         ]
     return fig, data
 
@@ -101,9 +101,7 @@ def residuals(
     """
     y_pred = model.predict(X)
     y_pred_train = model.predict(X_train) if X_train is not None else None
-    return _build(
-        y, y_pred, y_true_train=y_train, y_pred_train=y_pred_train, **layout
-    )
+    return _build(y, y_pred, y_true_train=y_train, y_pred_train=y_pred_train, **layout)
 
 
 @quickfn(panel_type="residuals")
@@ -116,9 +114,7 @@ def _from_predictions(
     **layout: Any,
 ) -> tuple:
     """Residual plot from pre-computed predictions."""
-    return _build(
-        y_true, y_pred, y_true_train=y_true_train, y_pred_train=y_pred_train, **layout
-    )
+    return _build(y_true, y_pred, y_true_train=y_true_train, y_pred_train=y_pred_train, **layout)
 
 
 residuals.from_predictions = _from_predictions

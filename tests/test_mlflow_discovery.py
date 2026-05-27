@@ -27,14 +27,27 @@ class _FakeRunInfo:
 
 
 class _FakeRunData:
-    def __init__(self, *, metrics: dict[str, float], params: dict[str, str] | None = None, tags: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        metrics: dict[str, float],
+        params: dict[str, str] | None = None,
+        tags: dict[str, str] | None = None,
+    ) -> None:
         self.metrics = metrics
         self.params = params or {}
         self.tags = tags or {}
 
 
 class _FakeRun:
-    def __init__(self, run_id: str, *, metrics: dict[str, float], params: dict[str, str] | None = None, tags: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        run_id: str,
+        *,
+        metrics: dict[str, float],
+        params: dict[str, str] | None = None,
+        tags: dict[str, str] | None = None,
+    ) -> None:
         self.info = _FakeRunInfo(run_id)
         self.data = _FakeRunData(metrics=metrics, params=params, tags=tags)
 
@@ -85,7 +98,9 @@ def test_mlflow_discovery_reads_registered_model_signature(monkeypatch) -> None:
     fake_mlflow = types.SimpleNamespace(
         MlflowClient=_FakeClient,
         set_registry_uri=lambda uri: uri,
-        models=types.SimpleNamespace(get_model_info=lambda uri: _FakeModelInfo(["amount", "velocity_7d"])),
+        models=types.SimpleNamespace(
+            get_model_info=lambda uri: _FakeModelInfo(["amount", "velocity_7d"])
+        ),
     )
     monkeypatch.setitem(__import__("sys").modules, "mlflow", fake_mlflow)
 
@@ -103,7 +118,9 @@ def test_mlflow_discovery_reads_experiment_metadata(monkeypatch) -> None:
     fake_mlflow = types.SimpleNamespace(
         MlflowClient=_FakeClient,
         set_registry_uri=lambda uri: uri,
-        models=types.SimpleNamespace(get_model_info=lambda uri: _FakeModelInfo(["amount", "velocity_7d"])),
+        models=types.SimpleNamespace(
+            get_model_info=lambda uri: _FakeModelInfo(["amount", "velocity_7d"])
+        ),
     )
     monkeypatch.setitem(__import__("sys").modules, "mlflow", fake_mlflow)
 

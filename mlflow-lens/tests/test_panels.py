@@ -4,8 +4,7 @@ from pathlib import Path
 import mlflow
 import pandas as pd
 import pytest
-
-from mlflow_lens.panels import PANEL_TYPES, log_panel
+from mlflow_lens.panels import log_panel
 
 
 def test_log_panel_confusion_matrix(experiment_id):

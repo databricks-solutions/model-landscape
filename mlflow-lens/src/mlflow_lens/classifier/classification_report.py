@@ -12,7 +12,6 @@ from mlflow_lens._plotly_theme import lens_layout
 from mlflow_lens._quickfn import quickfn
 from mlflow_lens.classifier._utils import class_labels
 
-
 _METRICS = ("precision", "recall", "f1-score")
 
 
@@ -90,9 +89,7 @@ def _from_predictions(
 ) -> tuple:
     """Classification report from pre-computed predictions."""
     if classes is None:
-        classes = sorted(
-            set(np.asarray(y_true).tolist()) | set(np.asarray(y_pred).tolist())
-        )
+        classes = sorted(set(np.asarray(y_true).tolist()) | set(np.asarray(y_pred).tolist()))
     return _build(y_true, y_pred, classes, **layout)
 
 

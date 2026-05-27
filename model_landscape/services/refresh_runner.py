@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import timedelta, timezone
-import logging
 from typing import Literal
 
 import pandas as pd
@@ -14,8 +14,8 @@ from model_landscape.services.control_plane import ControlPlaneRepository
 from model_landscape.services.refresh_engine import (
     build_daily_class_feature_profile_rows,
     build_daily_class_quality_profile_rows,
-    build_daily_label_metric_rows,
     build_daily_feature_profile_rows,
+    build_daily_label_metric_rows,
     build_daily_performance_profile_rows,
     build_daily_quality_profile_rows,
     build_performance_bin_specs,
@@ -24,7 +24,6 @@ from model_landscape.services.refresh_engine import (
     generate_window_metadata,
 )
 from model_landscape.services.spark_refresh import SparkDailyProfiles
-
 
 RefreshScope = Literal["scheduler", "bootstrap", "drift_quality", "performance_repair"]
 logger = logging.getLogger(__name__)
@@ -149,7 +148,9 @@ def _default_runtime_state(config: MonitorConfig) -> MonitorRuntimeState:
         next_drift_due_at=now if config.schedule_enabled else None,
         next_performance_due_at=(
             now
-            if config.schedule_enabled and config.has_labels and config.performance_cadence_preset != "disabled"
+            if config.schedule_enabled
+            and config.has_labels
+            and config.performance_cadence_preset != "disabled"
             else None
         ),
         last_run_started_at=None,
@@ -183,19 +184,25 @@ def _inferred_runtime_state(
         ),
         next_performance_due_at=(
             due_now.isoformat()
-            if config.schedule_enabled and config.has_labels and config.performance_cadence_preset not in {"disabled", "manual"}
+            if config.schedule_enabled
+            and config.has_labels
+            and config.performance_cadence_preset not in {"disabled", "manual"}
             else None
         ),
     )
 
 
-def _next_due_iso(completed_at: pd.Timestamp, delta: timedelta | None, enabled: bool = True) -> str | None:
+def _next_due_iso(
+    completed_at: pd.Timestamp, delta: timedelta | None, enabled: bool = True
+) -> str | None:
     if not enabled or delta is None:
         return None
     return (completed_at + delta).isoformat()
 
 
-def _bootstrap_range(config: MonitorConfig, latest_date: pd.Timestamp) -> tuple[str | None, str | None]:
+def _bootstrap_range(
+    config: MonitorConfig, latest_date: pd.Timestamp
+) -> tuple[str | None, str | None]:
     latest = latest_date.normalize()
     if config.baseline.kind == "fixed" and config.baseline.baseline_start:
         return config.baseline.baseline_start, latest.date().isoformat()
@@ -204,7 +211,9 @@ def _bootstrap_range(config: MonitorConfig, latest_date: pd.Timestamp) -> tuple[
     return start.date().isoformat(), latest.date().isoformat()
 
 
-def _drift_range(config: MonitorConfig, state: MonitorRuntimeState, latest_date: pd.Timestamp) -> tuple[str | None, str | None]:
+def _drift_range(
+    config: MonitorConfig, state: MonitorRuntimeState, latest_date: pd.Timestamp
+) -> tuple[str | None, str | None]:
     latest = latest_date.normalize()
     if config.baseline.kind == "fixed" and config.baseline.baseline_start:
         return config.baseline.baseline_start, latest.date().isoformat()
@@ -215,7 +224,9 @@ def _drift_range(config: MonitorConfig, state: MonitorRuntimeState, latest_date:
     return start.date().isoformat(), latest.date().isoformat()
 
 
-def _performance_range(config: MonitorConfig, latest_date: pd.Timestamp) -> tuple[str | None, str | None]:
+def _performance_range(
+    config: MonitorConfig, latest_date: pd.Timestamp
+) -> tuple[str | None, str | None]:
     latest = latest_date.normalize()
     repair_days = _performance_repair_days(config.performance_cadence_preset)
     if repair_days is None:
@@ -239,7 +250,9 @@ def _is_running(repository: ControlPlaneRepository, model_key: str, scope: str) 
     return _get_latest_refresh_run(repository, model_key, scope, statuses=("running",)) is not None
 
 
-def _safe_state_value(state: MonitorRuntimeState | object | None, field: str, default: object = "") -> object:
+def _safe_state_value(
+    state: MonitorRuntimeState | object | None, field: str, default: object = ""
+) -> object:
     if state is None:
         return default
     return getattr(state, field, default)
@@ -309,7 +322,9 @@ def _select_targets(
         )
 
     def runtime_state_for(config: MonitorConfig) -> MonitorRuntimeState:
-        return runtime_states.get(config.model_key) or _get_runtime_state(repository, config, now=now)
+        return runtime_states.get(config.model_key) or _get_runtime_state(
+            repository, config, now=now
+        )
 
     targets: list[RefreshTarget] = []
     selected_model_keys: set[str] = set()
@@ -344,7 +359,9 @@ def _select_targets(
                     f"reason=recent_failure_backoff backoff_until={backoff_until}"
                 )
                 continue
-            pending_bootstraps.append(RefreshTarget(config=config, scope="bootstrap", scheduled_at=now))
+            pending_bootstraps.append(
+                RefreshTarget(config=config, scope="bootstrap", scheduled_at=now)
+            )
         selected_bootstraps = pending_bootstraps[:bootstrap_limit]
         targets.extend(selected_bootstraps)
         selected_model_keys.update(target.config.model_key for target in selected_bootstraps)
@@ -390,7 +407,9 @@ def _select_targets(
                 continue
             due_drift.append(RefreshTarget(config=config, scope="drift_quality", scheduled_at=now))
         if scope == "drift_quality":
-            return TargetSelectionResult(targets=tuple(due_drift[:drift_limit]), debug_lines=tuple(debug_lines))
+            return TargetSelectionResult(
+                targets=tuple(due_drift[:drift_limit]), debug_lines=tuple(debug_lines)
+            )
         selected_drift = due_drift[:drift_limit]
         targets.extend(selected_drift)
         selected_model_keys.update(target.config.model_key for target in selected_drift)
@@ -419,15 +438,21 @@ def _select_targets(
                 continue
             if _failed_recently(state, now):
                 continue
-            due_performance.append(RefreshTarget(config=config, scope="performance_repair", scheduled_at=now))
+            due_performance.append(
+                RefreshTarget(config=config, scope="performance_repair", scheduled_at=now)
+            )
         if scope == "performance_repair":
-            return TargetSelectionResult(targets=tuple(due_performance[:performance_limit]), debug_lines=tuple(debug_lines))
+            return TargetSelectionResult(
+                targets=tuple(due_performance[:performance_limit]), debug_lines=tuple(debug_lines)
+            )
         targets.extend(due_performance[:performance_limit])
 
     return TargetSelectionResult(targets=tuple(targets), debug_lines=tuple(debug_lines))
 
 
-def _list_runtime_states(repository: ControlPlaneRepository, configs: list[MonitorConfig]) -> dict[str, MonitorRuntimeState]:
+def _list_runtime_states(
+    repository: ControlPlaneRepository, configs: list[MonitorConfig]
+) -> dict[str, MonitorRuntimeState]:
     if hasattr(repository, "list_monitor_runtime_states"):
         return repository.list_monitor_runtime_states([config.model_key for config in configs])
     return {}
@@ -451,7 +476,9 @@ def _upsert_runtime_state(repository: ControlPlaneRepository, state: MonitorRunt
         repository.upsert_monitor_runtime_state(state)
 
 
-def _get_source_date_range(repository: ControlPlaneRepository, config: MonitorConfig) -> tuple[str | None, str | None]:
+def _get_source_date_range(
+    repository: ControlPlaneRepository, config: MonitorConfig
+) -> tuple[str | None, str | None]:
     if hasattr(repository, "get_source_date_range"):
         return repository.get_source_date_range(config)
     frame = repository.load_monitor_frame(config)
@@ -476,19 +503,35 @@ def _get_source_profile(
         "total_rows": int(len(frame)),
         "min_date": min_date,
         "max_date": max_date,
-        "prediction_mean": pd.to_numeric(frame.get(config.contract.prediction_col, pd.Series(dtype=float)), errors="coerce").mean(),
-        "prediction_std": pd.to_numeric(frame.get(config.contract.prediction_col, pd.Series(dtype=float)), errors="coerce").std(),
+        "prediction_mean": pd.to_numeric(
+            frame.get(config.contract.prediction_col, pd.Series(dtype=float)), errors="coerce"
+        ).mean(),
+        "prediction_std": pd.to_numeric(
+            frame.get(config.contract.prediction_col, pd.Series(dtype=float)), errors="coerce"
+        ).std(),
         "daily_volume": {
             str(index): int(value)
-            for index, value in frame.groupby(pd.to_datetime(frame[config.contract.timestamp_col], errors="coerce").dt.date).size().items()
-        } if not frame.empty and config.contract.timestamp_col in frame.columns else {},
+            for index, value in frame.groupby(
+                pd.to_datetime(frame[config.contract.timestamp_col], errors="coerce").dt.date
+            )
+            .size()
+            .items()
+        }
+        if not frame.empty and config.contract.timestamp_col in frame.columns
+        else {},
         "null_rates": {
             feature: round(float(frame[feature].isna().mean() * 100), 2)
             for feature in config.contract.feature_columns
             if feature in frame.columns
         },
         "label_row_count": (
-            int(pd.to_numeric(frame.get(config.contract.label_col, pd.Series(dtype=float)), errors="coerce").notna().sum())
+            int(
+                pd.to_numeric(
+                    frame.get(config.contract.label_col, pd.Series(dtype=float)), errors="coerce"
+                )
+                .notna()
+                .sum()
+            )
             if config.contract.label_col
             else 0
         ),
@@ -564,17 +607,23 @@ def _load_persisted_daily_rows(
     end_date: str,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
     quality_rows = (
-        repository.get_daily_quality_profile_rows(config.model_key, start_date=start_date, end_date=end_date)
+        repository.get_daily_quality_profile_rows(
+            config.model_key, start_date=start_date, end_date=end_date
+        )
         if hasattr(repository, "get_daily_quality_profile_rows")
         else []
     )
     feature_rows = (
-        repository.get_daily_feature_profile_rows(config.model_key, start_date=start_date, end_date=end_date)
+        repository.get_daily_feature_profile_rows(
+            config.model_key, start_date=start_date, end_date=end_date
+        )
         if hasattr(repository, "get_daily_feature_profile_rows")
         else []
     )
     performance_rows = (
-        repository.get_daily_performance_profile_rows(config.model_key, start_date=start_date, end_date=end_date)
+        repository.get_daily_performance_profile_rows(
+            config.model_key, start_date=start_date, end_date=end_date
+        )
         if hasattr(repository, "get_daily_performance_profile_rows")
         else []
     )
@@ -612,7 +661,9 @@ def _update_refresh_run_metadata(repository: ControlPlaneRepository, run_id: str
         repository.update_refresh_run_metadata(run_id, **kwargs)
 
 
-def _get_stale_running_refresh_runs(repository: ControlPlaneRepository, started_before: str) -> list[dict]:
+def _get_stale_running_refresh_runs(
+    repository: ControlPlaneRepository, started_before: str
+) -> list[dict]:
     if hasattr(repository, "get_stale_running_refresh_runs"):
         return repository.get_stale_running_refresh_runs(started_before)
     return []
@@ -653,7 +704,9 @@ def _schedule_state_after_success(
         last_performance_refresh_at=last_performance_refresh_at,
         next_drift_due_at=drift_next_due,
         next_performance_due_at=performance_next_due,
-        last_label_watermark=label_watermark if label_watermark is not None else state.last_label_watermark,
+        last_label_watermark=label_watermark
+        if label_watermark is not None
+        else state.last_label_watermark,
         last_run_status="completed",
         last_run_error=None,
         last_run_started_at=state.last_run_started_at,
@@ -748,7 +801,9 @@ def _schedule_state_after_failure(
         last_run_error=error_message,
         last_run_started_at=state.last_run_started_at,
         last_run_completed_at=completed_at.isoformat(),
-        backoff_until=(completed_at + timedelta(minutes=settings.refresh_failure_backoff_minutes)).isoformat(),
+        backoff_until=(
+            completed_at + timedelta(minutes=settings.refresh_failure_backoff_minutes)
+        ).isoformat(),
         consecutive_failures=max(state.consecutive_failures, 0) + 1,
     )
 
@@ -765,7 +820,11 @@ def _reconcile_stale_running_runs(repository: ControlPlaneRepository, now: pd.Ti
             continue
         message = "Marked failed after exceeding stale-run timeout."
         repository.complete_refresh_run(run_id, status="failed", error_message=message)
-        state = repository.get_monitor_runtime_state(model_key) if hasattr(repository, "get_monitor_runtime_state") else None
+        state = (
+            repository.get_monitor_runtime_state(model_key)
+            if hasattr(repository, "get_monitor_runtime_state")
+            else None
+        )
         if state is None:
             continue
         _upsert_runtime_state(
@@ -783,7 +842,9 @@ def _unexpected_failure_result(target: RefreshTarget, error: Exception) -> Monit
         model_key=target.config.model_key,
         scope=target.scope,
         status="failed",
-        counts=RefreshCounts(models=0, drift_rows=0, quality_rows=0, performance_rows=0, incident_rows=0),
+        counts=RefreshCounts(
+            models=0, drift_rows=0, quality_rows=0, performance_rows=0, incident_rows=0
+        ),
         error=str(error),
     )
 
@@ -870,22 +931,30 @@ def _build_range_daily_profiles(
         range_end=range_end,
     )
     daily_quality_profile_rows = (
-        build_daily_quality_profile_rows(config=config, inference_df=range_frame, computed_at=computed_at)
+        build_daily_quality_profile_rows(
+            config=config, inference_df=range_frame, computed_at=computed_at
+        )
         if include_drift_quality
         else []
     )
     daily_class_quality_profile_rows = (
-        build_daily_class_quality_profile_rows(config=config, inference_df=range_frame, computed_at=computed_at)
+        build_daily_class_quality_profile_rows(
+            config=config, inference_df=range_frame, computed_at=computed_at
+        )
         if include_drift_quality
         else []
     )
     daily_feature_profile_rows = (
-        build_daily_feature_profile_rows(config=config, inference_df=range_frame, computed_at=computed_at)
+        build_daily_feature_profile_rows(
+            config=config, inference_df=range_frame, computed_at=computed_at
+        )
         if include_drift_quality
         else []
     )
     daily_class_feature_profile_rows = (
-        build_daily_class_feature_profile_rows(config=config, inference_df=range_frame, computed_at=computed_at)
+        build_daily_class_feature_profile_rows(
+            config=config, inference_df=range_frame, computed_at=computed_at
+        )
         if include_drift_quality
         else []
     )
@@ -909,7 +978,9 @@ def _build_range_daily_profiles(
         else []
     )
     daily_label_metric_rows = (
-        build_daily_label_metric_rows(config=config, inference_df=range_frame, computed_at=computed_at)
+        build_daily_label_metric_rows(
+            config=config, inference_df=range_frame, computed_at=computed_at
+        )
         if include_performance
         else []
     )
@@ -968,13 +1039,15 @@ def _execute_target(
                     scope=target.scope,
                     completed_at=_utc_now(),
                     message="No source rows available for this monitor.",
-                )
+                ),
             )
             return MonitorRefreshResult(
                 model_key=config.model_key,
                 scope=target.scope,
                 status="skipped",
-                counts=RefreshCounts(models=0, drift_rows=0, quality_rows=0, performance_rows=0, incident_rows=0),
+                counts=RefreshCounts(
+                    models=0, drift_rows=0, quality_rows=0, performance_rows=0, incident_rows=0
+                ),
             )
 
         latest_date = pd.Timestamp(data_max_date)
@@ -985,7 +1058,9 @@ def _execute_target(
         else:
             range_start, range_end = _performance_range(config, latest_date)
 
-        profile = _get_source_profile(repository, config, start_date=range_start, end_date=range_end)
+        profile = _get_source_profile(
+            repository, config, start_date=range_start, end_date=range_end
+        )
         bounded_min_date = str(profile.get("min_date") or "") or None
         bounded_max_date = str(profile.get("max_date") or "") or None
         _update_refresh_run_metadata(
@@ -1007,7 +1082,9 @@ def _execute_target(
                 end_date=range_end,
             )
             has_daily_label_rows = _has_daily_label_metric_rows(repository, config.model_key)
-            needs_daily_label_backfill = _needs_daily_label_metric_backfill(repository, config.model_key)
+            needs_daily_label_backfill = _needs_daily_label_metric_backfill(
+                repository, config.model_key
+            )
             if (
                 latest_watermark
                 and latest_watermark == state.last_label_watermark
@@ -1028,17 +1105,21 @@ def _execute_target(
                         scope=target.scope,
                         completed_at=_utc_now(),
                         message="Label watermark has not advanced since the previous performance refresh.",
-                    )
+                    ),
                 )
                 return MonitorRefreshResult(
                     model_key=config.model_key,
                     scope=target.scope,
                     status="skipped",
-                    counts=RefreshCounts(models=0, drift_rows=0, quality_rows=0, performance_rows=0, incident_rows=0),
+                    counts=RefreshCounts(
+                        models=0, drift_rows=0, quality_rows=0, performance_rows=0, incident_rows=0
+                    ),
                 )
 
         if not bounded_max_date or int(profile.get("total_rows", 0) or 0) <= 0:
-            repository.complete_refresh_run(run_id, status="skipped", error_message="No rows found inside the refresh range.")
+            repository.complete_refresh_run(
+                run_id, status="skipped", error_message="No rows found inside the refresh range."
+            )
             _upsert_runtime_state(
                 repository,
                 _schedule_state_after_skip(
@@ -1047,13 +1128,15 @@ def _execute_target(
                     scope=target.scope,
                     completed_at=_utc_now(),
                     message="No rows found inside the refresh range.",
-                )
+                ),
             )
             return MonitorRefreshResult(
                 model_key=config.model_key,
                 scope=target.scope,
                 status="skipped",
-                counts=RefreshCounts(models=0, drift_rows=0, quality_rows=0, performance_rows=0, incident_rows=0),
+                counts=RefreshCounts(
+                    models=0, drift_rows=0, quality_rows=0, performance_rows=0, incident_rows=0
+                ),
             )
 
         existing_window_keys = (
@@ -1071,9 +1154,14 @@ def _execute_target(
         if target.scope == "performance_repair":
             repair_days = _performance_repair_days(config.performance_cadence_preset)
             if repair_days is not None:
-                cutoff_date = (latest_date.normalize() - timedelta(days=max(repair_days - 1, 0))).date().isoformat()
+                cutoff_date = (
+                    (latest_date.normalize() - timedelta(days=max(repair_days - 1, 0)))
+                    .date()
+                    .isoformat()
+                )
                 metadata_list = [
-                    metadata for metadata in metadata_list
+                    metadata
+                    for metadata in metadata_list
                     if str(metadata["window_end"]) >= cutoff_date
                 ]
         if not metadata_list:
@@ -1090,20 +1178,24 @@ def _execute_target(
                     scope=target.scope,
                     completed_at=_utc_now(),
                     message="No new comparison windows are due for this monitor.",
-                )
+                ),
             )
             return MonitorRefreshResult(
                 model_key=config.model_key,
                 scope=target.scope,
                 status="skipped",
-                counts=RefreshCounts(models=0, drift_rows=0, quality_rows=0, performance_rows=0, incident_rows=0),
+                counts=RefreshCounts(
+                    models=0, drift_rows=0, quality_rows=0, performance_rows=0, incident_rows=0
+                ),
             )
 
         include_drift_quality = target.scope != "performance_repair"
         include_performance = target.scope != "drift_quality"
         computed_at_text = _utc_now().isoformat(timespec="seconds")
         quality_rows = (
-            build_quality_rows_from_profile(config=config, profile=profile, computed_at=computed_at_text)
+            build_quality_rows_from_profile(
+                config=config, profile=profile, computed_at=computed_at_text
+            )
             if include_drift_quality
             else []
         )
@@ -1162,11 +1254,13 @@ def _execute_target(
             merged_daily_feature_rows = list(daily_feature_profile_rows)
             merged_daily_performance_rows = list(daily_performance_profile_rows)
             if target.scope != "bootstrap" and derivation_start and derivation_end:
-                persisted_quality_rows, persisted_feature_rows, persisted_performance_rows = _load_persisted_daily_rows(
-                    repository,
-                    config,
-                    start_date=derivation_start,
-                    end_date=derivation_end,
+                persisted_quality_rows, persisted_feature_rows, persisted_performance_rows = (
+                    _load_persisted_daily_rows(
+                        repository,
+                        config,
+                        start_date=derivation_start,
+                        end_date=derivation_end,
+                    )
                 )
                 merged_daily_quality_rows = _merge_daily_rows(
                     persisted_quality_rows,
@@ -1198,8 +1292,18 @@ def _execute_target(
                 include_performance=include_performance,
             )
 
-        if not any((derived_result.drift_rows, quality_rows, derived_result.performance_rows, derived_result.incident_rows, derived_result.window_rows)):
-            repository.complete_refresh_run(run_id, status="skipped", error_message="No comparable windows available.")
+        if not any(
+            (
+                derived_result.drift_rows,
+                quality_rows,
+                derived_result.performance_rows,
+                derived_result.incident_rows,
+                derived_result.window_rows,
+            )
+        ):
+            repository.complete_refresh_run(
+                run_id, status="skipped", error_message="No comparable windows available."
+            )
             _upsert_runtime_state(
                 repository,
                 _schedule_state_after_skip(
@@ -1208,13 +1312,15 @@ def _execute_target(
                     scope=target.scope,
                     completed_at=_utc_now(),
                     message="No comparable windows available.",
-                )
+                ),
             )
             return MonitorRefreshResult(
                 model_key=config.model_key,
                 scope=target.scope,
                 status="skipped",
-                counts=RefreshCounts(models=0, drift_rows=0, quality_rows=0, performance_rows=0, incident_rows=0),
+                counts=RefreshCounts(
+                    models=0, drift_rows=0, quality_rows=0, performance_rows=0, incident_rows=0
+                ),
             )
 
         result = RefreshResult(
@@ -1233,7 +1339,9 @@ def _execute_target(
 
         generation_id = run_id
         if target.scope == "bootstrap":
-            repository.replace_all_refresh_results(config.model_key, result, source_run_id=generation_id)
+            repository.replace_all_refresh_results(
+                config.model_key, result, source_run_id=generation_id
+            )
         else:
             repository.append_refresh_result(config.model_key, result, source_run_id=generation_id)
 
@@ -1253,7 +1361,11 @@ def _execute_target(
             try:
                 prune_generations(config.model_key, keep=2)
             except Exception as error:
-                logger.warning("Failed to prune older published generations for %s: %s", config.model_key, error)
+                logger.warning(
+                    "Failed to prune older published generations for %s: %s",
+                    config.model_key,
+                    error,
+                )
         completed_at = _utc_now()
         _upsert_runtime_state(
             repository,
@@ -1272,7 +1384,7 @@ def _execute_target(
                     if include_performance and config.has_labels
                     else None
                 ),
-            )
+            ),
         )
         return MonitorRefreshResult(
             model_key=config.model_key,
@@ -1304,7 +1416,9 @@ def _execute_target(
             model_key=config.model_key,
             scope=target.scope,
             status="failed",
-            counts=RefreshCounts(models=0, drift_rows=0, quality_rows=0, performance_rows=0, incident_rows=0),
+            counts=RefreshCounts(
+                models=0, drift_rows=0, quality_rows=0, performance_rows=0, incident_rows=0
+            ),
             error=error_text,
         )
 
@@ -1336,16 +1450,22 @@ def run_refresh_cycle(
                 results.append(_execute_target(repository, target, requested_mode=mode))
             except Exception as error:
                 results.append(_unexpected_failure_result(target, error))
-        batch = RefreshBatchResult(requested_scope=scope, requested_mode=mode, results=tuple(results))
+        batch = RefreshBatchResult(
+            requested_scope=scope, requested_mode=mode, results=tuple(results)
+        )
         sync_read_model = getattr(repository, "_sync_read_model", None)
         if callable(sync_read_model) and batch.models > 0:
             sync_read_model()
         return batch
 
     worker_count = min(max_workers, len(targets))
-    with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="model-landscape-refresh") as executor:
+    with ThreadPoolExecutor(
+        max_workers=worker_count, thread_name_prefix="model-landscape-refresh"
+    ) as executor:
         future_map = {
-            executor.submit(_execute_target, repository.fork_for_worker(), target, requested_mode=mode): target
+            executor.submit(
+                _execute_target, repository.fork_for_worker(), target, requested_mode=mode
+            ): target
             for target in targets
         }
         for future in as_completed(future_map):

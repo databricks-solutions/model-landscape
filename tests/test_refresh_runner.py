@@ -9,7 +9,6 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pandas as pd
-import pytest
 
 from model_landscape.domain.models import (
     BaselinePolicy,
@@ -21,7 +20,6 @@ from model_landscape.services.refresh_runner import (
     MonitorRefreshResult,
     RefreshBatchResult,
     RefreshCounts,
-    RefreshTarget,
     _bootstrap_range,
     _coerce_timestamp,
     _drift_cadence_delta,
@@ -33,10 +31,10 @@ from model_landscape.services.refresh_runner import (
     _schedule_state_after_success,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_config(
     model_key: str = "test_model",
@@ -80,6 +78,7 @@ def _make_state(
 # Cadence delta tests
 # ---------------------------------------------------------------------------
 
+
 class TestCadenceDeltas:
     def test_drift_hourly(self) -> None:
         assert _drift_cadence_delta("hourly") == timedelta(hours=1)
@@ -117,6 +116,7 @@ class TestCadenceDeltas:
 # Timestamp coercion
 # ---------------------------------------------------------------------------
 
+
 class TestCoerceTimestamp:
     def test_iso_string(self) -> None:
         result = _coerce_timestamp("2026-01-15T10:00:00+00:00")
@@ -137,6 +137,7 @@ class TestCoerceTimestamp:
 # Is-due logic
 # ---------------------------------------------------------------------------
 
+
 class TestIsDue:
     def test_none_is_not_due(self) -> None:
         """No next_due_at means the monitor hasn't been scheduled yet."""
@@ -155,6 +156,7 @@ class TestIsDue:
 # ---------------------------------------------------------------------------
 # Failed-recently / backoff
 # ---------------------------------------------------------------------------
+
 
 class TestFailedRecently:
     def test_no_failures(self) -> None:
@@ -183,6 +185,7 @@ class TestFailedRecently:
 # Bootstrap range
 # ---------------------------------------------------------------------------
 
+
 class TestBootstrapRange:
     def test_rolling_baseline(self) -> None:
         config = _make_config(baseline_n_days=7)
@@ -198,14 +201,18 @@ class TestBootstrapRange:
 # Schedule state transitions
 # ---------------------------------------------------------------------------
 
+
 class TestScheduleStateAfterSuccess:
     def test_drift_success_sets_next_due(self) -> None:
         config = _make_config(drift_cadence="daily")
         state = _make_state()
         completed = pd.Timestamp("2026-01-15T12:00:00", tz="UTC")
         new_state = _schedule_state_after_success(
-            config, state, scope="drift_quality",
-            completed_at=completed, label_watermark=None,
+            config,
+            state,
+            scope="drift_quality",
+            completed_at=completed,
+            label_watermark=None,
         )
         assert new_state.last_drift_refresh_at is not None
         assert new_state.next_drift_due_at is not None
@@ -217,8 +224,11 @@ class TestScheduleStateAfterSuccess:
         state = _make_state(bootstrap_status="pending")
         completed = pd.Timestamp("2026-01-15T12:00:00", tz="UTC")
         new_state = _schedule_state_after_success(
-            config, state, scope="bootstrap",
-            completed_at=completed, label_watermark=None,
+            config,
+            state,
+            scope="bootstrap",
+            completed_at=completed,
+            label_watermark=None,
         )
         assert new_state.bootstrap_status == "completed"
 
@@ -228,7 +238,9 @@ class TestScheduleStateAfterFailure:
         state = _make_state(consecutive_failures=1)
         completed = pd.Timestamp("2026-01-15T12:00:00", tz="UTC")
         new_state = _schedule_state_after_failure(
-            state, completed_at=completed, error_message="test error",
+            state,
+            completed_at=completed,
+            error_message="test error",
         )
         assert new_state.consecutive_failures == 2
         assert new_state.last_run_status == "failed"
@@ -240,6 +252,7 @@ class TestScheduleStateAfterFailure:
 # Batch result aggregation
 # ---------------------------------------------------------------------------
 
+
 class TestRefreshBatchResult:
     def test_empty_batch(self) -> None:
         batch = RefreshBatchResult(requested_scope="scheduler", requested_mode="auto", results=())
@@ -250,14 +263,24 @@ class TestRefreshBatchResult:
 
     def test_aggregation(self) -> None:
         r1 = MonitorRefreshResult(
-            model_key="a", scope="drift_quality", status="completed",
-            counts=RefreshCounts(models=1, drift_rows=10, quality_rows=5, performance_rows=3, incident_rows=2),
+            model_key="a",
+            scope="drift_quality",
+            status="completed",
+            counts=RefreshCounts(
+                models=1, drift_rows=10, quality_rows=5, performance_rows=3, incident_rows=2
+            ),
         )
         r2 = MonitorRefreshResult(
-            model_key="b", scope="drift_quality", status="completed",
-            counts=RefreshCounts(models=1, drift_rows=20, quality_rows=8, performance_rows=0, incident_rows=1),
+            model_key="b",
+            scope="drift_quality",
+            status="completed",
+            counts=RefreshCounts(
+                models=1, drift_rows=20, quality_rows=8, performance_rows=0, incident_rows=1
+            ),
         )
-        batch = RefreshBatchResult(requested_scope="scheduler", requested_mode="auto", results=(r1, r2))
+        batch = RefreshBatchResult(
+            requested_scope="scheduler", requested_mode="auto", results=(r1, r2)
+        )
         assert batch.models == 2
         assert batch.drift_rows == 30
         assert batch.quality_rows == 13
@@ -266,8 +289,12 @@ class TestRefreshBatchResult:
 
     def test_failed_result_still_aggregates(self) -> None:
         r = MonitorRefreshResult(
-            model_key="x", scope="bootstrap", status="failed",
-            counts=RefreshCounts(models=1, drift_rows=0, quality_rows=0, performance_rows=0, incident_rows=0),
+            model_key="x",
+            scope="bootstrap",
+            status="failed",
+            counts=RefreshCounts(
+                models=1, drift_rows=0, quality_rows=0, performance_rows=0, incident_rows=0
+            ),
             error="boom",
         )
         batch = RefreshBatchResult(requested_scope="bootstrap", requested_mode="auto", results=(r,))

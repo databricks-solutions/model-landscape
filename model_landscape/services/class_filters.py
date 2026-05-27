@@ -4,15 +4,19 @@ from typing import Any
 
 import pandas as pd
 
-
 POSITIVE_CLASS_TOKENS = frozenset({"1", "1.0", "true", "t", "yes", "y", "positive", "pos"})
 NEGATIVE_CLASS_TOKENS = frozenset({"0", "0.0", "false", "f", "no", "n", "negative", "neg"})
 
 
-def normalize_class_filter(class_basis: str | None, class_value: str | None) -> tuple[str, str, bool]:
+def normalize_class_filter(
+    class_basis: str | None, class_value: str | None
+) -> tuple[str, str, bool]:
     normalized_basis = str(class_basis or "all").strip().lower()
     normalized_value = str(class_value or "all").strip().lower()
-    active = normalized_basis in {"actual", "predicted"} and normalized_value in {"positive", "negative"}
+    active = normalized_basis in {"actual", "predicted"} and normalized_value in {
+        "positive",
+        "negative",
+    }
     return normalized_basis, normalized_value, active
 
 
@@ -74,5 +78,11 @@ def supports_binary_class_filters(config: object | None) -> bool:
     label_col = getattr(contract, "label_col", None)
     prediction_col = getattr(contract, "prediction_col", None)
     prediction_score_col = getattr(contract, "prediction_score_col", None)
-    problem_type = str(getattr(config, "problem_type", "classification") or "classification").strip().lower()
-    return bool(label_col) and bool(prediction_col or prediction_score_col) and problem_type == "classification"
+    problem_type = (
+        str(getattr(config, "problem_type", "classification") or "classification").strip().lower()
+    )
+    return (
+        bool(label_col)
+        and bool(prediction_col or prediction_score_col)
+        and problem_type == "classification"
+    )

@@ -1,5 +1,4 @@
 import mlflow
-
 from mlflow_lens import experiment
 
 
@@ -27,10 +26,12 @@ def test_auto_log_context_sets_local_environment(experiment_id):
 def test_log_flattens_nested_dict(experiment_id):
     mlflow.set_experiment(experiment_id=experiment_id)
     with mlflow.start_run() as run:
-        flat = experiment.log({
-            "data": {"source": "credit_v3", "rows": 50000},
-            "model": {"type": "xgboost"},
-        })
+        flat = experiment.log(
+            {
+                "data": {"source": "credit_v3", "rows": 50000},
+                "model": {"type": "xgboost"},
+            }
+        )
 
     assert flat == {
         "data.source": "credit_v3",

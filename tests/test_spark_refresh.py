@@ -5,15 +5,15 @@ import math
 from uuid import uuid4
 
 import pytest
-
 from pyspark.sql import functions as F
 
 from model_landscape.domain.models import InferenceContract, MonitorConfig, RefreshResult
 from model_landscape.services.table_names import TableNames
 
-
 SparkSession = pytest.importorskip("pyspark.sql").SparkSession
-SparkRefreshRepository = pytest.importorskip("model_landscape.services.spark_refresh").SparkRefreshRepository
+SparkRefreshRepository = pytest.importorskip(
+    "model_landscape.services.spark_refresh"
+).SparkRefreshRepository
 iter_local_rows = pytest.importorskip("model_landscape.services.spark_refresh")._iter_local_rows
 
 
@@ -29,7 +29,13 @@ class DummyWarehouse:
 
 
 class RecordingSparkPersistenceRepository(SparkRefreshRepository):
-    def __init__(self, *, spark: SparkSession, table_names: TableNames, table_frames: dict[str, object] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        spark: SparkSession,
+        table_names: TableNames,
+        table_frames: dict[str, object] | None = None,
+    ) -> None:
         super().__init__(
             warehouse=DummyWarehouse(spark),  # type: ignore[arg-type]
             table_names=table_names,
@@ -80,7 +86,11 @@ class RecordingSparkAppendRepository(RecordingSparkPersistenceRepository):
 
 def _spark() -> SparkSession:
     try:
-        return SparkSession.builder.master("local[1]").appName("model-landscape-spark-tests").getOrCreate()
+        return (
+            SparkSession.builder.master("local[1]")
+            .appName("model-landscape-spark-tests")
+            .getOrCreate()
+        )
     except Exception as error:  # pragma: no cover - environment-dependent
         pytest.skip(f"Local Spark is unavailable in this environment: {error}")
 
@@ -125,15 +135,21 @@ class PersistedSparkRefreshRepository(SparkRefreshRepository):
         self._persisted_feature_rows = persisted_feature_rows
         self._persisted_performance_rows = persisted_performance_rows
 
-    def _load_persisted_daily_quality_profile_df(self, model_key: str, start_date: str, end_date: str):
+    def _load_persisted_daily_quality_profile_df(
+        self, model_key: str, start_date: str, end_date: str
+    ):
         del model_key, start_date, end_date
         return self._daily_quality_profile_df_from_rows(self._persisted_quality_rows)
 
-    def _load_persisted_daily_feature_profile_df(self, model_key: str, start_date: str, end_date: str):
+    def _load_persisted_daily_feature_profile_df(
+        self, model_key: str, start_date: str, end_date: str
+    ):
         del model_key, start_date, end_date
         return self._daily_feature_profile_df_from_rows(self._persisted_feature_rows)
 
-    def _load_persisted_daily_performance_profile_df(self, model_key: str, start_date: str, end_date: str):
+    def _load_persisted_daily_performance_profile_df(
+        self, model_key: str, start_date: str, end_date: str
+    ):
         del model_key, start_date, end_date
         return self._daily_performance_profile_df_from_rows(self._persisted_performance_rows)
 
@@ -143,18 +159,90 @@ def test_build_daily_profiles_uses_spark_for_quality_feature_and_performance_row
     source_table = _source_table_name()
     spark.createDataFrame(
         [
-            {"event_ts": "2026-01-01T00:00:00", "prediction": 0.9, "label": 1, "amount": 100.0, "country": "US"},
-            {"event_ts": "2026-01-01T01:00:00", "prediction": 0.1, "label": 0, "amount": 110.0, "country": "CA"},
-            {"event_ts": "2026-01-01T02:00:00", "prediction": 0.8, "label": 1, "amount": 115.0, "country": "US"},
-            {"event_ts": "2026-01-01T03:00:00", "prediction": 0.2, "label": 0, "amount": 118.0, "country": "CA"},
-            {"event_ts": "2026-01-01T04:00:00", "prediction": 0.7, "label": 1, "amount": 122.0, "country": "US"},
-            {"event_ts": "2026-01-01T05:00:00", "prediction": 0.3, "label": 0, "amount": 128.0, "country": "CA"},
-            {"event_ts": "2026-01-02T00:00:00", "prediction": 0.8, "label": 1, "amount": 120.0, "country": "US"},
-            {"event_ts": "2026-01-02T01:00:00", "prediction": 0.2, "label": 0, "amount": 130.0, "country": "US"},
-            {"event_ts": "2026-01-02T02:00:00", "prediction": 0.75, "label": 1, "amount": 132.0, "country": "US"},
-            {"event_ts": "2026-01-02T03:00:00", "prediction": 0.25, "label": 0, "amount": 135.0, "country": "CA"},
-            {"event_ts": "2026-01-02T04:00:00", "prediction": 0.85, "label": 1, "amount": 140.0, "country": "US"},
-            {"event_ts": "2026-01-02T05:00:00", "prediction": 0.15, "label": 0, "amount": 145.0, "country": "CA"},
+            {
+                "event_ts": "2026-01-01T00:00:00",
+                "prediction": 0.9,
+                "label": 1,
+                "amount": 100.0,
+                "country": "US",
+            },
+            {
+                "event_ts": "2026-01-01T01:00:00",
+                "prediction": 0.1,
+                "label": 0,
+                "amount": 110.0,
+                "country": "CA",
+            },
+            {
+                "event_ts": "2026-01-01T02:00:00",
+                "prediction": 0.8,
+                "label": 1,
+                "amount": 115.0,
+                "country": "US",
+            },
+            {
+                "event_ts": "2026-01-01T03:00:00",
+                "prediction": 0.2,
+                "label": 0,
+                "amount": 118.0,
+                "country": "CA",
+            },
+            {
+                "event_ts": "2026-01-01T04:00:00",
+                "prediction": 0.7,
+                "label": 1,
+                "amount": 122.0,
+                "country": "US",
+            },
+            {
+                "event_ts": "2026-01-01T05:00:00",
+                "prediction": 0.3,
+                "label": 0,
+                "amount": 128.0,
+                "country": "CA",
+            },
+            {
+                "event_ts": "2026-01-02T00:00:00",
+                "prediction": 0.8,
+                "label": 1,
+                "amount": 120.0,
+                "country": "US",
+            },
+            {
+                "event_ts": "2026-01-02T01:00:00",
+                "prediction": 0.2,
+                "label": 0,
+                "amount": 130.0,
+                "country": "US",
+            },
+            {
+                "event_ts": "2026-01-02T02:00:00",
+                "prediction": 0.75,
+                "label": 1,
+                "amount": 132.0,
+                "country": "US",
+            },
+            {
+                "event_ts": "2026-01-02T03:00:00",
+                "prediction": 0.25,
+                "label": 0,
+                "amount": 135.0,
+                "country": "CA",
+            },
+            {
+                "event_ts": "2026-01-02T04:00:00",
+                "prediction": 0.85,
+                "label": 1,
+                "amount": 140.0,
+                "country": "US",
+            },
+            {
+                "event_ts": "2026-01-02T05:00:00",
+                "prediction": 0.15,
+                "label": 0,
+                "amount": 145.0,
+                "country": "CA",
+            },
         ]
     ).createOrReplaceTempView(source_table)
     repository = SparkRefreshRepository(
@@ -223,16 +311,15 @@ def test_daily_numeric_feature_rows_include_last_edge_value() -> None:
         ),
         problem_type="classification",
     )
-    source_df = (
-        spark.createDataFrame([
+    source_df = spark.createDataFrame(
+        [
             {"amount": 0.0},
             {"amount": 0.5},
             {"amount": 1.0},
             {"amount": 1.5},
             {"amount": 2.0},
-        ])
-        .withColumn("_model_landscape_profile_date", F.lit("2026-01-01").cast("date"))
-    )
+        ]
+    ).withColumn("_model_landscape_profile_date", F.lit("2026-01-01").cast("date"))
 
     rows = repository._build_daily_numeric_feature_rows(
         config=config,
@@ -265,16 +352,15 @@ def test_daily_classification_metrics_by_bin_include_last_edge_value() -> None:
         ),
         problem_type="classification",
     )
-    source_df = (
-        spark.createDataFrame([
+    source_df = spark.createDataFrame(
+        [
             {"amount": 0.0, "prediction": 1.0, "label": 1},
             {"amount": 0.5, "prediction": 1.0, "label": 0},
             {"amount": 1.0, "prediction": 0.0, "label": 0},
             {"amount": 1.5, "prediction": 1.0, "label": 1},
             {"amount": 2.0, "prediction": 1.0, "label": 1},
-        ])
-        .withColumn("_model_landscape_profile_date", F.lit("2026-01-01").cast("date"))
-    )
+        ]
+    ).withColumn("_model_landscape_profile_date", F.lit("2026-01-01").cast("date"))
 
     metric_df = repository._daily_classification_metrics_by_bin_df(
         config,
@@ -388,8 +474,18 @@ def test_spark_refresh_repository_uses_shared_external_join_key_without_entity_i
     labels_table = _label_table_name()
     spark.createDataFrame(
         [
-            {"event_ts": "2026-01-01T00:00:00", "prediction": 0.9, "gc_transaction": "t1", "amount": 100.0},
-            {"event_ts": "2026-01-01T01:00:00", "prediction": 0.2, "gc_transaction": "t2", "amount": 120.0},
+            {
+                "event_ts": "2026-01-01T00:00:00",
+                "prediction": 0.9,
+                "gc_transaction": "t1",
+                "amount": 100.0,
+            },
+            {
+                "event_ts": "2026-01-01T01:00:00",
+                "prediction": 0.2,
+                "gc_transaction": "t2",
+                "amount": 120.0,
+            },
         ]
     ).createOrReplaceTempView(source_table)
     spark.createDataFrame(
@@ -420,7 +516,9 @@ def test_spark_refresh_repository_uses_shared_external_join_key_without_entity_i
     )
 
     profile = repository.get_source_profile(config, start_date="2026-01-01", end_date="2026-01-01")
-    label_signature = repository.get_label_watermark(config, start_date="2026-01-01", end_date="2026-01-01")
+    label_signature = repository.get_label_watermark(
+        config, start_date="2026-01-01", end_date="2026-01-01"
+    )
 
     assert profile["label_row_count"] == 2
     assert label_signature == "2026-01-02T00:01:00"
@@ -431,14 +529,62 @@ def test_spark_refresh_repository_derives_window_rows_from_spark_daily_profiles(
     source_table = _source_table_name()
     spark.createDataFrame(
         [
-            {"event_ts": "2026-01-01T00:00:00", "prediction": 0.2, "label": 0, "amount": 100.0, "country": "US"},
-            {"event_ts": "2026-01-01T01:00:00", "prediction": 0.3, "label": 0, "amount": 105.0, "country": "CA"},
-            {"event_ts": "2026-01-02T00:00:00", "prediction": 0.25, "label": 0, "amount": 110.0, "country": "US"},
-            {"event_ts": "2026-01-02T01:00:00", "prediction": 0.35, "label": 0, "amount": 115.0, "country": "CA"},
-            {"event_ts": "2026-01-03T00:00:00", "prediction": 0.8, "label": 1, "amount": 180.0, "country": "US"},
-            {"event_ts": "2026-01-03T01:00:00", "prediction": 0.7, "label": 1, "amount": 185.0, "country": "US"},
-            {"event_ts": "2026-01-04T00:00:00", "prediction": 0.85, "label": 1, "amount": 190.0, "country": "CA"},
-            {"event_ts": "2026-01-04T01:00:00", "prediction": 0.75, "label": 1, "amount": 195.0, "country": "US"},
+            {
+                "event_ts": "2026-01-01T00:00:00",
+                "prediction": 0.2,
+                "label": 0,
+                "amount": 100.0,
+                "country": "US",
+            },
+            {
+                "event_ts": "2026-01-01T01:00:00",
+                "prediction": 0.3,
+                "label": 0,
+                "amount": 105.0,
+                "country": "CA",
+            },
+            {
+                "event_ts": "2026-01-02T00:00:00",
+                "prediction": 0.25,
+                "label": 0,
+                "amount": 110.0,
+                "country": "US",
+            },
+            {
+                "event_ts": "2026-01-02T01:00:00",
+                "prediction": 0.35,
+                "label": 0,
+                "amount": 115.0,
+                "country": "CA",
+            },
+            {
+                "event_ts": "2026-01-03T00:00:00",
+                "prediction": 0.8,
+                "label": 1,
+                "amount": 180.0,
+                "country": "US",
+            },
+            {
+                "event_ts": "2026-01-03T01:00:00",
+                "prediction": 0.7,
+                "label": 1,
+                "amount": 185.0,
+                "country": "US",
+            },
+            {
+                "event_ts": "2026-01-04T00:00:00",
+                "prediction": 0.85,
+                "label": 1,
+                "amount": 190.0,
+                "country": "CA",
+            },
+            {
+                "event_ts": "2026-01-04T01:00:00",
+                "prediction": 0.75,
+                "label": 1,
+                "amount": 195.0,
+                "country": "US",
+            },
         ]
     ).createOrReplaceTempView(source_table)
     seed_repository = SparkRefreshRepository(
@@ -486,16 +632,18 @@ def test_spark_refresh_repository_derives_window_rows_from_spark_daily_profiles(
 
     result = repository.derive_refresh_result_from_daily_profile_rows(
         config=config,
-        metadata_list=[{
-            "window_id": "fraud_v1:daily:2026-01-03:2026-01-04:2026-01-01:2026-01-02",
-            "model_key": "fraud_v1",
-            "window_grain": "daily",
-            "window_start": "2026-01-03",
-            "window_end": "2026-01-04",
-            "baseline_start": "2026-01-01",
-            "baseline_end": "2026-01-02",
-            "baseline_kind": "rolling",
-        }],
+        metadata_list=[
+            {
+                "window_id": "fraud_v1:daily:2026-01-03:2026-01-04:2026-01-01:2026-01-02",
+                "model_key": "fraud_v1",
+                "window_grain": "daily",
+                "window_start": "2026-01-03",
+                "window_end": "2026-01-04",
+                "baseline_start": "2026-01-01",
+                "baseline_end": "2026-01-02",
+                "baseline_kind": "rolling",
+            }
+        ],
         current_daily_quality_profile_rows=current_profiles.daily_quality_profile_rows,
         current_daily_feature_profile_rows=current_profiles.daily_feature_profile_rows,
         current_daily_performance_profile_rows=current_profiles.daily_performance_profile_rows,
@@ -512,9 +660,7 @@ def test_spark_refresh_repository_derives_window_rows_from_spark_daily_profiles(
     assert result.drift_rows
     assert {"amount", "country"} <= {row["feature_name"] for row in result.drift_rows}
     numeric_metrics = [
-        row["metric_value"]
-        for row in result.drift_rows
-        if row["feature_name"] == "amount"
+        row["metric_value"] for row in result.drift_rows if row["feature_name"] == "amount"
     ]
     assert numeric_metrics
     assert all(math.isfinite(float(metric)) for metric in numeric_metrics)
@@ -522,7 +668,9 @@ def test_spark_refresh_repository_derives_window_rows_from_spark_daily_profiles(
     assert all(row["window_id"] for row in result.performance_rows)
 
 
-def test_spark_refresh_repository_qualifies_model_key_when_joining_quality_profiles_to_window_metadata() -> None:
+def test_spark_refresh_repository_qualifies_model_key_when_joining_quality_profiles_to_window_metadata() -> (
+    None
+):
     spark = _spark()
     repository = PersistedSparkRefreshRepository(
         spark=spark,
@@ -544,16 +692,18 @@ def test_spark_refresh_repository_qualifies_model_key_when_joining_quality_profi
 
     result = repository.derive_refresh_result_from_daily_profile_rows(
         config=config,
-        metadata_list=[{
-            "window_id": "fraud_v1:daily:2026-01-03:2026-01-03:2026-01-01:2026-01-02",
-            "model_key": "fraud_v1",
-            "window_grain": "daily",
-            "window_start": "2026-01-03",
-            "window_end": "2026-01-03",
-            "baseline_start": "2026-01-01",
-            "baseline_end": "2026-01-02",
-            "baseline_kind": "rolling",
-        }],
+        metadata_list=[
+            {
+                "window_id": "fraud_v1:daily:2026-01-03:2026-01-03:2026-01-01:2026-01-02",
+                "model_key": "fraud_v1",
+                "window_grain": "daily",
+                "window_start": "2026-01-03",
+                "window_end": "2026-01-03",
+                "baseline_start": "2026-01-01",
+                "baseline_end": "2026-01-02",
+                "baseline_kind": "rolling",
+            }
+        ],
         current_daily_quality_profile_rows=[
             {
                 "model_key": "fraud_v1",
@@ -576,22 +726,26 @@ def test_spark_refresh_repository_qualifies_model_key_when_joining_quality_profi
         include_performance=False,
     )
 
-    assert result.quality_history_rows == [{
-        "model_key": "fraud_v1",
-        "window_id": "fraud_v1:daily:2026-01-03:2026-01-03:2026-01-01:2026-01-02",
-        "window_start": "2026-01-03",
-        "window_end": "2026-01-03",
-        "baseline_start": "2026-01-01",
-        "baseline_end": "2026-01-02",
-        "row_count": 10,
-        "prediction_mean": 0.5,
-        "prediction_std": 0.1,
-        "null_rates": '{"amount": 0.0}',
-        "computed_at": "2026-01-05T00:00:00+00:00",
-    }]
+    assert result.quality_history_rows == [
+        {
+            "model_key": "fraud_v1",
+            "window_id": "fraud_v1:daily:2026-01-03:2026-01-03:2026-01-01:2026-01-02",
+            "window_start": "2026-01-03",
+            "window_end": "2026-01-03",
+            "baseline_start": "2026-01-01",
+            "baseline_end": "2026-01-02",
+            "row_count": 10,
+            "prediction_mean": 0.5,
+            "prediction_std": 0.1,
+            "null_rates": '{"amount": 0.0}',
+            "computed_at": "2026-01-05T00:00:00+00:00",
+        }
+    ]
 
 
-def test_spark_refresh_repository_derives_recovered_incident_history_without_new_drift_rows() -> None:
+def test_spark_refresh_repository_derives_recovered_incident_history_without_new_drift_rows() -> (
+    None
+):
     spark = _spark()
     repository = PersistedSparkRefreshRepository(
         spark=spark,
@@ -613,16 +767,18 @@ def test_spark_refresh_repository_derives_recovered_incident_history_without_new
 
     result = repository.derive_refresh_result_from_daily_profile_rows(
         config=config,
-        metadata_list=[{
-            "window_id": "fraud_v1:daily:2026-01-03:2026-01-03:2026-01-01:2026-01-02",
-            "model_key": "fraud_v1",
-            "window_grain": "daily",
-            "window_start": "2026-01-03",
-            "window_end": "2026-01-03",
-            "baseline_start": "2026-01-01",
-            "baseline_end": "2026-01-02",
-            "baseline_kind": "rolling",
-        }],
+        metadata_list=[
+            {
+                "window_id": "fraud_v1:daily:2026-01-03:2026-01-03:2026-01-01:2026-01-02",
+                "model_key": "fraud_v1",
+                "window_grain": "daily",
+                "window_start": "2026-01-03",
+                "window_end": "2026-01-03",
+                "baseline_start": "2026-01-01",
+                "baseline_end": "2026-01-02",
+                "baseline_kind": "rolling",
+            }
+        ],
         current_daily_quality_profile_rows=[
             {
                 "model_key": "fraud_v1",
@@ -657,21 +813,23 @@ def test_spark_refresh_repository_derives_recovered_incident_history_without_new
     )
 
     assert result.incident_rows == []
-    assert result.incident_history_rows == [{
-        "model_key": "fraud_v1",
-        "feature_name": "amount",
-        "metric_name": "psi",
-        "event_type": "recovered",
-        "severity": "warning",
-        "status": "closed",
-        "metric_value": 0.0,
-        "window_id": "fraud_v1:daily:2026-01-03:2026-01-03:2026-01-01:2026-01-02",
-        "window_start": "2026-01-03",
-        "window_end": "2026-01-03",
-        "baseline_start": "2026-01-01",
-        "baseline_end": "2026-01-02",
-        "observed_at": "2026-01-05 00:00:00",
-    }]
+    assert result.incident_history_rows == [
+        {
+            "model_key": "fraud_v1",
+            "feature_name": "amount",
+            "metric_name": "psi",
+            "event_type": "recovered",
+            "severity": "warning",
+            "status": "closed",
+            "metric_value": 0.0,
+            "window_id": "fraud_v1:daily:2026-01-03:2026-01-03:2026-01-01:2026-01-02",
+            "window_start": "2026-01-03",
+            "window_end": "2026-01-03",
+            "baseline_start": "2026-01-01",
+            "baseline_end": "2026-01-02",
+            "observed_at": "2026-01-05 00:00:00",
+        }
+    ]
 
 
 def test_spark_refresh_repository_reads_and_replaces_performance_bin_specs_via_spark() -> None:
@@ -681,14 +839,16 @@ def test_spark_refresh_repository_reads_and_replaces_performance_bin_specs_via_s
         spark=spark,
         table_names=table_names,
         table_frames={
-            table_names.performance_bin_specs: spark.createDataFrame([
-                {
-                    "model_key": "payments_risk_v1",
-                    "feature_name": "amount",
-                    "edges_json": "[0.0, 1.5, 3.0]",
-                    "computed_at": "2026-01-20T00:00:00+00:00",
-                }
-            ]),
+            table_names.performance_bin_specs: spark.createDataFrame(
+                [
+                    {
+                        "model_key": "payments_risk_v1",
+                        "feature_name": "amount",
+                        "edges_json": "[0.0, 1.5, 3.0]",
+                        "computed_at": "2026-01-20T00:00:00+00:00",
+                    }
+                ]
+            ),
         },
     )
 
@@ -707,30 +867,32 @@ def test_spark_refresh_repository_rewrites_quality_summary_from_spark_daily_prof
     spark = _spark()
     table_names = TableNames(catalog="main", schema="default")
     daily_quality_df = (
-        spark.createDataFrame([
-            {
-                "model_key": "payments_risk_v1",
-                "profile_date": "2026-01-19",
-                "row_count": 100,
-                "prediction_mean": 0.2,
-                "prediction_std": 0.1,
-                "null_rates": '{"amount": 0.0}',
-                "label_row_count": 90,
-                "computed_at": "2026-01-19T00:00:00+00:00",
-                "source_run_id": "run-1",
-            },
-            {
-                "model_key": "payments_risk_v1",
-                "profile_date": "2026-01-20",
-                "row_count": 50,
-                "prediction_mean": 0.6,
-                "prediction_std": 0.2,
-                "null_rates": '{"amount": 20.0}',
-                "label_row_count": 40,
-                "computed_at": "2026-01-20T00:00:00+00:00",
-                "source_run_id": "run-2",
-            },
-        ])
+        spark.createDataFrame(
+            [
+                {
+                    "model_key": "payments_risk_v1",
+                    "profile_date": "2026-01-19",
+                    "row_count": 100,
+                    "prediction_mean": 0.2,
+                    "prediction_std": 0.1,
+                    "null_rates": '{"amount": 0.0}',
+                    "label_row_count": 90,
+                    "computed_at": "2026-01-19T00:00:00+00:00",
+                    "source_run_id": "run-1",
+                },
+                {
+                    "model_key": "payments_risk_v1",
+                    "profile_date": "2026-01-20",
+                    "row_count": 50,
+                    "prediction_mean": 0.6,
+                    "prediction_std": 0.2,
+                    "null_rates": '{"amount": 20.0}',
+                    "label_row_count": 40,
+                    "computed_at": "2026-01-20T00:00:00+00:00",
+                    "source_run_id": "run-2",
+                },
+            ]
+        )
         .withColumn("profile_date", F.to_date("profile_date"))
         .withColumn("computed_at", F.to_timestamp("computed_at"))
     )
@@ -745,7 +907,11 @@ def test_spark_refresh_repository_rewrites_quality_summary_from_spark_daily_prof
     assert repository.deleted == [
         (table_names.quality_metrics, "model_key = 'payments_risk_v1'"),
     ]
-    quality_rows = next(rows for table_name, rows in repository.appended if table_name == table_names.quality_metrics)
+    quality_rows = next(
+        rows
+        for table_name, rows in repository.appended
+        if table_name == table_names.quality_metrics
+    )
     summary = quality_rows[0]
     assert summary["total_rows"] == 150
     assert str(summary["min_date"]) == "2026-01-19"
@@ -831,7 +997,9 @@ def test_spark_refresh_repository_replace_all_refresh_results_uses_spark_table_w
     assert repository.replaced_bin_specs == [("payments_risk_v1", {"amount": (0.0, 10.0, 20.0)})]
 
 
-def test_spark_refresh_repository_append_refresh_result_persists_window_id_for_drift_and_performance_metrics() -> None:
+def test_spark_refresh_repository_append_refresh_result_persists_window_id_for_drift_and_performance_metrics() -> (
+    None
+):
     spark = _spark()
     table_names = TableNames(catalog="main", schema="default")
     repository = RecordingSparkAppendRepository(spark=spark, table_names=table_names)
@@ -889,8 +1057,14 @@ def test_spark_refresh_repository_append_refresh_result_persists_window_id_for_d
         source_run_id="run-3",
     )
 
-    drift_rows = next(rows for table_name, rows in repository.appended if table_name == table_names.drift_metrics)
-    performance_rows = next(rows for table_name, rows in repository.appended if table_name == table_names.performance_metrics)
+    drift_rows = next(
+        rows for table_name, rows in repository.appended if table_name == table_names.drift_metrics
+    )
+    performance_rows = next(
+        rows
+        for table_name, rows in repository.appended
+        if table_name == table_names.performance_metrics
+    )
 
     assert drift_rows[0]["window_id"] == "window-1"
     assert performance_rows[0]["window_id"] == "window-1"
@@ -943,7 +1117,9 @@ def test_spark_refresh_repository_append_refresh_result_clears_recovered_inciden
     )
 
     assert (table_names.incidents, "model_key = 'payments_risk_v1'") in repository.deleted
-    assert any(table_name == table_names.daily_quality_profiles for table_name, _ in repository.appended)
+    assert any(
+        table_name == table_names.daily_quality_profiles for table_name, _ in repository.appended
+    )
     assert repository.rewritten == ["payments_risk_v1"]
     assert repository.synced is True
     assert repository.replaced_bin_specs == [("payments_risk_v1", {"amount": (0.0, 2.0, 4.0)})]

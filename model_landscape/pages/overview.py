@@ -13,7 +13,9 @@ def layout():
                 type="default",
                 children=html.Div(
                     id="overview-page-body",
-                    children=make_empty_state("Loading model overview...", icon="fas fa-chart-line"),
+                    children=make_empty_state(
+                        "Loading model overview...", icon="fas fa-chart-line"
+                    ),
                 ),
             ),
         ]

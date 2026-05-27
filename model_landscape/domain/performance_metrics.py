@@ -31,9 +31,15 @@ def normalize_problem_type(problem_type: str | None) -> str:
     return "regression" if normalized == "regression" else "classification"
 
 
-def performance_metric_definitions(problem_type: str | None = None) -> tuple[PerformanceMetricDefinition, ...]:
+def performance_metric_definitions(
+    problem_type: str | None = None,
+) -> tuple[PerformanceMetricDefinition, ...]:
     normalized_problem_type = normalize_problem_type(problem_type)
-    return tuple(definition for definition in _METRIC_DEFINITIONS if definition.problem_type == normalized_problem_type)
+    return tuple(
+        definition
+        for definition in _METRIC_DEFINITIONS
+        if definition.problem_type == normalized_problem_type
+    )
 
 
 def default_performance_metric_names(problem_type: str | None) -> tuple[str, ...]:
@@ -66,7 +72,9 @@ def normalize_performance_metric_names(
     problem_type: str | None,
     metric_names: tuple[str, ...] | list[str] | None,
 ) -> tuple[str, ...]:
-    allowed = {definition.metric_name for definition in performance_metric_definitions(problem_type)}
+    allowed = {
+        definition.metric_name for definition in performance_metric_definitions(problem_type)
+    }
     if not metric_names:
         return default_performance_metric_names(problem_type)
     normalized: list[str] = []
@@ -94,7 +102,10 @@ def resolve_default_performance_metric(
         return requested_default
     normalized_problem_type = normalize_problem_type(problem_type)
     if default_metric:
-        allowed = {definition.metric_name for definition in performance_metric_definitions(normalized_problem_type)}
+        allowed = {
+            definition.metric_name
+            for definition in performance_metric_definitions(normalized_problem_type)
+        }
         if requested_default and requested_default not in allowed:
             return default_primary_performance_metric(normalized_problem_type)
     preferred_default = default_primary_performance_metric(normalized_problem_type)

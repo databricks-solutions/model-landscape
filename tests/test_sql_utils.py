@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import numpy as np
 
-from model_landscape.services.sql_utils import array_literal, parse_string_array, quote_column, validate_identifier
+from model_landscape.services.sql_utils import (
+    array_literal,
+    parse_string_array,
+    quote_column,
+    validate_identifier,
+)
 
 
 def test_parse_string_array_handles_numpy_arrays() -> None:

@@ -10,7 +10,6 @@ from model_landscape.manual_setup import (
     build_manual_refresh_job_payload,
 )
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -53,7 +52,9 @@ def test_build_manual_refresh_job_payload_uses_workspace_wheel_path() -> None:
     assert task["python_wheel_task"]["entry_point"] == "model-landscape-refresh"
     assert payload["parameters"][3] == {"name": "scope", "default": "scheduler"}
     assert task["python_wheel_task"]["named_parameters"]["scope"] == "{{job.parameters.scope}}"
-    assert task["python_wheel_task"]["named_parameters"]["model-key"] == "{{job.parameters.model_key}}"
+    assert (
+        task["python_wheel_task"]["named_parameters"]["model-key"] == "{{job.parameters.model_key}}"
+    )
     assert payload["schedule"]["quartz_cron_expression"] == "0 0 * * * ?"
     assert payload["schedule"]["pause_status"] == "UNPAUSED"
     assert payload["job_clusters"][0]["new_cluster"]["node_type_id"] == "m5d.large"
@@ -66,7 +67,10 @@ def test_build_manual_refresh_job_payload_uses_workspace_wheel_path() -> None:
         library.get("pypi", {}).get("package") == "mlflow-skinny>=2.20,<3.0"
         for library in task["libraries"][1:]
     )
-    assert task["python_wheel_task"]["named_parameters"]["use-lakebase-read-model"] == "{{job.parameters.use_lakebase_read_model}}"
+    assert (
+        task["python_wheel_task"]["named_parameters"]["use-lakebase-read-model"]
+        == "{{job.parameters.use_lakebase_read_model}}"
+    )
 
 
 def test_prepare_existing_app_source_script_writes_manual_app_yaml(tmp_path: Path) -> None:

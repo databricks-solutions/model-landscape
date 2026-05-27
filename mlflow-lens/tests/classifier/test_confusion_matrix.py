@@ -5,7 +5,6 @@ from pathlib import Path
 
 import mlflow
 import plotly.graph_objects as go
-
 from mlflow_lens.classifier import confusion_matrix
 
 
@@ -29,9 +28,7 @@ def test_confusion_matrix_from_predictions_parity(binary_data, binary_prediction
     model, X, y = binary_data
     fig_model = confusion_matrix(model, X, y)
     y_true, y_pred = binary_predictions
-    fig_pred = confusion_matrix.from_predictions(
-        y_true, y_pred, labels=list(model.classes_)
-    )
+    fig_pred = confusion_matrix.from_predictions(y_true, y_pred, labels=list(model.classes_))
     assert list(fig_model.data[0].z[0]) == list(fig_pred.data[0].z[0])
 
 
@@ -42,9 +39,7 @@ def test_confusion_matrix_logs_artifacts(experiment_id, binary_data):
         confusion_matrix(model, X, y, log=True, labels=list(model.classes_))
 
     client = mlflow.tracking.MlflowClient()
-    json_path = client.download_artifacts(
-        run.info.run_id, "lens/panels/confusion_matrix.json"
-    )
+    json_path = client.download_artifacts(run.info.run_id, "lens/panels/confusion_matrix.json")
     payload = json.loads(Path(json_path).read_text())
     assert payload["type"] == "confusion_matrix"
     assert "matrix" in payload["data"]

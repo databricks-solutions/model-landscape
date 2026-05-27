@@ -5,7 +5,6 @@ from pathlib import Path
 
 import mlflow
 import plotly.graph_objects as go
-
 from mlflow_lens.classifier import precision_recall
 
 

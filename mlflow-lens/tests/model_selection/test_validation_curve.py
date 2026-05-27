@@ -5,9 +5,8 @@ from pathlib import Path
 
 import mlflow
 import plotly.graph_objects as go
-from sklearn.ensemble import RandomForestClassifier
-
 from mlflow_lens.model_selection import validation_curve
+from sklearn.ensemble import RandomForestClassifier
 
 
 def test_validation_curve_returns_figure(cls_dataset):
@@ -39,9 +38,7 @@ def test_validation_curve_logs_artifacts(experiment_id, cls_dataset):
         )
 
     client = mlflow.tracking.MlflowClient()
-    json_path = client.download_artifacts(
-        run.info.run_id, "lens/panels/validation_curve.json"
-    )
+    json_path = client.download_artifacts(run.info.run_id, "lens/panels/validation_curve.json")
     payload = json.loads(Path(json_path).read_text())
     assert payload["type"] == "validation_curve"
     assert payload["data"]["param_name"] == "max_depth"

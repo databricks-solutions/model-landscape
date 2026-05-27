@@ -4,9 +4,7 @@ import json
 from pathlib import Path
 
 import mlflow
-import numpy as np
 import plotly.graph_objects as go
-
 from mlflow_lens.classifier import roc_auc
 
 

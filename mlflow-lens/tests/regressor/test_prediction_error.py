@@ -5,7 +5,6 @@ from pathlib import Path
 
 import mlflow
 import plotly.graph_objects as go
-
 from mlflow_lens.regressor import prediction_error
 
 
@@ -30,9 +29,7 @@ def test_prediction_error_logs_artifacts(experiment_id, reg_data):
         prediction_error(model, X, y, log=True)
 
     client = mlflow.tracking.MlflowClient()
-    json_path = client.download_artifacts(
-        run.info.run_id, "lens/panels/prediction_error.json"
-    )
+    json_path = client.download_artifacts(run.info.run_id, "lens/panels/prediction_error.json")
     payload = json.loads(Path(json_path).read_text())
     assert payload["type"] == "prediction_error"
     assert "points" in payload["data"]

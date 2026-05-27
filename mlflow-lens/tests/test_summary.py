@@ -1,8 +1,5 @@
-import json
-
 import mlflow
 import pandas as pd
-
 from mlflow_lens import summary
 
 

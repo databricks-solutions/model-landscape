@@ -13,7 +13,9 @@ from mlflow_lens._plotly_theme import lens_layout
 from mlflow_lens._quickfn import quickfn
 
 
-def _build(alphas: np.ndarray, mean_scores: np.ndarray, std_scores: np.ndarray, **layout: Any) -> tuple:
+def _build(
+    alphas: np.ndarray, mean_scores: np.ndarray, std_scores: np.ndarray, **layout: Any
+) -> tuple:
     best_idx = int(np.argmax(mean_scores))
     best_alpha = float(alphas[best_idx])
 

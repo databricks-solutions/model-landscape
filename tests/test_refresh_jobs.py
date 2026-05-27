@@ -175,7 +175,11 @@ def test_trigger_refresh_job_falls_back_to_named_lookup(monkeypatch) -> None:
 
         def list(self, *, name=None, limit=None):
             self.list_name = name
-            return [SimpleNamespace(job_id=654, settings=SimpleNamespace(name="model-landscape-refresh"))]
+            return [
+                SimpleNamespace(
+                    job_id=654, settings=SimpleNamespace(name="model-landscape-refresh")
+                )
+            ]
 
         def run_now(self, **kwargs):
             self.run_call = kwargs
@@ -222,7 +226,10 @@ def test_trigger_refresh_job_resolves_dab_prefixed_name_by_suffix(monkeypatch) -
             if name is not None:
                 return []
             return [
-                SimpleNamespace(job_id=777, settings=SimpleNamespace(name="[dev volo_vragov] model-landscape-refresh"))
+                SimpleNamespace(
+                    job_id=777,
+                    settings=SimpleNamespace(name="[dev volo_vragov] model-landscape-refresh"),
+                )
             ]
 
         def run_now(self, **kwargs):
@@ -275,7 +282,9 @@ def test_trigger_refresh_job_falls_back_to_substring_match(monkeypatch) -> None:
             return [
                 SimpleNamespace(
                     job_id=888,
-                    settings=SimpleNamespace(name="[dev volo_vragov] model-landscape-refresh bootstrap"),
+                    settings=SimpleNamespace(
+                        name="[dev volo_vragov] model-landscape-refresh bootstrap"
+                    ),
                 )
             ]
 
@@ -356,8 +365,13 @@ def test_resolve_refresh_job_id_requires_unambiguous_suffix_match(monkeypatch) -
                 []
                 if kwargs.get("name") is not None
                 else [
-                    SimpleNamespace(job_id=1, settings=SimpleNamespace(name="[dev alice] model-landscape-refresh")),
-                    SimpleNamespace(job_id=2, settings=SimpleNamespace(name="[dev bob] model-landscape-refresh")),
+                    SimpleNamespace(
+                        job_id=1,
+                        settings=SimpleNamespace(name="[dev alice] model-landscape-refresh"),
+                    ),
+                    SimpleNamespace(
+                        job_id=2, settings=SimpleNamespace(name="[dev bob] model-landscape-refresh")
+                    ),
                 ]
             )
         )
@@ -418,14 +432,18 @@ def test_validate_workspace_readiness_reports_missing_workflow_configuration(mon
         ),
     )
 
-    readiness = refresh_jobs.validate_workspace_readiness(control_plane_ready=True, workspace_client=SimpleNamespace())
+    readiness = refresh_jobs.validate_workspace_readiness(
+        control_plane_ready=True, workspace_client=SimpleNamespace()
+    )
 
     assert readiness.overall_mode == "not_ready"
     assert readiness.refresh_workflow_configured is False
     assert any("REFRESH_JOB_ID" in issue for issue in readiness.blocking_issues)
 
 
-def test_validate_workspace_readiness_reports_scheduler_only_when_run_now_is_unconfirmed(monkeypatch) -> None:
+def test_validate_workspace_readiness_reports_scheduler_only_when_run_now_is_unconfirmed(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(
         refresh_jobs,
         "settings",
@@ -457,12 +475,18 @@ def test_validate_workspace_readiness_reports_scheduler_only_when_run_now_is_unc
     fake_workspace = SimpleNamespace(
         jobs=SimpleNamespace(
             get=lambda **_: fake_job,
-            get_permissions=lambda *_: (_ for _ in ()).throw(RuntimeError("permission read denied")),
+            get_permissions=lambda *_: (_ for _ in ()).throw(
+                RuntimeError("permission read denied")
+            ),
         ),
-        current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name="svc@app", display_name="svc@app")),
+        current_user=SimpleNamespace(
+            me=lambda: SimpleNamespace(user_name="svc@app", display_name="svc@app")
+        ),
     )
 
-    readiness = refresh_jobs.validate_workspace_readiness(control_plane_ready=True, workspace_client=fake_workspace)
+    readiness = refresh_jobs.validate_workspace_readiness(
+        control_plane_ready=True, workspace_client=fake_workspace
+    )
 
     assert readiness.overall_mode == "scheduler_only"
     assert readiness.refresh_workflow_resolved is True
@@ -472,7 +496,9 @@ def test_validate_workspace_readiness_reports_scheduler_only_when_run_now_is_unc
     assert not any("CAN_MANAGE_RUN on job 321" in warning for warning in readiness.warnings)
 
 
-def test_validate_workspace_readiness_reports_explicit_run_now_grant_when_manage_run_is_missing(monkeypatch) -> None:
+def test_validate_workspace_readiness_reports_explicit_run_now_grant_when_manage_run_is_missing(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(
         refresh_jobs,
         "settings",
@@ -515,17 +541,26 @@ def test_validate_workspace_readiness_reports_explicit_run_now_grant_when_manage
                 ]
             ),
         ),
-        current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name="svc@app", display_name="svc@app")),
+        current_user=SimpleNamespace(
+            me=lambda: SimpleNamespace(user_name="svc@app", display_name="svc@app")
+        ),
     )
 
-    readiness = refresh_jobs.validate_workspace_readiness(control_plane_ready=True, workspace_client=fake_workspace)
+    readiness = refresh_jobs.validate_workspace_readiness(
+        control_plane_ready=True, workspace_client=fake_workspace
+    )
 
     assert readiness.overall_mode == "scheduler_only"
     assert readiness.run_now_available is False
-    assert any("Grant the app service principal CAN_MANAGE_RUN on job 321." == warning for warning in readiness.warnings)
+    assert any(
+        "Grant the app service principal CAN_MANAGE_RUN on job 321." == warning
+        for warning in readiness.warnings
+    )
 
 
-def test_validate_workspace_readiness_treats_separate_bootstrap_lane_as_optional(monkeypatch) -> None:
+def test_validate_workspace_readiness_treats_separate_bootstrap_lane_as_optional(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(
         refresh_jobs,
         "settings",
@@ -587,22 +622,30 @@ def test_validate_workspace_readiness_treats_separate_bootstrap_lane_as_optional
 
     fake_workspace = SimpleNamespace(
         jobs=SimpleNamespace(get=get_job, get_permissions=get_permissions),
-        current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name="svc@app", display_name="svc@app")),
+        current_user=SimpleNamespace(
+            me=lambda: SimpleNamespace(user_name="svc@app", display_name="svc@app")
+        ),
     )
 
-    readiness = refresh_jobs.validate_workspace_readiness(control_plane_ready=True, workspace_client=fake_workspace)
+    readiness = refresh_jobs.validate_workspace_readiness(
+        control_plane_ready=True, workspace_client=fake_workspace
+    )
 
     assert readiness.overall_mode == "fully_ready"
     assert readiness.bootstrap_workflow_mode == "separate"
     assert readiness.bootstrap_workflow_resolved is True
     assert readiness.bootstrap_workflow_id == 654
     assert readiness.bootstrap_run_now_available is None
-    assert not any("no schedule or trigger configured" in issue.lower() for issue in readiness.blocking_issues)
+    assert not any(
+        "no schedule or trigger configured" in issue.lower() for issue in readiness.blocking_issues
+    )
     assert any("Direct trigger may still work" in warning for warning in readiness.warnings)
     assert not any("CAN_MANAGE_RUN on job 654" in warning for warning in readiness.warnings)
 
 
-def test_validate_workspace_readiness_reports_fully_ready_with_direct_manage_run_access(monkeypatch) -> None:
+def test_validate_workspace_readiness_reports_fully_ready_with_direct_manage_run_access(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(
         refresh_jobs,
         "settings",
@@ -645,10 +688,14 @@ def test_validate_workspace_readiness_reports_fully_ready_with_direct_manage_run
                 ]
             ),
         ),
-        current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name="svc@app", display_name="svc@app")),
+        current_user=SimpleNamespace(
+            me=lambda: SimpleNamespace(user_name="svc@app", display_name="svc@app")
+        ),
     )
 
-    readiness = refresh_jobs.validate_workspace_readiness(control_plane_ready=True, workspace_client=fake_workspace)
+    readiness = refresh_jobs.validate_workspace_readiness(
+        control_plane_ready=True, workspace_client=fake_workspace
+    )
 
     assert readiness.overall_mode == "fully_ready"
     assert readiness.run_now_available is True
@@ -688,17 +735,23 @@ def test_validate_workspace_readiness_blocks_paused_shared_schedule(monkeypatch)
             get=lambda **_: fake_job,
             get_permissions=lambda *_: SimpleNamespace(access_control_list=[]),
         ),
-        current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name="svc@app", display_name="svc@app")),
+        current_user=SimpleNamespace(
+            me=lambda: SimpleNamespace(user_name="svc@app", display_name="svc@app")
+        ),
     )
 
-    readiness = refresh_jobs.validate_workspace_readiness(control_plane_ready=True, workspace_client=fake_workspace)
+    readiness = refresh_jobs.validate_workspace_readiness(
+        control_plane_ready=True, workspace_client=fake_workspace
+    )
 
     assert readiness.overall_mode == "not_ready"
     assert readiness.scheduler_path_available is False
     assert any("paused" in issue.lower() for issue in readiness.blocking_issues)
 
 
-def test_resolve_shared_workflow_schedule_status_detects_supported_interval_and_manage_access(monkeypatch) -> None:
+def test_resolve_shared_workflow_schedule_status_detects_supported_interval_and_manage_access(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(
         refresh_jobs,
         "settings",
@@ -743,7 +796,9 @@ def test_resolve_shared_workflow_schedule_status_detects_supported_interval_and_
                 ]
             ),
         ),
-        current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name="svc@app", display_name="svc@app")),
+        current_user=SimpleNamespace(
+            me=lambda: SimpleNamespace(user_name="svc@app", display_name="svc@app")
+        ),
     )
 
     status = refresh_jobs.resolve_shared_workflow_schedule_status(fake_workspace)
@@ -814,7 +869,9 @@ def test_update_shared_workflow_schedule_updates_only_schedule_field(monkeypatch
     fake_jobs = FakeJobs()
     fake_workspace = SimpleNamespace(
         jobs=fake_jobs,
-        current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name="svc@app", display_name="svc@app")),
+        current_user=SimpleNamespace(
+            me=lambda: SimpleNamespace(user_name="svc@app", display_name="svc@app")
+        ),
     )
 
     status = refresh_jobs.update_shared_workflow_schedule(12, workspace_client=fake_workspace)

@@ -9,7 +9,6 @@ import pandas as pd
 from model_landscape.domain.models import MonitorConfig
 from model_landscape.services.sql_utils import validate_identifier
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -87,7 +86,9 @@ class LakebaseConnection:
         from databricks.sdk import WorkspaceClient
 
         workspace = WorkspaceClient()
-        credential = workspace.database.generate_database_credential(instance_names=[self._instance_name])
+        credential = workspace.database.generate_database_credential(
+            instance_names=[self._instance_name]
+        )
         return (credential.token or "").strip()
 
     def _connection_kwargs(self) -> dict[str, Any]:
@@ -346,9 +347,7 @@ class LakebaseReadModel:
         if incident_rows:
             incident_key_placeholders = ", ".join(["(%s, %s, %s)"] * len(incident_rows))
             incident_key_params = tuple(
-                value
-                for row in incident_rows
-                for value in (row[0], row[1], row[2])
+                value for row in incident_rows for value in (row[0], row[1], row[2])
             )
             self._connection.execute(
                 f"""

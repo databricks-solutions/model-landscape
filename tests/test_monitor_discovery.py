@@ -51,7 +51,9 @@ class FakeRepository:
                 {"col_name": "label_timestamp", "data_type": "timestamp"},
             ]
         )
-        self.labels_preview = pd.DataFrame([{"entity_id": "ent-1", "label": 1, "label_timestamp": "2026-01-03T00:00:00"}])
+        self.labels_preview = pd.DataFrame(
+            [{"entity_id": "ent-1", "label": 1, "label_timestamp": "2026-01-03T00:00:00"}]
+        )
         self.bounded_samples = {
             "main.demo.inference_logs": pd.DataFrame(
                 [
@@ -77,7 +79,9 @@ class FakeRepository:
         columns = [str(value) for value in self.source_schema["col_name"].tolist()]
         return columns, self.source_preview.copy(), self.source_schema.copy()
 
-    def sample_bounded_rows(self, table_name: str, columns: list[str] | tuple[str, ...], *, max_total_rows: int = 2000):
+    def sample_bounded_rows(
+        self, table_name: str, columns: list[str] | tuple[str, ...], *, max_total_rows: int = 2000
+    ):
         del max_total_rows
         frame = self.bounded_samples.get(table_name, pd.DataFrame())
         selected = [column for column in columns if column in frame.columns]
@@ -377,14 +381,19 @@ def test_discovery_prefers_shared_string_join_key_and_string_timestamps() -> Non
     assert result.config.labels_order_col == "label_timestamp"
     assert result.label_validation["matched_rows"] == 0
     assert result.requires_review is True
-    assert any("No rows matched between inference and labels tables" in warning for warning in result.warnings)
+    assert any(
+        "No rows matched between inference and labels tables" in warning
+        for warning in result.warnings
+    )
 
 
 def test_discovery_keeps_all_numeric_features_for_wide_schemas() -> None:
     class _WideRepository(FakeRepository):
         def __init__(self) -> None:
             super().__init__()
-            feature_schema = [{"col_name": f"feature_{index}", "data_type": "double"} for index in range(75)]
+            feature_schema = [
+                {"col_name": f"feature_{index}", "data_type": "double"} for index in range(75)
+            ]
             self.source_schema = pd.DataFrame(
                 [
                     {"col_name": "event_ts", "data_type": "timestamp"},

@@ -61,7 +61,14 @@ def layout():
                     dbc.Col(
                         [
                             dbc.Label("Bin Count", className="text-muted"),
-                            dbc.Input(id="deepdive-bin-count-input", type="number", min=2, max=200, step=1, value=40),
+                            dbc.Input(
+                                id="deepdive-bin-count-input",
+                                type="number",
+                                min=2,
+                                max=200,
+                                step=1,
+                                value=40,
+                            ),
                         ],
                         md=2,
                     ),
@@ -99,8 +106,19 @@ def layout():
                 [
                     dbc.Col(
                         [
-                            dbc.Label("Outlier Parameter", id="deepdive-outlier-value-label", className="text-muted"),
-                            dbc.Input(id="deepdive-outlier-value-input", type="number", min=0, step=0.1, value=1.0, disabled=True),
+                            dbc.Label(
+                                "Outlier Parameter",
+                                id="deepdive-outlier-value-label",
+                                className="text-muted",
+                            ),
+                            dbc.Input(
+                                id="deepdive-outlier-value-input",
+                                type="number",
+                                min=0,
+                                step=0.1,
+                                value=1.0,
+                                disabled=True,
+                            ),
                             html.Small(
                                 "Percentile Clip uses P / 100-P clipping. IQR Fence uses Q1 - K*IQR to Q3 + K*IQR.",
                                 id="deepdive-outlier-value-help",
@@ -140,7 +158,10 @@ def layout():
             dbc.Card(
                 dbc.CardBody(
                     [
-                        html.H6([html.I(className="fas fa-circle-info me-2"), "Feature Context"], className="text-light mb-2"),
+                        html.H6(
+                            [html.I(className="fas fa-circle-info me-2"), "Feature Context"],
+                            className="text-light mb-2",
+                        ),
                         html.Div(
                             id="deepdive-context-container",
                             children="Dimension breakdown uses the latest current window and the selected slice column from the monitor contract.",

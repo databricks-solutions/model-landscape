@@ -6,7 +6,6 @@ from dash import dcc, html
 from model_landscape.config import settings
 from model_landscape.ui.styles import COLORS
 
-
 PRIMARY_NAV_ITEMS = [
     {"label": "Overview", "icon": "fas fa-chart-line", "href": "/"},
     {"label": "Incidents", "icon": "fas fa-triangle-exclamation", "href": "/incidents"},
@@ -24,7 +23,9 @@ def build_sidebar():
             html.Div(
                 [
                     html.H5(settings.app_title, className="text-light mb-1"),
-                    html.Small("Databricks-native model observability", className="text-muted d-block mb-2"),
+                    html.Small(
+                        "Databricks-native model observability", className="text-muted d-block mb-2"
+                    ),
                     html.Div(id="sidebar-mode-banner", className="mb-2"),
                     html.Hr(style={"borderColor": COLORS["grid"]}),
                     html.Small("Active Model", className="text-muted d-block mb-1"),
@@ -40,7 +41,11 @@ def build_sidebar():
                 [
                     dbc.Nav(
                         [
-                            dbc.NavLink([html.I(className=f"{item['icon']} me-2"), item["label"]], href=item["href"], active="exact")
+                            dbc.NavLink(
+                                [html.I(className=f"{item['icon']} me-2"), item["label"]],
+                                href=item["href"],
+                                active="exact",
+                            )
                             for item in PRIMARY_NAV_ITEMS
                         ],
                         vertical=True,

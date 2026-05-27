@@ -4,7 +4,6 @@ from collections import Counter
 from statistics import median
 from typing import Any
 
-
 _STAGES: tuple[tuple[str, str], ...] = (
     ("source_metadata_ms", "Source Metadata"),
     ("daily_profiles_ms", "Daily Profiles"),
@@ -57,7 +56,9 @@ def _duration_ms(run: dict[str, Any]) -> int:
     return sum(_safe_int(run.get(column)) for column, _ in _STAGES)
 
 
-def _stage_breakdown(run: dict[str, Any], *, total_duration_ms: int) -> dict[str, dict[str, float | int | str]]:
+def _stage_breakdown(
+    run: dict[str, Any], *, total_duration_ms: int
+) -> dict[str, dict[str, float | int | str]]:
     if total_duration_ms <= 0:
         return {
             stage_key: {"label": stage_label, "ms": _safe_int(run.get(stage_key)), "share_pct": 0.0}
@@ -74,10 +75,14 @@ def _stage_breakdown(run: dict[str, Any], *, total_duration_ms: int) -> dict[str
     return breakdown
 
 
-def _classify_bottleneck(status: str, stage_breakdown: dict[str, dict[str, float | int | str]], *, total_duration_ms: int) -> tuple[str, str]:
+def _classify_bottleneck(
+    status: str, stage_breakdown: dict[str, dict[str, float | int | str]], *, total_duration_ms: int
+) -> tuple[str, str]:
     if status != "completed" or total_duration_ms <= 0:
         return "insufficient_data", "Insufficient Data"
-    dominant_stage_key = max(stage_breakdown, key=lambda key: float(stage_breakdown[key]["share_pct"]))
+    dominant_stage_key = max(
+        stage_breakdown, key=lambda key: float(stage_breakdown[key]["share_pct"])
+    )
     dominant_share_pct = float(stage_breakdown[dominant_stage_key]["share_pct"])
     dominant_stage_label = str(stage_breakdown[dominant_stage_key]["label"])
     if dominant_share_pct < 45.0:
@@ -176,7 +181,9 @@ def build_refresh_diagnostics(runs: list[dict[str, Any]] | None) -> dict[str, An
         status = _safe_str(run.get("status")).lower()
         total_duration_ms = _duration_ms(run)
         stage_breakdown = _stage_breakdown(run, total_duration_ms=total_duration_ms)
-        category, dominant_stage_label = _classify_bottleneck(status, stage_breakdown, total_duration_ms=total_duration_ms)
+        category, dominant_stage_label = _classify_bottleneck(
+            status, stage_breakdown, total_duration_ms=total_duration_ms
+        )
         recommendation = _recommendations_for_category(category)[0]
         diagnosed_runs.append(
             {
@@ -223,12 +230,18 @@ def build_refresh_diagnostics(runs: list[dict[str, Any]] | None) -> dict[str, An
     compute_footprint_category, compute_footprint_label = _compute_footprint(successful_timed_runs)
     recommendations = list(_recommendations_for_category(dominant_category))
     if success_rate_pct < 60.0 and diagnosed_runs:
-        recommendations.insert(0, "Recent failures limit timing guidance. Review recent error messages first.")
+        recommendations.insert(
+            0, "Recent failures limit timing guidance. Review recent error messages first."
+        )
     summary = {
         "recent_run_count": len(diagnosed_runs),
-        "successful_run_count": len([run for run in diagnosed_runs if run["status"].lower() == "completed"]),
+        "successful_run_count": len(
+            [run for run in diagnosed_runs if run["status"].lower() == "completed"]
+        ),
         "success_rate_pct": success_rate_pct,
-        "median_duration_ms": int(median(run["total_duration_ms"] for run in successful_timed_runs)) if successful_timed_runs else 0,
+        "median_duration_ms": int(median(run["total_duration_ms"] for run in successful_timed_runs))
+        if successful_timed_runs
+        else 0,
         "dominant_bottleneck": _BOTTLENECK_LABELS[dominant_category],
         "dominant_bottleneck_category": dominant_category,
         "trend": _TREND_LABELS[_trend_label(successful_timed_runs)],

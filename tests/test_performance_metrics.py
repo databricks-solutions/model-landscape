@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-import pytest
 import pandas as pd
+import pytest
 
 from model_landscape.analytics.performance import (
     compute_bin_edges,
@@ -13,7 +13,10 @@ from model_landscape.analytics.performance import (
 from model_landscape.domain.models import MonitorConfig
 from model_landscape.services.inference_contracts import build_inference_contract as build_contract
 from model_landscape.services.onboarding import build_default_baseline
-from model_landscape.services.refresh_engine import build_daily_performance_profile_rows, build_performance_bin_specs
+from model_landscape.services.refresh_engine import (
+    build_daily_performance_profile_rows,
+    build_performance_bin_specs,
+)
 
 
 def _classification_contract() -> object:
@@ -233,7 +236,9 @@ def test_daily_performance_profiles_skip_precision_recall_and_f1_when_no_detecti
     assert {row["metric_name"] for row in rows} == {"accuracy"}
 
 
-def test_classification_metrics_prefer_discrete_prediction_labels_over_prediction_score_col() -> None:
+def test_classification_metrics_prefer_discrete_prediction_labels_over_prediction_score_col() -> (
+    None
+):
     frame = pd.DataFrame(
         [
             {"prediction": "negative", "prediction_score": 0.9, "label": 1},
@@ -259,7 +264,9 @@ def test_classification_metrics_prefer_discrete_prediction_labels_over_predictio
     assert with_score == without_score
 
 
-def test_classification_metrics_use_prediction_score_col_when_prediction_labels_are_not_binary() -> None:
+def test_classification_metrics_use_prediction_score_col_when_prediction_labels_are_not_binary() -> (
+    None
+):
     frame = pd.DataFrame(
         [
             {"prediction": "watch", "prediction_score": 0.9, "label": 1},
@@ -303,7 +310,9 @@ def test_classification_metrics_return_nulls_for_undefined_precision_recall_and_
     assert metrics == {"precision": None, "recall": None, "f1": None, "accuracy": 1.0}
 
 
-def test_daily_classification_metrics_hide_classification_scores_when_no_positive_detections_exist() -> None:
+def test_daily_classification_metrics_hide_classification_scores_when_no_positive_detections_exist() -> (
+    None
+):
     frame = pd.DataFrame(
         [
             {"prediction": 0.1, "label": 1},

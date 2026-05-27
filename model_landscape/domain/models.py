@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import date
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 from model_landscape.domain.performance_metrics import (
@@ -12,11 +12,16 @@ from model_landscape.domain.performance_metrics import (
 )
 from model_landscape.services.thresholds import normalize_threshold_overrides
 
-
 REQUIRED_INFERENCE_COLUMNS = ("event_ts", "prediction")
 OPTIONAL_INFERENCE_COLUMNS = ("model_version", "prediction_proba", "label", "entity_id")
 DRIFT_CADENCE_PRESETS = ("hourly", "6h", "daily", "manual")
-PERFORMANCE_CADENCE_PRESETS = ("disabled", "6h_3d_repair", "daily_7d_repair", "daily_14d_repair", "manual")
+PERFORMANCE_CADENCE_PRESETS = (
+    "disabled",
+    "6h_3d_repair",
+    "daily_7d_repair",
+    "daily_14d_repair",
+    "manual",
+)
 PERFORMANCE_BINNING_MODES = ("quantile", "fixed_width")
 
 
@@ -68,7 +73,9 @@ class BaselinePolicy:
             raise ValueError("baseline_end must be on or after baseline_start.")
         object.__setattr__(self, "baseline_start", start)
         object.__setattr__(self, "baseline_end", end)
-        object.__setattr__(self, "n_days", (date.fromisoformat(end) - date.fromisoformat(start)).days + 1)
+        object.__setattr__(
+            self, "n_days", (date.fromisoformat(end) - date.fromisoformat(start)).days + 1
+        )
 
     @property
     def is_fixed(self) -> bool:
@@ -147,27 +154,45 @@ class MonitorConfig:
         if drift not in DRIFT_CADENCE_PRESETS:
             raise ValueError(f"Unsupported drift cadence preset: {self.drift_cadence_preset!r}")
         if performance not in PERFORMANCE_CADENCE_PRESETS:
-            raise ValueError(f"Unsupported performance cadence preset: {self.performance_cadence_preset!r}")
+            raise ValueError(
+                f"Unsupported performance cadence preset: {self.performance_cadence_preset!r}"
+            )
         if binning_mode not in PERFORMANCE_BINNING_MODES:
-            raise ValueError(f"Unsupported performance binning mode: {self.performance_binning_mode!r}")
+            raise ValueError(
+                f"Unsupported performance binning mode: {self.performance_binning_mode!r}"
+            )
         if status not in {"active", "inactive"}:
             raise ValueError(f"Unsupported monitor status: {self.status!r}")
         if self.model_id_value and not self.contract.model_id_col:
             raise ValueError("Monitored Model ID Value requires a mapped Model ID Column.")
-        clip_percentile = None if self.performance_binning_clip_percentile in (None, "") else float(self.performance_binning_clip_percentile)
+        clip_percentile = (
+            None
+            if self.performance_binning_clip_percentile in (None, "")
+            else float(self.performance_binning_clip_percentile)
+        )
         if clip_percentile is not None and not (0.0 < clip_percentile < 50.0):
             raise ValueError("performance_binning_clip_percentile must be between 0 and 50.")
-        normalized_metric_names = normalize_performance_metric_names(problem_type, self.performance_metric_names)
-        default_metric = resolve_default_performance_metric(problem_type, normalized_metric_names, self.default_performance_metric)
+        normalized_metric_names = normalize_performance_metric_names(
+            problem_type, self.performance_metric_names
+        )
+        default_metric = resolve_default_performance_metric(
+            problem_type, normalized_metric_names, self.default_performance_metric
+        )
         object.__setattr__(self, "problem_type", problem_type)
         object.__setattr__(self, "performance_metric_names", normalized_metric_names)
-        object.__setattr__(self, "default_performance_metric", default_metric or default_primary_performance_metric(problem_type))
+        object.__setattr__(
+            self,
+            "default_performance_metric",
+            default_metric or default_primary_performance_metric(problem_type),
+        )
         object.__setattr__(self, "performance_binning_mode", binning_mode)
         object.__setattr__(self, "performance_binning_clip_percentile", clip_percentile)
         object.__setattr__(self, "drift_cadence_preset", drift)
         object.__setattr__(self, "performance_cadence_preset", performance)
         object.__setattr__(self, "status", status)
-        object.__setattr__(self, "threshold_overrides", normalize_threshold_overrides(self.threshold_overrides))
+        object.__setattr__(
+            self, "threshold_overrides", normalize_threshold_overrides(self.threshold_overrides)
+        )
 
     @property
     def has_labels(self) -> bool:

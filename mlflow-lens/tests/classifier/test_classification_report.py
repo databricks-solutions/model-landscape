@@ -5,7 +5,6 @@ from pathlib import Path
 
 import mlflow
 import plotly.graph_objects as go
-
 from mlflow_lens.classifier import classification_report
 
 
@@ -29,13 +28,9 @@ def test_classification_report_logs_artifacts(experiment_id, binary_data):
         classification_report(model, X, y, log=True)
 
     client = mlflow.tracking.MlflowClient()
-    json_path = client.download_artifacts(
-        run.info.run_id, "lens/panels/classification_report.json"
-    )
+    json_path = client.download_artifacts(run.info.run_id, "lens/panels/classification_report.json")
     payload = json.loads(Path(json_path).read_text())
     assert payload["type"] == "classification_report"
     assert isinstance(payload["data"], list)
     assert "precision" in payload["data"][0]
-    client.download_artifacts(
-        run.info.run_id, "lens/panels/classification_report.html"
-    )
+    client.download_artifacts(run.info.run_id, "lens/panels/classification_report.html")

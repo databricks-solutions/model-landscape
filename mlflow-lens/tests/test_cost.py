@@ -1,5 +1,4 @@
 import mlflow
-
 from mlflow_lens.cost import log_cost_context
 
 

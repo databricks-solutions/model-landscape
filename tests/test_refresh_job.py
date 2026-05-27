@@ -83,7 +83,9 @@ def test_refresh_job_defaults_single_model_scheduler_run_to_bootstrap(monkeypatc
         captured["model_key"] = model_key
         captured["mode"] = mode
         captured["scope"] = scope
-        return SimpleNamespace(models=1, drift_rows=2, quality_rows=3, performance_rows=4, incident_rows=5)
+        return SimpleNamespace(
+            models=1, drift_rows=2, quality_rows=3, performance_rows=4, incident_rows=5
+        )
 
     monkeypatch.setattr(refresh_job, "run_refresh_cycle", _fake_run_refresh_cycle)
 

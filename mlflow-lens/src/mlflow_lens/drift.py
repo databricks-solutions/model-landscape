@@ -19,6 +19,8 @@ from mlflow_lens._version import __version__
 from mlflow_lens.analytics.drift import (
     compute_js,
     compute_kl,
+)
+from mlflow_lens.analytics.drift import (
     compute_psi as _analytics_psi,
 )
 
@@ -94,9 +96,7 @@ def classify_drift(psi: float) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _compute_feature_drift(
-    ref_df: pd.DataFrame, cur_df: pd.DataFrame, n_bins: int
-) -> list[dict]:
+def _compute_feature_drift(ref_df: pd.DataFrame, cur_df: pd.DataFrame, n_bins: int) -> list[dict]:
     results = []
     shared_cols = [c for c in ref_df.columns if c in cur_df.columns]
     for col in shared_cols:
@@ -114,22 +114,22 @@ def _compute_feature_drift(
         kl = compute_kl(ref_arr, cur_arr, n_bins)
         js = compute_js(ref_arr, cur_arr, n_bins)
 
-        results.append({
-            "name": col,
-            "psi": round(psi, 4),
-            "kl_divergence": round(kl, 4),
-            "js_divergence": round(js, 4),
-            "status": classify_drift(psi),
-            "ref_mean": round(float(np.mean(ref_vals)), 4),
-            "cur_mean": round(float(np.mean(cur_vals)), 4),
-            "mean_delta": round(float(np.mean(cur_vals) - np.mean(ref_vals)), 4),
-        })
+        results.append(
+            {
+                "name": col,
+                "psi": round(psi, 4),
+                "kl_divergence": round(kl, 4),
+                "js_divergence": round(js, 4),
+                "status": classify_drift(psi),
+                "ref_mean": round(float(np.mean(ref_vals)), 4),
+                "cur_mean": round(float(np.mean(cur_vals)), 4),
+                "mean_delta": round(float(np.mean(cur_vals) - np.mean(ref_vals)), 4),
+            }
+        )
     return results
 
 
-def _compute_prediction_shift(
-    ref_preds: np.ndarray, cur_preds: np.ndarray, n_bins: int
-) -> dict:
+def _compute_prediction_shift(ref_preds: np.ndarray, cur_preds: np.ndarray, n_bins: int) -> dict:
     psi = _analytics_psi(ref_preds, cur_preds, n_bins)
     kl = compute_kl(ref_preds, cur_preds, n_bins)
     js = compute_js(ref_preds, cur_preds, n_bins)
@@ -186,12 +186,12 @@ def _load_snapshot_features(run_id: str) -> pd.DataFrame:
         for col, stats in snapshot.get("feature_stats", {}).items():
             data[col] = stats["values"]
         return pd.DataFrame(data)
-    except Exception:
+    except Exception as e:
         raise ValueError(
             f"No drift snapshot found for run {run_id}. "
             "Pass reference_features explicitly or ensure the reference run "
             "was created with log_drift()."
-        )
+        ) from e
 
 
 def _load_snapshot_predictions(run_id: str) -> np.ndarray | None:

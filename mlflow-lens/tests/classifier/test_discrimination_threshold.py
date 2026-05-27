@@ -6,7 +6,6 @@ from pathlib import Path
 import mlflow
 import plotly.graph_objects as go
 import pytest
-
 from mlflow_lens.classifier import discrimination_threshold
 
 
@@ -38,6 +37,4 @@ def test_discrimination_threshold_logs_artifacts(experiment_id, binary_data):
     assert payload["type"] == "discrimination_threshold"
     assert "best_threshold" in payload["data"]
     assert 0.0 <= payload["data"]["best_threshold"] <= 1.0
-    client.download_artifacts(
-        run.info.run_id, "lens/panels/discrimination_threshold.html"
-    )
+    client.download_artifacts(run.info.run_id, "lens/panels/discrimination_threshold.html")

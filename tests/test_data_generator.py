@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import sys
-from datetime import date, timedelta
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -22,7 +20,6 @@ from _resources.data_generator import (
     generate_maintenance_labels,
 )
 from mlflow_lens.analytics.drift import compute_psi
-
 
 # ---------------------------------------------------------------------------
 # Reproducibility + train/serving consistency
@@ -56,10 +53,18 @@ class TestTrainingSet:
 
     def test_required_columns(self, train_df: pd.DataFrame) -> None:
         required = {
-            "transaction_id", "timestamp", "transaction_amount",
-            "device_trust_score", "distance_from_home_km", "velocity_24h",
-            "account_age_days", "hour_of_day", "is_weekend",
-            "merchant_category", "region", "is_fraud",
+            "transaction_id",
+            "timestamp",
+            "transaction_amount",
+            "device_trust_score",
+            "distance_from_home_km",
+            "velocity_24h",
+            "account_age_days",
+            "hour_of_day",
+            "is_weekend",
+            "merchant_category",
+            "region",
+            "is_fraud",
         }
         assert required.issubset(train_df.columns)
 
@@ -105,9 +110,15 @@ class TestFraudInference:
 
     def test_feature_columns(self, fraud_df: pd.DataFrame) -> None:
         features = {
-            "transaction_amount", "merchant_category", "device_trust_score",
-            "distance_from_home_km", "velocity_24h", "hour_of_day",
-            "is_weekend", "account_age_days", "region",
+            "transaction_amount",
+            "merchant_category",
+            "device_trust_score",
+            "distance_from_home_km",
+            "velocity_24h",
+            "hour_of_day",
+            "is_weekend",
+            "account_age_days",
+            "region",
         }
         assert features.issubset(fraud_df.columns)
 
@@ -123,7 +134,11 @@ class TestFraudInference:
 
     def test_categorical_values(self, fraud_df: pd.DataFrame) -> None:
         assert set(fraud_df["merchant_category"].dropna().unique()) == {
-            "retail", "online", "dining", "travel", "grocery"
+            "retail",
+            "online",
+            "dining",
+            "travel",
+            "grocery",
         }
         assert set(fraud_df["region"].dropna().unique()) == {"na", "eu", "apac", "latam"}
 
@@ -133,10 +148,16 @@ class TestFraudInference:
         fraud_df["day"] = pd.to_datetime(fraud_df["event_ts"]).dt.date
         days_sorted = sorted(fraud_df["day"].unique())
 
-        early_nulls = fraud_df[fraud_df["day"].isin(days_sorted[:14])]["device_trust_score"].isna().mean()
-        spike_nulls = fraud_df[fraud_df["day"].isin(days_sorted[32:42])]["device_trust_score"].isna().mean()
+        early_nulls = (
+            fraud_df[fraud_df["day"].isin(days_sorted[:14])]["device_trust_score"].isna().mean()
+        )
+        spike_nulls = (
+            fraud_df[fraud_df["day"].isin(days_sorted[32:42])]["device_trust_score"].isna().mean()
+        )
 
-        assert spike_nulls > early_nulls * 2, f"Expected null spike: early={early_nulls:.3f}, spike={spike_nulls:.3f}"
+        assert spike_nulls > early_nulls * 2, (
+            f"Expected null spike: early={early_nulls:.3f}, spike={spike_nulls:.3f}"
+        )
 
 
 class TestFraudLabels:
@@ -154,7 +175,9 @@ class TestFraudLabels:
         merged = labels_df.merge(
             inference_df[["entity_id", "event_ts"]], on="entity_id", how="left"
         )
-        assert (pd.to_datetime(merged["label_timestamp"]) >= pd.to_datetime(merged["event_ts"])).all()
+        assert (
+            pd.to_datetime(merged["label_timestamp"]) >= pd.to_datetime(merged["event_ts"])
+        ).all()
 
 
 class TestFraudPSICalibration:
@@ -168,7 +191,8 @@ class TestFraudPSICalibration:
     def daily_data(self, fraud_df: pd.DataFrame) -> dict[int, pd.DataFrame]:
         fraud_df = fraud_df.copy()
         fraud_df["day_idx"] = (
-            pd.to_datetime(fraud_df["event_ts"]).dt.date - pd.to_datetime(fraud_df["event_ts"]).dt.date.min()
+            pd.to_datetime(fraud_df["event_ts"]).dt.date
+            - pd.to_datetime(fraud_df["event_ts"]).dt.date.min()
         ).apply(lambda d: d.days)
         return {day: group for day, group in fraud_df.groupby("day_idx")}
 
@@ -201,7 +225,9 @@ class TestFraudPSICalibration:
         for feat in ["transaction_amount", "distance_from_home_km", "velocity_24h"]:
             psi_values[feat] = self._compute_feature_psi(baseline, comparison, feat)
         max_psi = max(psi_values.values())
-        assert max_psi >= 0.25, f"No feature crossed critical threshold during sudden drift: {psi_values}"
+        assert max_psi >= 0.25, (
+            f"No feature crossed critical threshold during sudden drift: {psi_values}"
+        )
 
     def test_recovery_psi_decreases(self, daily_data: dict[int, pd.DataFrame]) -> None:
         """During recovery (days 46-55), PSI should be lower than peak drift."""
@@ -236,10 +262,17 @@ class TestMaintenanceInference:
 
     def test_feature_columns(self, maint_df: pd.DataFrame) -> None:
         features = {
-            "vibration_mm_s", "temperature_c", "pressure_kpa", "rpm",
-            "oil_viscosity", "power_output_kw", "ambient_temp_c",
-            "operating_hours_since_service", "load_factor",
-            "equipment_class", "site",
+            "vibration_mm_s",
+            "temperature_c",
+            "pressure_kpa",
+            "rpm",
+            "oil_viscosity",
+            "power_output_kw",
+            "ambient_temp_c",
+            "operating_hours_since_service",
+            "load_factor",
+            "equipment_class",
+            "site",
         }
         assert features.issubset(maint_df.columns)
 
@@ -252,13 +285,25 @@ class TestMaintenanceInference:
         """oil_viscosity should be 100% null for plant_east during days 45-55."""
         maint_df = maint_df.copy()
         start = pd.to_datetime(maint_df["event_ts"]).dt.date.min()
-        maint_df["day_idx"] = (pd.to_datetime(maint_df["event_ts"]).dt.date - start).apply(lambda d: d.days)
+        maint_df["day_idx"] = (pd.to_datetime(maint_df["event_ts"]).dt.date - start).apply(
+            lambda d: d.days
+        )
 
-        outage = maint_df[(maint_df["day_idx"] >= 45) & (maint_df["day_idx"] <= 55) & (maint_df["site"] == "plant_east")]
-        assert outage["oil_viscosity"].isna().mean() == 1.0, "plant_east oil_viscosity should be fully null during outage"
+        outage = maint_df[
+            (maint_df["day_idx"] >= 45)
+            & (maint_df["day_idx"] <= 55)
+            & (maint_df["site"] == "plant_east")
+        ]
+        assert outage["oil_viscosity"].isna().mean() == 1.0, (
+            "plant_east oil_viscosity should be fully null during outage"
+        )
 
         # Other sites should be fine
-        other = maint_df[(maint_df["day_idx"] >= 45) & (maint_df["day_idx"] <= 55) & (maint_df["site"] != "plant_east")]
+        other = maint_df[
+            (maint_df["day_idx"] >= 45)
+            & (maint_df["day_idx"] <= 55)
+            & (maint_df["site"] != "plant_east")
+        ]
         assert other["oil_viscosity"].isna().mean() < 0.05
 
     def test_equipment_ids(self, maint_df: pd.DataFrame) -> None:
@@ -278,7 +323,9 @@ class TestMaintenancePSICalibration:
     def daily_data(self, maint_df: pd.DataFrame) -> dict[int, pd.DataFrame]:
         maint_df = maint_df.copy()
         start = pd.to_datetime(maint_df["event_ts"]).dt.date.min()
-        maint_df["day_idx"] = (pd.to_datetime(maint_df["event_ts"]).dt.date - start).apply(lambda d: d.days)
+        maint_df["day_idx"] = (pd.to_datetime(maint_df["event_ts"]).dt.date - start).apply(
+            lambda d: d.days
+        )
         return {day: group for day, group in maint_df.groupby("day_idx")}
 
     def _baseline(self, daily_data: dict[int, pd.DataFrame]) -> pd.DataFrame:

@@ -91,8 +91,10 @@ def _from_predictions(
     **layout: Any,
 ) -> tuple:
     """Confusion matrix from pre-computed predictions."""
-    classes = labels if labels is not None else sorted(
-        set(np.asarray(y_true).tolist()) | set(np.asarray(y_pred).tolist())
+    classes = (
+        labels
+        if labels is not None
+        else sorted(set(np.asarray(y_true).tolist()) | set(np.asarray(y_pred).tolist()))
     )
     return _build(y_true, y_pred, classes, normalize=normalize, **layout)
 

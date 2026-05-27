@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 import json
 import re
+from collections.abc import Mapping
 from typing import Any
-
 
 _IDENTIFIER_PART_RE = re.compile(r"\A[a-zA-Z0-9_]+\Z")
 _COLUMN_IDENTIFIER_RE = re.compile(r"\A[a-zA-Z0-9_][a-zA-Z0-9_-]*\Z")

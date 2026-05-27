@@ -3,7 +3,6 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-
 EPSILON = 1e-10
 
 
@@ -26,7 +25,9 @@ def _stable_histogram_edges(reference: np.ndarray, current: np.ndarray, n_bins: 
     return np.linspace(lower, upper, num=max(2, n_bins + 1), dtype=float)
 
 
-def _histogram(reference: np.ndarray, current: np.ndarray, n_bins: int = 20) -> tuple[np.ndarray, np.ndarray]:
+def _histogram(
+    reference: np.ndarray, current: np.ndarray, n_bins: int = 20
+) -> tuple[np.ndarray, np.ndarray]:
     ref = reference[~np.isnan(reference)]
     cur = current[~np.isnan(current)]
     if len(ref) == 0 or len(cur) == 0:
@@ -82,7 +83,9 @@ def _numeric_feature_frame(df: pd.DataFrame, features: list[str]) -> pd.DataFram
     return frame
 
 
-def _categorical_distribution(reference: pd.Series, current: pd.Series) -> tuple[np.ndarray, np.ndarray]:
+def _categorical_distribution(
+    reference: pd.Series, current: pd.Series
+) -> tuple[np.ndarray, np.ndarray]:
     ref = reference.astype("string").fillna("__NULL__")
     cur = current.astype("string").fillna("__NULL__")
     categories = sorted(set(ref.tolist()) | set(cur.tolist()))
@@ -131,8 +134,12 @@ def compute_categorical_distribution_metrics(
     categories = sorted(set(reference_counts) | set(current_counts))
     if not categories:
         return float("nan"), float("nan"), float("nan")
-    ref_counts = np.array([float(reference_counts.get(category, 0.0)) for category in categories], dtype=float)
-    cur_counts = np.array([float(current_counts.get(category, 0.0)) for category in categories], dtype=float)
+    ref_counts = np.array(
+        [float(reference_counts.get(category, 0.0)) for category in categories], dtype=float
+    )
+    cur_counts = np.array(
+        [float(current_counts.get(category, 0.0)) for category in categories], dtype=float
+    )
     if ref_counts.sum() == 0 or cur_counts.sum() == 0:
         return float("nan"), float("nan"), float("nan")
     ref_props = ref_counts / ref_counts.sum() + EPSILON
@@ -175,41 +182,51 @@ def compute_feature_drift(
     rows: list[dict] = []
     for feature in shared_features:
         if feature in categorical_set:
-            ref_values = reference_df[feature] if feature in reference_df.columns else pd.Series(dtype="string")
-            cur_values = current_df[feature] if feature in current_df.columns else pd.Series(dtype="string")
+            ref_values = (
+                reference_df[feature]
+                if feature in reference_df.columns
+                else pd.Series(dtype="string")
+            )
+            cur_values = (
+                current_df[feature] if feature in current_df.columns else pd.Series(dtype="string")
+            )
             if ref_values.empty or cur_values.empty:
                 continue
-            rows.append({
-                "feature_name": feature,
-                "psi": round(_categorical_psi(ref_values, cur_values), 6),
-                "kl_divergence": round(_categorical_kl(ref_values, cur_values), 6),
-                "js_divergence": round(_categorical_js(ref_values, cur_values), 6),
-                "ref_mean": float("nan"),
-                "cur_mean": float("nan"),
-                "ref_std": float("nan"),
-                "cur_std": float("nan"),
-                "ref_null_pct": round(float(ref_values.isna().mean() * 100), 2),
-                "cur_null_pct": round(float(cur_values.isna().mean() * 100), 2),
-                "ref_count": int(ref_values.notna().sum()),
-                "cur_count": int(cur_values.notna().sum()),
-            })
+            rows.append(
+                {
+                    "feature_name": feature,
+                    "psi": round(_categorical_psi(ref_values, cur_values), 6),
+                    "kl_divergence": round(_categorical_kl(ref_values, cur_values), 6),
+                    "js_divergence": round(_categorical_js(ref_values, cur_values), 6),
+                    "ref_mean": float("nan"),
+                    "cur_mean": float("nan"),
+                    "ref_std": float("nan"),
+                    "cur_std": float("nan"),
+                    "ref_null_pct": round(float(ref_values.isna().mean() * 100), 2),
+                    "cur_null_pct": round(float(cur_values.isna().mean() * 100), 2),
+                    "ref_count": int(ref_values.notna().sum()),
+                    "cur_count": int(cur_values.notna().sum()),
+                }
+            )
             continue
         ref_values = ref_numeric[feature].to_numpy(dtype=float, copy=False)
         cur_values = cur_numeric[feature].to_numpy(dtype=float, copy=False)
         if (~np.isnan(ref_values)).sum() < 2 or (~np.isnan(cur_values)).sum() < 2:
             continue
-        rows.append({
-            "feature_name": feature,
-            "psi": round(compute_psi(ref_values, cur_values), 6),
-            "kl_divergence": round(compute_kl(ref_values, cur_values), 6),
-            "js_divergence": round(compute_js(ref_values, cur_values), 6),
-            "ref_mean": float(np.nanmean(ref_values)),
-            "cur_mean": float(np.nanmean(cur_values)),
-            "ref_std": float(np.nanstd(ref_values)),
-            "cur_std": float(np.nanstd(cur_values)),
-            "ref_null_pct": round(float(np.isnan(ref_values).mean() * 100), 2),
-            "cur_null_pct": round(float(np.isnan(cur_values).mean() * 100), 2),
-            "ref_count": int((~np.isnan(ref_values)).sum()),
-            "cur_count": int((~np.isnan(cur_values)).sum()),
-        })
+        rows.append(
+            {
+                "feature_name": feature,
+                "psi": round(compute_psi(ref_values, cur_values), 6),
+                "kl_divergence": round(compute_kl(ref_values, cur_values), 6),
+                "js_divergence": round(compute_js(ref_values, cur_values), 6),
+                "ref_mean": float(np.nanmean(ref_values)),
+                "cur_mean": float(np.nanmean(cur_values)),
+                "ref_std": float(np.nanstd(ref_values)),
+                "cur_std": float(np.nanstd(cur_values)),
+                "ref_null_pct": round(float(np.isnan(ref_values).mean() * 100), 2),
+                "cur_null_pct": round(float(np.isnan(cur_values).mean() * 100), 2),
+                "ref_count": int((~np.isnan(ref_values)).sum()),
+                "cur_count": int((~np.isnan(cur_values)).sum()),
+            }
+        )
     return pd.DataFrame(rows)

@@ -7,7 +7,6 @@ from model_landscape.config import settings
 from model_landscape.domain.models import DRIFT_CADENCE_PRESETS, PERFORMANCE_CADENCE_PRESETS
 from model_landscape.ui.components import make_wizard_step
 
-
 STEP_LABELS = ["Setup", "Discover", "Confirm", "Activate"]
 
 
@@ -29,7 +28,10 @@ def _workspace_step(form_style: dict) -> dbc.Row:
                                     dbc.Col(
                                         [
                                             dbc.Label("Control Plane Catalog"),
-                                            dbc.Input(id="control-plane-catalog-input", value=settings.control_plane_catalog),
+                                            dbc.Input(
+                                                id="control-plane-catalog-input",
+                                                value=settings.control_plane_catalog,
+                                            ),
                                         ],
                                         md=6,
                                         style=form_style,
@@ -37,7 +39,10 @@ def _workspace_step(form_style: dict) -> dbc.Row:
                                     dbc.Col(
                                         [
                                             dbc.Label("Control Plane Schema"),
-                                            dbc.Input(id="control-plane-schema-input", value=settings.control_plane_schema),
+                                            dbc.Input(
+                                                id="control-plane-schema-input",
+                                                value=settings.control_plane_schema,
+                                            ),
                                         ],
                                         md=6,
                                         style=form_style,
@@ -84,7 +89,12 @@ def _workspace_step(form_style: dict) -> dbc.Row:
                             dbc.Row(
                                 [
                                     dbc.Col(
-                                        dbc.Button("Setup Control Plane", id="setup-control-plane-btn", color="primary", className="mt-2"),
+                                        dbc.Button(
+                                            "Setup Control Plane",
+                                            id="setup-control-plane-btn",
+                                            color="primary",
+                                            className="mt-2",
+                                        ),
                                         width="auto",
                                     ),
                                     dbc.Col(
@@ -138,7 +148,10 @@ def _workspace_step(form_style: dict) -> dbc.Row:
                                                     dbc.Col(
                                                         [
                                                             dbc.Label("Lakebase Schema"),
-                                                            dbc.Input(id="lakebase-schema-input", value=settings.lakebase_schema),
+                                                            dbc.Input(
+                                                                id="lakebase-schema-input",
+                                                                value=settings.lakebase_schema,
+                                                            ),
                                                         ],
                                                         md=4,
                                                         style=form_style,
@@ -191,7 +204,10 @@ def _source_step() -> dbc.Row:
                             ),
                             dbc.InputGroup(
                                 [
-                                    dbc.Input(id="source-table-input", placeholder="catalog.schema.inference_logs"),
+                                    dbc.Input(
+                                        id="source-table-input",
+                                        placeholder="catalog.schema.inference_logs",
+                                    ),
                                     dbc.Button("Discover", id="scan-source-btn", color="primary"),
                                 ],
                                 className="mb-3",
@@ -201,21 +217,30 @@ def _source_step() -> dbc.Row:
                                     dbc.Col(
                                         [
                                             dbc.Label("Optional Labels Table"),
-                                            dbc.Input(id="labels-table-input", placeholder="catalog.schema.labels"),
+                                            dbc.Input(
+                                                id="labels-table-input",
+                                                placeholder="catalog.schema.labels",
+                                            ),
                                         ],
                                         md=4,
                                     ),
                                     dbc.Col(
                                         [
                                             dbc.Label("Optional MLflow Experiment"),
-                                            dbc.Input(id="mlflow-experiment-input", placeholder="/Users/name/fraud-monitoring"),
+                                            dbc.Input(
+                                                id="mlflow-experiment-input",
+                                                placeholder="/Users/name/fraud-monitoring",
+                                            ),
                                         ],
                                         md=4,
                                     ),
                                     dbc.Col(
                                         [
                                             dbc.Label("Optional Registered Model"),
-                                            dbc.Input(id="mlflow-registered-model-input", placeholder="catalog.schema.fraud_model"),
+                                            dbc.Input(
+                                                id="mlflow-registered-model-input",
+                                                placeholder="catalog.schema.fraud_model",
+                                            ),
                                         ],
                                         md=4,
                                     ),
@@ -255,8 +280,19 @@ def _contract_step(form_style: dict) -> dbc.Row:
                             ),
                             dbc.Row(
                                 [
-                                    dbc.Col([dbc.Label("Display Name"), dbc.Input(id="display-name-input")], md=6, style=form_style),
-                                    dbc.Col([dbc.Label("Model Key"), dbc.Input(id="model-key-input")], md=6, style=form_style),
+                                    dbc.Col(
+                                        [
+                                            dbc.Label("Display Name"),
+                                            dbc.Input(id="display-name-input"),
+                                        ],
+                                        md=6,
+                                        style=form_style,
+                                    ),
+                                    dbc.Col(
+                                        [dbc.Label("Model Key"), dbc.Input(id="model-key-input")],
+                                        md=6,
+                                        style=form_style,
+                                    ),
                                 ]
                             ),
                             dbc.Row(
@@ -267,7 +303,10 @@ def _contract_step(form_style: dict) -> dbc.Row:
                                             dcc.Dropdown(
                                                 id="problem-type-dropdown",
                                                 options=[
-                                                    {"label": "Classification", "value": "classification"},
+                                                    {
+                                                        "label": "Classification",
+                                                        "value": "classification",
+                                                    },
                                                     {"label": "Regression", "value": "regression"},
                                                 ],
                                                 value="classification",
@@ -298,7 +337,9 @@ def _contract_step(form_style: dict) -> dbc.Row:
                             html.Div(
                                 [
                                     dbc.Label("Baseline Days"),
-                                    dbc.Input(id="baseline-days-input", type="number", min=1, value=7),
+                                    dbc.Input(
+                                        id="baseline-days-input", type="number", min=1, value=7
+                                    ),
                                 ],
                                 id="baseline-days-wrapper",
                                 style=form_style,
@@ -326,11 +367,22 @@ def _contract_step(form_style: dict) -> dbc.Row:
                                         [
                                             dbc.Row(
                                                 [
-                                                    dbc.Col([dbc.Label("Timestamp Column"), dcc.Dropdown(id="timestamp-col-dropdown")], md=4, style=form_style),
+                                                    dbc.Col(
+                                                        [
+                                                            dbc.Label("Timestamp Column"),
+                                                            dcc.Dropdown(
+                                                                id="timestamp-col-dropdown"
+                                                            ),
+                                                        ],
+                                                        md=4,
+                                                        style=form_style,
+                                                    ),
                                                     dbc.Col(
                                                         [
                                                             dbc.Label("Model ID Column"),
-                                                            dcc.Dropdown(id="model-id-col-dropdown"),
+                                                            dcc.Dropdown(
+                                                                id="model-id-col-dropdown"
+                                                            ),
                                                             dbc.FormText(
                                                                 "Optional for one-table-per-model sources. Set this only when one table contains multiple models."
                                                             ),
@@ -338,23 +390,74 @@ def _contract_step(form_style: dict) -> dbc.Row:
                                                         md=4,
                                                         style=form_style,
                                                     ),
-                                                    dbc.Col([dbc.Label("Prediction Column"), dcc.Dropdown(id="prediction-col-dropdown")], md=4, style=form_style),
+                                                    dbc.Col(
+                                                        [
+                                                            dbc.Label("Prediction Column"),
+                                                            dcc.Dropdown(
+                                                                id="prediction-col-dropdown"
+                                                            ),
+                                                        ],
+                                                        md=4,
+                                                        style=form_style,
+                                                    ),
                                                 ]
                                             ),
                                             dbc.Row(
                                                 [
-                                                    dbc.Col([dbc.Label("Monitored Model ID Value"), dbc.Input(id="model-id-value-input", placeholder="fraud_model_v1")], md=6, style=form_style),
-                                                    dbc.Col([dbc.Label("Monitored Model Version Value"), dbc.Input(id="model-version-value-input", placeholder="2026-03-01")], md=6, style=form_style),
+                                                    dbc.Col(
+                                                        [
+                                                            dbc.Label("Monitored Model ID Value"),
+                                                            dbc.Input(
+                                                                id="model-id-value-input",
+                                                                placeholder="fraud_model_v1",
+                                                            ),
+                                                        ],
+                                                        md=6,
+                                                        style=form_style,
+                                                    ),
+                                                    dbc.Col(
+                                                        [
+                                                            dbc.Label(
+                                                                "Monitored Model Version Value"
+                                                            ),
+                                                            dbc.Input(
+                                                                id="model-version-value-input",
+                                                                placeholder="2026-03-01",
+                                                            ),
+                                                        ],
+                                                        md=6,
+                                                        style=form_style,
+                                                    ),
                                                 ]
                                             ),
                                             dbc.Row(
                                                 [
-                                                    dbc.Col([dbc.Label("Model Version Column"), dcc.Dropdown(id="model-version-col-dropdown")], md=4, style=form_style),
-                                                    dbc.Col([dbc.Label("Prediction Score Column"), dcc.Dropdown(id="prediction-score-col-dropdown")], md=4, style=form_style),
+                                                    dbc.Col(
+                                                        [
+                                                            dbc.Label("Model Version Column"),
+                                                            dcc.Dropdown(
+                                                                id="model-version-col-dropdown"
+                                                            ),
+                                                        ],
+                                                        md=4,
+                                                        style=form_style,
+                                                    ),
+                                                    dbc.Col(
+                                                        [
+                                                            dbc.Label("Prediction Score Column"),
+                                                            dcc.Dropdown(
+                                                                id="prediction-score-col-dropdown"
+                                                            ),
+                                                        ],
+                                                        md=4,
+                                                        style=form_style,
+                                                    ),
                                                     dbc.Col(
                                                         [
                                                             dbc.Label("Entity ID Column"),
-                                                            dcc.Dropdown(id="entity-id-col-dropdown"),
+                                                            dcc.Dropdown(
+                                                                id="entity-id-col-dropdown"
+                                                            ),
                                                             dbc.FormText(
                                                                 "Optional when the same join column name exists in both inference and labels tables."
                                                             ),
@@ -366,21 +469,96 @@ def _contract_step(form_style: dict) -> dbc.Row:
                                             ),
                                             dbc.Row(
                                                 [
-                                                    dbc.Col([dbc.Label("Label Column In Source"), dcc.Dropdown(id="source-label-col-dropdown")], md=4, style=form_style),
-                                                    dbc.Col([dbc.Label("External Labels Join Column"), dbc.Input(id="labels-join-col-input", value="entity_id", placeholder="entity_id")], md=4, style=form_style),
-                                                    dbc.Col([dbc.Label("External Label Column"), dbc.Input(id="external-label-col-input", value="label", placeholder="label")], md=4, style=form_style),
+                                                    dbc.Col(
+                                                        [
+                                                            dbc.Label("Label Column In Source"),
+                                                            dcc.Dropdown(
+                                                                id="source-label-col-dropdown"
+                                                            ),
+                                                        ],
+                                                        md=4,
+                                                        style=form_style,
+                                                    ),
+                                                    dbc.Col(
+                                                        [
+                                                            dbc.Label(
+                                                                "External Labels Join Column"
+                                                            ),
+                                                            dbc.Input(
+                                                                id="labels-join-col-input",
+                                                                value="entity_id",
+                                                                placeholder="entity_id",
+                                                            ),
+                                                        ],
+                                                        md=4,
+                                                        style=form_style,
+                                                    ),
+                                                    dbc.Col(
+                                                        [
+                                                            dbc.Label("External Label Column"),
+                                                            dbc.Input(
+                                                                id="external-label-col-input",
+                                                                value="label",
+                                                                placeholder="label",
+                                                            ),
+                                                        ],
+                                                        md=4,
+                                                        style=form_style,
+                                                    ),
                                                 ]
                                             ),
                                             dbc.Row(
                                                 [
-                                                    dbc.Col([dbc.Label("External Labels Order Column"), dbc.Input(id="labels-order-col-input", value="label_timestamp", placeholder="label_timestamp")], md=4, style=form_style),
-                                                    dbc.Col([dbc.Label("Feature Columns"), dcc.Dropdown(id="feature-cols-dropdown", multi=True)], md=8, style=form_style),
+                                                    dbc.Col(
+                                                        [
+                                                            dbc.Label(
+                                                                "External Labels Order Column"
+                                                            ),
+                                                            dbc.Input(
+                                                                id="labels-order-col-input",
+                                                                value="label_timestamp",
+                                                                placeholder="label_timestamp",
+                                                            ),
+                                                        ],
+                                                        md=4,
+                                                        style=form_style,
+                                                    ),
+                                                    dbc.Col(
+                                                        [
+                                                            dbc.Label("Feature Columns"),
+                                                            dcc.Dropdown(
+                                                                id="feature-cols-dropdown",
+                                                                multi=True,
+                                                            ),
+                                                        ],
+                                                        md=8,
+                                                        style=form_style,
+                                                    ),
                                                 ]
                                             ),
                                             dbc.Row(
                                                 [
-                                                    dbc.Col([dbc.Label("Categorical Columns"), dcc.Dropdown(id="categorical-cols-dropdown", multi=True)], md=6, style=form_style),
-                                                    dbc.Col([dbc.Label("Slice Columns"), dcc.Dropdown(id="slice-cols-dropdown", multi=True)], md=6, style=form_style),
+                                                    dbc.Col(
+                                                        [
+                                                            dbc.Label("Categorical Columns"),
+                                                            dcc.Dropdown(
+                                                                id="categorical-cols-dropdown",
+                                                                multi=True,
+                                                            ),
+                                                        ],
+                                                        md=6,
+                                                        style=form_style,
+                                                    ),
+                                                    dbc.Col(
+                                                        [
+                                                            dbc.Label("Slice Columns"),
+                                                            dcc.Dropdown(
+                                                                id="slice-cols-dropdown", multi=True
+                                                            ),
+                                                        ],
+                                                        md=6,
+                                                        style=form_style,
+                                                    ),
                                                 ]
                                             ),
                                         ],
@@ -431,7 +609,10 @@ def _review_step() -> dbc.Row:
                                             dbc.Select(
                                                 id="review-drift-cadence-select",
                                                 options=[
-                                                    {"label": cadence_options[value], "value": value}
+                                                    {
+                                                        "label": cadence_options[value],
+                                                        "value": value,
+                                                    }
                                                     for value in DRIFT_CADENCE_PRESETS
                                                 ],
                                                 value="6h",
@@ -445,7 +626,10 @@ def _review_step() -> dbc.Row:
                                             dbc.Select(
                                                 id="review-performance-cadence-select",
                                                 options=[
-                                                    {"label": cadence_options[value], "value": value}
+                                                    {
+                                                        "label": cadence_options[value],
+                                                        "value": value,
+                                                    }
                                                     for value in PERFORMANCE_CADENCE_PRESETS
                                                 ],
                                                 value="disabled",
@@ -458,7 +642,12 @@ def _review_step() -> dbc.Row:
                             ),
                             dbc.Checklist(
                                 id="review-schedule-enabled-toggle",
-                                options=[{"label": "Enable scheduled refreshes for this monitor", "value": "enabled"}],
+                                options=[
+                                    {
+                                        "label": "Enable scheduled refreshes for this monitor",
+                                        "value": "enabled",
+                                    }
+                                ],
                                 value=["enabled"],
                                 switch=True,
                                 className="mb-3",
@@ -512,11 +701,21 @@ def _review_step() -> dbc.Row:
                             html.H5("What Happens Next", className="mb-3"),
                             html.Ul(
                                 [
-                                    html.Li("The monitor config is written into the control-plane namespace."),
-                                    html.Li("The shared refresh workflow runs hourly and picks up pending or overdue monitors automatically."),
-                                    html.Li("If the app can call Run now, it also asks the shared workflow to bootstrap this monitor immediately."),
-                                    html.Li("If Lakebase is configured, the workflow syncs the UI projection after refresh."),
-                                    html.Li("After activation, use Overview and the analysis pages to inspect the monitor."),
+                                    html.Li(
+                                        "The monitor config is written into the control-plane namespace."
+                                    ),
+                                    html.Li(
+                                        "The shared refresh workflow runs hourly and picks up pending or overdue monitors automatically."
+                                    ),
+                                    html.Li(
+                                        "If the app can call Run now, it also asks the shared workflow to bootstrap this monitor immediately."
+                                    ),
+                                    html.Li(
+                                        "If Lakebase is configured, the workflow syncs the UI projection after refresh."
+                                    ),
+                                    html.Li(
+                                        "After activation, use Overview and the analysis pages to inspect the monitor."
+                                    ),
                                 ],
                                 className="text-muted mb-0",
                             ),
@@ -545,15 +744,37 @@ def layout():
             ),
             html.Div(
                 id="wizard-steps-indicator",
-                children=[make_wizard_step(index + 1, label, 1) for index, label in enumerate(STEP_LABELS)],
+                children=[
+                    make_wizard_step(index + 1, label, 1) for index, label in enumerate(STEP_LABELS)
+                ],
                 className="d-flex justify-content-center flex-wrap gap-2 mb-4",
             ),
             html.Div(id="wizard-step-guidance", className="mb-3"),
             html.Div(id="action-status"),
-            html.Div(id="wizard-step-workspace", children=_workspace_step(form_style), className="mb-4", style={}),
-            html.Div(id="wizard-step-source", children=_source_step(), className="mb-4", style={"display": "none"}),
-            html.Div(id="wizard-step-contract", children=_contract_step(form_style), className="mb-4", style={"display": "none"}),
-            html.Div(id="wizard-step-review", children=_review_step(), className="mb-4", style={"display": "none"}),
+            html.Div(
+                id="wizard-step-workspace",
+                children=_workspace_step(form_style),
+                className="mb-4",
+                style={},
+            ),
+            html.Div(
+                id="wizard-step-source",
+                children=_source_step(),
+                className="mb-4",
+                style={"display": "none"},
+            ),
+            html.Div(
+                id="wizard-step-contract",
+                children=_contract_step(form_style),
+                className="mb-4",
+                style={"display": "none"},
+            ),
+            html.Div(
+                id="wizard-step-review",
+                children=_review_step(),
+                className="mb-4",
+                style={"display": "none"},
+            ),
             dbc.Row(
                 [
                     dbc.Col(

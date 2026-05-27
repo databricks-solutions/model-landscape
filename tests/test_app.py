@@ -25,10 +25,17 @@ from model_landscape.callbacks import (
     _ready_for_session,
     _setup_retry_message,
 )
-from model_landscape.pages import data_quality, drift_analysis, feature_deep_dive, incidents, overview, performance, reference
+from model_landscape.pages import (
+    data_quality,
+    drift_analysis,
+    feature_deep_dive,
+    incidents,
+    overview,
+    performance,
+    reference,
+)
 from model_landscape.ui import charts, components, styles
 from model_landscape.ui.sidebar import build_sidebar
-
 
 RENDER_WIZARD_CALLBACK = (
     "..wizard-steps-indicator.children...wizard-step-guidance.children...wizard-step-workspace.style"
@@ -150,8 +157,12 @@ def _find_callback_by_input_and_output(app, input_id: str, output_id: str):
 
 def test_app_layout_exposes_slimmed_onboarding_flow() -> None:
     app = create_app()
-    shell_components = [component for component in _walk(app.layout) if getattr(component, "id", None)]
-    page_components = [component for component in _walk(app.validation_layout) if getattr(component, "id", None)]
+    shell_components = [
+        component for component in _walk(app.layout) if getattr(component, "id", None)
+    ]
+    page_components = [
+        component for component in _walk(app.validation_layout) if getattr(component, "id", None)
+    ]
     shell_ids = {component.id for component in shell_components}
     page_ids = {component.id for component in page_components}
     ids = shell_ids | page_ids
@@ -207,8 +218,14 @@ def test_app_layout_exposes_slimmed_onboarding_flow() -> None:
     }.issubset(ids)
 
     components_by_id = {component.id: component for component in page_components}
-    assert getattr(components_by_id["onboarding-current-step"], "storage_type", None) in (None, "memory")
-    assert getattr(components_by_id["control-plane-ready-store"], "storage_type", None) in (None, "memory")
+    assert getattr(components_by_id["onboarding-current-step"], "storage_type", None) in (
+        None,
+        "memory",
+    )
+    assert getattr(components_by_id["control-plane-ready-store"], "storage_type", None) in (
+        None,
+        "memory",
+    )
     assert getattr(components_by_id["wizard-step-workspace"], "style", {}) == {}
     assert getattr(components_by_id["wizard-step-source"], "style", {}) == {"display": "none"}
     assert getattr(components_by_id["wizard-step-contract"], "style", {}) == {"display": "none"}
@@ -233,7 +250,10 @@ def test_schema_helpers_flag_non_numeric_selected_features() -> None:
         ],
     }
 
-    assert _feature_candidates(scan_data, ["event_ts", "model_id", "prediction"]) == ["amount", "country"]
+    assert _feature_candidates(scan_data, ["event_ts", "model_id", "prediction"]) == [
+        "amount",
+        "country",
+    ]
     assert _non_numeric_features(["amount", "country"], scan_data) == ["country"]
 
 
@@ -242,55 +262,63 @@ def test_monitor_contract_ready_accepts_shared_labels_join_without_entity_id_col
         "columns": ["event_ts", "model_id", "prediction", "gc_transaction", "amount"],
     }
 
-    assert callbacks_module._monitor_contract_ready(
-        scan_data=scan_data,
-        display_name="Fraud Model Demo",
-        model_key="fraud_model_demo",
-        timestamp_col="event_ts",
-        model_id_col="model_id",
-        prediction_col="prediction",
-        model_id_value=None,
-        model_version_col=None,
-        model_version_value=None,
-        entity_id_col=None,
-        source_label_col=None,
-        external_label_col="label",
-        labels_table="main.demo.labels",
-        labels_join_col="gc_transaction",
-        feature_columns=["amount"],
-        baseline_kind="rolling",
-        baseline_days=7,
-        baseline_start=None,
-        baseline_end=None,
-    ) is True
+    assert (
+        callbacks_module._monitor_contract_ready(
+            scan_data=scan_data,
+            display_name="Fraud Model Demo",
+            model_key="fraud_model_demo",
+            timestamp_col="event_ts",
+            model_id_col="model_id",
+            prediction_col="prediction",
+            model_id_value=None,
+            model_version_col=None,
+            model_version_value=None,
+            entity_id_col=None,
+            source_label_col=None,
+            external_label_col="label",
+            labels_table="main.demo.labels",
+            labels_join_col="gc_transaction",
+            feature_columns=["amount"],
+            baseline_kind="rolling",
+            baseline_days=7,
+            baseline_start=None,
+            baseline_end=None,
+        )
+        is True
+    )
 
 
-def test_monitor_contract_ready_rejects_whitespace_only_source_label_col_for_external_labels() -> None:
+def test_monitor_contract_ready_rejects_whitespace_only_source_label_col_for_external_labels() -> (
+    None
+):
     scan_data = {
         "columns": ["event_ts", "prediction", "gc_transaction", "amount"],
     }
 
-    assert callbacks_module._monitor_contract_ready(
-        scan_data=scan_data,
-        display_name="Fraud Model Demo",
-        model_key="fraud_model_demo",
-        timestamp_col="event_ts",
-        model_id_col=None,
-        prediction_col="prediction",
-        model_id_value=None,
-        model_version_col=None,
-        model_version_value=None,
-        entity_id_col=None,
-        source_label_col="   ",
-        external_label_col="",
-        labels_table="main.demo.labels",
-        labels_join_col="gc_transaction",
-        feature_columns=["amount"],
-        baseline_kind="rolling",
-        baseline_days=7,
-        baseline_start=None,
-        baseline_end=None,
-    ) is False
+    assert (
+        callbacks_module._monitor_contract_ready(
+            scan_data=scan_data,
+            display_name="Fraud Model Demo",
+            model_key="fraud_model_demo",
+            timestamp_col="event_ts",
+            model_id_col=None,
+            prediction_col="prediction",
+            model_id_value=None,
+            model_version_col=None,
+            model_version_value=None,
+            entity_id_col=None,
+            source_label_col="   ",
+            external_label_col="",
+            labels_table="main.demo.labels",
+            labels_join_col="gc_transaction",
+            feature_columns=["amount"],
+            baseline_kind="rolling",
+            baseline_days=7,
+            baseline_start=None,
+            baseline_end=None,
+        )
+        is False
+    )
 
 
 def test_save_monitor_allows_table_scoped_monitor_without_model_id_column(monkeypatch) -> None:
@@ -497,7 +525,9 @@ def test_save_monitor_blocks_when_workspace_wiring_is_not_ready(monkeypatch) -> 
             raise AssertionError("should not save when workspace readiness is blocked")
 
         def mark_monitor_bootstrap_pending(self, config):
-            raise AssertionError("should not mark bootstrap pending when workspace readiness is blocked")
+            raise AssertionError(
+                "should not mark bootstrap pending when workspace readiness is blocked"
+            )
 
     class _FakeBackend:
         def __init__(self):
@@ -709,7 +739,10 @@ def test_render_onboarding_wizard_callback_executes_for_step_two() -> None:
 
     args = [None] * 38
     args[0] = 2
-    args[1] = {"control_plane_catalog": "model_observability", "control_plane_schema": "control_plane"}
+    args[1] = {
+        "control_plane_catalog": "model_observability",
+        "control_plane_schema": "control_plane",
+    }
     args[2] = {"overall_mode": "scheduler_only", "blocking_issues": [], "warnings": []}
     args[3] = "model_observability"
     args[4] = "control_plane"
@@ -737,8 +770,15 @@ def test_render_onboarding_wizard_blocks_when_workspace_wiring_is_not_ready() ->
 
     args = [None] * 38
     args[0] = 1
-    args[1] = {"control_plane_catalog": "model_observability", "control_plane_schema": "control_plane"}
-    args[2] = {"overall_mode": "not_ready", "blocking_issues": ["Shared refresh workflow is missing."], "warnings": []}
+    args[1] = {
+        "control_plane_catalog": "model_observability",
+        "control_plane_schema": "control_plane",
+    }
+    args[2] = {
+        "overall_mode": "not_ready",
+        "blocking_issues": ["Shared refresh workflow is missing."],
+        "warnings": [],
+    }
     args[3] = "model_observability"
     args[4] = "control_plane"
     args[24] = "rolling"
@@ -768,7 +808,10 @@ def test_render_onboarding_wizard_surfaces_error_alert_instead_of_raising(monkey
 
     args = [None] * 38
     args[0] = 3
-    args[1] = {"control_plane_catalog": "model_observability", "control_plane_schema": "control_plane"}
+    args[1] = {
+        "control_plane_catalog": "model_observability",
+        "control_plane_schema": "control_plane",
+    }
     args[2] = {"overall_mode": "fully_ready", "blocking_issues": [], "warnings": []}
     args[3] = "model_observability"
     args[4] = "control_plane"
@@ -818,7 +861,9 @@ def test_validate_workspace_wiring_callback_renders_readiness_card(monkeypatch) 
         },
     )
     app = create_app()
-    fn = _find_callback_by_input_and_output(app, "validate-workspace-wiring-btn", "workspace-readiness-status")
+    fn = _find_callback_by_input_and_output(
+        app, "validate-workspace-wiring-btn", "workspace-readiness-status"
+    )
 
     result = fn(
         1,
@@ -836,7 +881,9 @@ def test_validate_workspace_wiring_callback_renders_readiness_card(monkeypatch) 
     assert result[1]["overall_mode"] == "scheduler_only"
 
 
-def test_validate_workspace_wiring_callback_distinguishes_unknown_bootstrap_acl(monkeypatch) -> None:
+def test_validate_workspace_wiring_callback_distinguishes_unknown_bootstrap_acl(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(
         callbacks_module,
         "_workspace_readiness_for_session",
@@ -865,7 +912,9 @@ def test_validate_workspace_wiring_callback_distinguishes_unknown_bootstrap_acl(
         },
     )
     app = create_app()
-    fn = _find_callback_by_input_and_output(app, "validate-workspace-wiring-btn", "workspace-readiness-status")
+    fn = _find_callback_by_input_and_output(
+        app, "validate-workspace-wiring-btn", "workspace-readiness-status"
+    )
 
     result = fn(
         1,
@@ -882,14 +931,18 @@ def test_validate_workspace_wiring_callback_distinguishes_unknown_bootstrap_acl(
     assert "Grant CAN_MANAGE_RUN on job 456" not in str(result[0])
 
 
-def test_refresh_job_unavailable_message_includes_explicit_grant_for_configured_job_id(monkeypatch) -> None:
+def test_refresh_job_unavailable_message_includes_explicit_grant_for_configured_job_id(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(
         callbacks_module,
         "settings",
         SimpleNamespace(refresh_job_id="321"),
     )
 
-    message = callbacks_module._refresh_job_unavailable_message("fraud_model_demo", RuntimeError("permission denied"))
+    message = callbacks_module._refresh_job_unavailable_message(
+        "fraud_model_demo", RuntimeError("permission denied")
+    )
 
     assert "Grant the app service principal CAN_MANAGE_RUN on job 321." in message
 
@@ -1119,7 +1172,9 @@ def test_render_drift_callback_reports_when_only_one_window_exists(monkeypatch) 
     callback = app.callback_map[RENDER_DRIFT_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn("/drift", "fraud_model_demo", 0, {}, 0, "psi", "weekly", 10, None, None, "all", "all", False)
+    result = fn(
+        "/drift", "fraud_model_demo", 0, {}, 0, "psi", "weekly", 10, None, None, "all", "all", False
+    )
 
     assert "Only one weekly comparison window is available" in str(result[1])
     assert "Categorical features are stored" in str(result[1])
@@ -1137,18 +1192,90 @@ def test_render_drift_callback_respects_top_n_selection(monkeypatch) -> None:
             assert granularity == "daily"
             return pd.DataFrame(
                 [
-                    {"feature": "amount", "period": "2026-01-20", "psi": 10.97, "js_divergence": 0.61, "kl_divergence": 0.52},
-                    {"feature": "velocity_7d", "period": "2026-01-20", "psi": 4.20, "js_divergence": 0.34, "kl_divergence": 0.28},
-                    {"feature": "device_score", "period": "2026-01-20", "psi": 3.10, "js_divergence": 0.26, "kl_divergence": 0.22},
-                    {"feature": "ip_risk", "period": "2026-01-20", "psi": 2.60, "js_divergence": 0.22, "kl_divergence": 0.19},
-                    {"feature": "txn_count", "period": "2026-01-20", "psi": 1.70, "js_divergence": 0.15, "kl_divergence": 0.13},
-                    {"feature": "geo_score", "period": "2026-01-20", "psi": 1.30, "js_divergence": 0.12, "kl_divergence": 0.1},
-                    {"feature": "amount", "period": "2026-01-21", "psi": 0.02, "js_divergence": 0.01, "kl_divergence": 0.01},
-                    {"feature": "velocity_7d", "period": "2026-01-21", "psi": 0.01, "js_divergence": 0.01, "kl_divergence": 0.01},
-                    {"feature": "device_score", "period": "2026-01-21", "psi": 0.01, "js_divergence": 0.01, "kl_divergence": 0.01},
-                    {"feature": "ip_risk", "period": "2026-01-21", "psi": 0.01, "js_divergence": 0.01, "kl_divergence": 0.01},
-                    {"feature": "txn_count", "period": "2026-01-21", "psi": 0.0, "js_divergence": 0.0, "kl_divergence": 0.0},
-                    {"feature": "geo_score", "period": "2026-01-21", "psi": 0.0, "js_divergence": 0.0, "kl_divergence": 0.0},
+                    {
+                        "feature": "amount",
+                        "period": "2026-01-20",
+                        "psi": 10.97,
+                        "js_divergence": 0.61,
+                        "kl_divergence": 0.52,
+                    },
+                    {
+                        "feature": "velocity_7d",
+                        "period": "2026-01-20",
+                        "psi": 4.20,
+                        "js_divergence": 0.34,
+                        "kl_divergence": 0.28,
+                    },
+                    {
+                        "feature": "device_score",
+                        "period": "2026-01-20",
+                        "psi": 3.10,
+                        "js_divergence": 0.26,
+                        "kl_divergence": 0.22,
+                    },
+                    {
+                        "feature": "ip_risk",
+                        "period": "2026-01-20",
+                        "psi": 2.60,
+                        "js_divergence": 0.22,
+                        "kl_divergence": 0.19,
+                    },
+                    {
+                        "feature": "txn_count",
+                        "period": "2026-01-20",
+                        "psi": 1.70,
+                        "js_divergence": 0.15,
+                        "kl_divergence": 0.13,
+                    },
+                    {
+                        "feature": "geo_score",
+                        "period": "2026-01-20",
+                        "psi": 1.30,
+                        "js_divergence": 0.12,
+                        "kl_divergence": 0.1,
+                    },
+                    {
+                        "feature": "amount",
+                        "period": "2026-01-21",
+                        "psi": 0.02,
+                        "js_divergence": 0.01,
+                        "kl_divergence": 0.01,
+                    },
+                    {
+                        "feature": "velocity_7d",
+                        "period": "2026-01-21",
+                        "psi": 0.01,
+                        "js_divergence": 0.01,
+                        "kl_divergence": 0.01,
+                    },
+                    {
+                        "feature": "device_score",
+                        "period": "2026-01-21",
+                        "psi": 0.01,
+                        "js_divergence": 0.01,
+                        "kl_divergence": 0.01,
+                    },
+                    {
+                        "feature": "ip_risk",
+                        "period": "2026-01-21",
+                        "psi": 0.01,
+                        "js_divergence": 0.01,
+                        "kl_divergence": 0.01,
+                    },
+                    {
+                        "feature": "txn_count",
+                        "period": "2026-01-21",
+                        "psi": 0.0,
+                        "js_divergence": 0.0,
+                        "kl_divergence": 0.0,
+                    },
+                    {
+                        "feature": "geo_score",
+                        "period": "2026-01-21",
+                        "psi": 0.0,
+                        "js_divergence": 0.0,
+                        "kl_divergence": 0.0,
+                    },
                 ]
             )
 
@@ -1157,10 +1284,18 @@ def test_render_drift_callback_respects_top_n_selection(monkeypatch) -> None:
     callback = app.callback_map[RENDER_DRIFT_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result_top_3 = fn("/drift", "fraud_model_demo", 0, {}, 0, "psi", "daily", 3, None, None, "all", "all", False)
-    result_top_5 = fn("/drift", "fraud_model_demo", 0, {}, 0, "psi", "daily", 5, None, None, "all", "all", False)
-    result_top_6 = fn("/drift", "fraud_model_demo", 0, {}, 1, "psi", "daily", 6, None, None, "all", "all", False)
-    result_thresholds = fn("/drift", "fraud_model_demo", 0, {}, 2, "psi", "daily", 5, None, None, "all", "all", True)
+    result_top_3 = fn(
+        "/drift", "fraud_model_demo", 0, {}, 0, "psi", "daily", 3, None, None, "all", "all", False
+    )
+    result_top_5 = fn(
+        "/drift", "fraud_model_demo", 0, {}, 0, "psi", "daily", 5, None, None, "all", "all", False
+    )
+    result_top_6 = fn(
+        "/drift", "fraud_model_demo", 0, {}, 1, "psi", "daily", 6, None, None, "all", "all", False
+    )
+    result_thresholds = fn(
+        "/drift", "fraud_model_demo", 0, {}, 2, "psi", "daily", 5, None, None, "all", "all", True
+    )
 
     heatmap_3 = result_top_3[0].children.children.figure
     top_3_figure = result_top_3[3].children.children.figure
@@ -1203,8 +1338,20 @@ def test_render_drift_callback_passes_custom_date_range_to_backend(monkeypatch) 
             captured.update(kwargs)
             return pd.DataFrame(
                 [
-                    {"feature": "amount", "period": "2026-04-01", "psi": 0.05, "js_divergence": 0.01, "kl_divergence": 0.01},
-                    {"feature": "amount", "period": "2026-04-30", "psi": 0.07, "js_divergence": 0.02, "kl_divergence": 0.01},
+                    {
+                        "feature": "amount",
+                        "period": "2026-04-01",
+                        "psi": 0.05,
+                        "js_divergence": 0.01,
+                        "kl_divergence": 0.01,
+                    },
+                    {
+                        "feature": "amount",
+                        "period": "2026-04-30",
+                        "psi": 0.07,
+                        "js_divergence": 0.02,
+                        "kl_divergence": 0.01,
+                    },
                 ]
             )
 
@@ -1213,7 +1360,21 @@ def test_render_drift_callback_passes_custom_date_range_to_backend(monkeypatch) 
     callback = app.callback_map[RENDER_DRIFT_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn("/drift", "fraud_model_demo", 0, {}, 1, "js_divergence", "daily", 5, "2026-04-01", "2026-04-30", "all", "all", False)
+    result = fn(
+        "/drift",
+        "fraud_model_demo",
+        0,
+        {},
+        1,
+        "js_divergence",
+        "daily",
+        5,
+        "2026-04-01",
+        "2026-04-30",
+        "all",
+        "all",
+        False,
+    )
 
     assert captured["start_date"] == "2026-04-01"
     assert captured["end_date"] == "2026-04-30"
@@ -1240,7 +1401,9 @@ def test_describe_drift_heatmap_scale_caps_large_outliers() -> None:
     assert "95th percentile" in str(scale["clip_note"])
 
 
-def test_describe_drift_heatmap_scale_falls_back_for_small_samples_and_respects_threshold_floor() -> None:
+def test_describe_drift_heatmap_scale_falls_back_for_small_samples_and_respects_threshold_floor() -> (
+    None
+):
     drift = pd.DataFrame(
         [
             {"feature": "amount", "period": "2026-01-20", "psi": 0.01},
@@ -1437,7 +1600,11 @@ def test_feature_bin_impact_explains_zero_detection_metric_status() -> None:
 def test_demo_chart_layout_defaults_expand_margins_and_cap_heatmap_height() -> None:
     drift_rows = pd.DataFrame(
         [
-            {"feature": f"feature_{index:02d}", "period": "2026-01-21", "psi": 0.02 + (index * 0.001)}
+            {
+                "feature": f"feature_{index:02d}",
+                "period": "2026-01-21",
+                "psi": 0.02 + (index * 0.001),
+            }
             for index in range(1, 55)
         ]
     )
@@ -1492,7 +1659,11 @@ def test_horizontal_bar_charts_enable_yaxis_automargin_and_shorter_feature_impac
 def test_drift_timeline_moves_legend_outside_plot_and_separates_threshold_annotations() -> None:
     drift_rows = pd.DataFrame(
         [
-            {"feature": f"feature_{index:02d}", "period": "2026-01-21", "psi": 0.05 + (index * 0.01)}
+            {
+                "feature": f"feature_{index:02d}",
+                "period": "2026-01-21",
+                "psi": 0.05 + (index * 0.01),
+            }
             for index in range(1, 13)
         ]
     )
@@ -1504,8 +1675,16 @@ def test_drift_timeline_moves_legend_outside_plot_and_separates_threshold_annota
         show_thresholds=True,
     )
 
-    warning_annotation = next(annotation for annotation in figure.layout.annotations if str(annotation.text).startswith("Warning"))
-    critical_annotation = next(annotation for annotation in figure.layout.annotations if str(annotation.text).startswith("Critical"))
+    warning_annotation = next(
+        annotation
+        for annotation in figure.layout.annotations
+        if str(annotation.text).startswith("Warning")
+    )
+    critical_annotation = next(
+        annotation
+        for annotation in figure.layout.annotations
+        if str(annotation.text).startswith("Critical")
+    )
 
     assert figure.layout.legend.orientation == "v"
     assert figure.layout.legend.x > 1
@@ -1537,8 +1716,18 @@ def test_dimension_breakdown_rotates_xaxis_for_large_category_sets() -> None:
 def test_multi_model_summary_uses_more_height_and_rotated_xaxis_labels() -> None:
     figure = charts.build_multi_model_summary(
         [
-            {"model": "fraud_monitor_v1_long_name", "max_psi": 0.12, "drifting_features": 4, "computing": False},
-            {"model": "fraud_monitor_v2_long_name", "max_psi": 0.18, "drifting_features": 6, "computing": True},
+            {
+                "model": "fraud_monitor_v1_long_name",
+                "max_psi": 0.12,
+                "drifting_features": 4,
+                "computing": False,
+            },
+            {
+                "model": "fraud_monitor_v2_long_name",
+                "max_psi": 0.18,
+                "drifting_features": 6,
+                "computing": True,
+            },
         ],
         metric="psi",
     )
@@ -1558,7 +1747,9 @@ def test_performance_timeline_uses_text_labels_for_single_window() -> None:
     assert figure.data[0].text[0] == "0.9200"
 
 
-def test_render_performance_callback_handles_partial_window_note_and_missing_metric_column(monkeypatch) -> None:
+def test_render_performance_callback_handles_partial_window_note_and_missing_metric_column(
+    monkeypatch,
+) -> None:
     latest_bins = pd.DataFrame(
         [
             {
@@ -1671,14 +1862,28 @@ def test_render_performance_callback_uses_selected_drift_metric(monkeypatch) -> 
             }
 
         def get_exact_performance_breakdown(self, model_id, **kwargs):
-            raise AssertionError("drift-only controls must not recompute exact performance breakdown")
+            raise AssertionError(
+                "drift-only controls must not recompute exact performance breakdown"
+            )
 
         def get_drift_results(self, model_id, granularity="daily"):
             assert granularity == "daily"
             return pd.DataFrame(
                 [
-                    {"feature": "amount", "period": "2026-01-20", "psi": 0.12, "js_divergence": 0.03, "kl_divergence": 0.02},
-                    {"feature": "amount", "period": "2026-01-21", "psi": 0.18, "js_divergence": 0.05, "kl_divergence": 0.04},
+                    {
+                        "feature": "amount",
+                        "period": "2026-01-20",
+                        "psi": 0.12,
+                        "js_divergence": 0.03,
+                        "kl_divergence": 0.02,
+                    },
+                    {
+                        "feature": "amount",
+                        "period": "2026-01-21",
+                        "psi": 0.18,
+                        "js_divergence": 0.05,
+                        "kl_divergence": 0.04,
+                    },
                 ]
             )
 
@@ -1734,7 +1939,11 @@ def test_render_performance_callback_ignores_invalid_timeline_periods(monkeypatc
             }
 
         def get_exact_performance_breakdown(self, model_id, **kwargs):
-            return {"rows": latest_bins.copy(), "contributors": pd.DataFrame([{"feature": "amount", "weighted_delta": -0.01}]), "message": ""}
+            return {
+                "rows": latest_bins.copy(),
+                "contributors": pd.DataFrame([{"feature": "amount", "weighted_delta": -0.01}]),
+                "message": "",
+            }
 
         def get_drift_results(self, model_id, granularity="daily"):
             assert granularity == "daily"
@@ -1755,7 +1964,9 @@ def test_render_performance_callback_ignores_invalid_timeline_periods(monkeypatc
     assert list(timeline_figure.data[0].x) == ["2026-01-21"]
 
 
-def test_render_performance_callback_defaults_drift_chart_to_all_available_features(monkeypatch) -> None:
+def test_render_performance_callback_defaults_drift_chart_to_all_available_features(
+    monkeypatch,
+) -> None:
     latest_bins = pd.DataFrame(
         [
             {
@@ -1805,7 +2016,11 @@ def test_render_performance_callback_defaults_drift_chart_to_all_available_featu
             }
 
         def get_exact_performance_breakdown(self, model_id, **kwargs):
-            return {"rows": latest_bins.copy(), "contributors": pd.DataFrame([{"feature": "amount", "weighted_delta": -0.01}]), "message": ""}
+            return {
+                "rows": latest_bins.copy(),
+                "contributors": pd.DataFrame([{"feature": "amount", "weighted_delta": -0.01}]),
+                "message": "",
+            }
 
         def get_drift_results(self, model_id, granularity="daily"):
             assert granularity == "daily"
@@ -2012,11 +2227,15 @@ def test_render_quality_callback_surfaces_history_and_latest_snapshot(monkeypatc
     fn = getattr(callback, "__wrapped__", callback)
 
     result = fn("/quality", "fraud_model_demo", 0, {}, 0, None, None, "all", "all", False)
-    result_with_guides = fn("/quality", "fraud_model_demo", 0, {}, 1, None, None, "all", "all", True)
+    result_with_guides = fn(
+        "/quality", "fraud_model_demo", 0, {}, 1, None, None, "all", "all", True
+    )
 
     assert "Monitoring Rows" in str(result[0])
     assert "Rows Per Comparison Window" in str(result[1])
-    assert "Daily Monitoring Rows shows daily row volume in persisted monitoring history" in str(result[1])
+    assert "Daily Monitoring Rows shows daily row volume in persisted monitoring history" in str(
+        result[1]
+    )
     assert "Null Rate Trends" in str(result[2])
     null_rate_figure = result[2].children[0].children.children.figure
     null_rate_guided = result_with_guides[2].children[0].children.children.figure
@@ -2043,10 +2262,14 @@ def test_performance_timeline_uses_distinct_metric_colors() -> None:
     assert colors_by_name["Precision"] != colors_by_name["Recall"]
 
 
-def test_render_quality_callback_uses_na_for_missing_prediction_mean_and_shows_std(monkeypatch) -> None:
+def test_render_quality_callback_uses_na_for_missing_prediction_mean_and_shows_std(
+    monkeypatch,
+) -> None:
     class _FakeBackend:
         def get_monitor_config(self, model_id):
-            return SimpleNamespace(contract=SimpleNamespace(label_col="label"), problem_type="classification")
+            return SimpleNamespace(
+                contract=SimpleNamespace(label_col="label"), problem_type="classification"
+            )
 
         def get_quality_stats(self, model_id, **kwargs):
             return {
@@ -2060,13 +2283,26 @@ def test_render_quality_callback_uses_na_for_missing_prediction_mean_and_shows_s
             }
 
         def get_quality_history(self, model_id, **kwargs):
-            return pd.DataFrame([{"period": "2026-01-21", "row_count": 120, "prediction_mean": None, "prediction_std": 0.13}])
+            return pd.DataFrame(
+                [
+                    {
+                        "period": "2026-01-21",
+                        "row_count": 120,
+                        "prediction_mean": None,
+                        "prediction_std": 0.13,
+                    }
+                ]
+            )
 
         def get_null_rate_history(self, model_id, **kwargs):
             return pd.DataFrame()
 
         def get_latest_window_metrics(self, model_id):
-            return {"supported": False, "metrics": {}, "message": "No labeled snapshot is available for this monitor."}
+            return {
+                "supported": False,
+                "metrics": {},
+                "message": "No labeled snapshot is available for this monitor.",
+            }
 
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
     app = create_app()
@@ -2099,7 +2335,9 @@ def test_render_quality_callback_surfaces_backend_errors_instead_of_raising(monk
     assert "Data quality is unavailable right now." in str(result[0])
 
 
-def test_render_quality_callback_uses_specific_empty_state_for_zero_filtered_rows(monkeypatch) -> None:
+def test_render_quality_callback_uses_specific_empty_state_for_zero_filtered_rows(
+    monkeypatch,
+) -> None:
     class _FakeBackend:
         def get_monitor_config(self, model_id):
             return SimpleNamespace(
@@ -2115,12 +2353,25 @@ def test_render_quality_callback_uses_specific_empty_state_for_zero_filtered_row
     callback = app.callback_map[RENDER_QUALITY_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn("/quality", "fraud_model_demo", 0, {}, 1, "2026-01-01", "2026-01-31", "predicted", "positive", False)
+    result = fn(
+        "/quality",
+        "fraud_model_demo",
+        0,
+        {},
+        1,
+        "2026-01-01",
+        "2026-01-31",
+        "predicted",
+        "positive",
+        False,
+    )
 
     assert "No rows matched the selected class filter in this date range." in str(result[0])
 
 
-def test_render_quality_callback_uses_specific_empty_state_when_filtered_source_bounds_are_unavailable(monkeypatch) -> None:
+def test_render_quality_callback_uses_specific_empty_state_when_filtered_source_bounds_are_unavailable(
+    monkeypatch,
+) -> None:
     class _FakeBackend:
         def get_monitor_config(self, model_id):
             return SimpleNamespace(
@@ -2136,16 +2387,22 @@ def test_render_quality_callback_uses_specific_empty_state_when_filtered_source_
     callback = app.callback_map[RENDER_QUALITY_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn("/quality", "fraud_model_demo", 0, {}, 1, None, None, "predicted", "positive", False)
+    result = fn(
+        "/quality", "fraud_model_demo", 0, {}, 1, None, None, "predicted", "positive", False
+    )
 
     assert "Filtered quality history is not available for the full range yet." in str(result[0])
 
 
-def test_render_drift_callback_uses_specific_empty_state_for_zero_filtered_rows(monkeypatch) -> None:
+def test_render_drift_callback_uses_specific_empty_state_for_zero_filtered_rows(
+    monkeypatch,
+) -> None:
     class _FakeBackend:
         def get_monitor_config(self, model_id):
             return SimpleNamespace(
-                contract=SimpleNamespace(label_col="label", prediction_col="pred_label", categorical_columns=()),
+                contract=SimpleNamespace(
+                    label_col="label", prediction_col="pred_label", categorical_columns=()
+                ),
                 problem_type="classification",
             )
 
@@ -2159,16 +2416,34 @@ def test_render_drift_callback_uses_specific_empty_state_for_zero_filtered_rows(
     callback = app.callback_map[RENDER_DRIFT_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn("/drift", "fraud_model_demo", 0, {}, 1, "psi", "daily", 5, "2026-01-01", "2026-01-31", "predicted", "positive", False)
+    result = fn(
+        "/drift",
+        "fraud_model_demo",
+        0,
+        {},
+        1,
+        "psi",
+        "daily",
+        5,
+        "2026-01-01",
+        "2026-01-31",
+        "predicted",
+        "positive",
+        False,
+    )
 
     assert "No rows matched the selected class filter in this date range." in str(result[0])
 
 
-def test_render_drift_callback_uses_specific_empty_state_for_missing_class_facts(monkeypatch) -> None:
+def test_render_drift_callback_uses_specific_empty_state_for_missing_class_facts(
+    monkeypatch,
+) -> None:
     class _FakeBackend:
         def get_monitor_config(self, model_id):
             return SimpleNamespace(
-                contract=SimpleNamespace(label_col="label", prediction_col="pred_label", categorical_columns=()),
+                contract=SimpleNamespace(
+                    label_col="label", prediction_col="pred_label", categorical_columns=()
+                ),
                 problem_type="classification",
             )
 
@@ -2182,7 +2457,21 @@ def test_render_drift_callback_uses_specific_empty_state_for_missing_class_facts
     callback = app.callback_map[RENDER_DRIFT_CALLBACK]["callback"]
     fn = getattr(callback, "__wrapped__", callback)
 
-    result = fn("/drift", "fraud_model_demo", 0, {}, 1, "psi", "daily", 5, None, None, "predicted", "positive", False)
+    result = fn(
+        "/drift",
+        "fraud_model_demo",
+        0,
+        {},
+        1,
+        "psi",
+        "daily",
+        5,
+        None,
+        None,
+        "predicted",
+        "positive",
+        False,
+    )
 
     assert "Filtered drift history is not available yet for this monitor." in str(result[0])
 
@@ -2212,7 +2501,9 @@ def test_drift_and_quality_callbacks_use_apply_buttons_for_expensive_queries() -
     assert "quality-threshold-toggle" in quality_state_ids
 
 
-def test_sync_performance_drift_features_defaults_to_all_when_feature_count_is_small(monkeypatch) -> None:
+def test_sync_performance_drift_features_defaults_to_all_when_feature_count_is_small(
+    monkeypatch,
+) -> None:
     class _FakeBackend:
         def get_drift_results(self, model_id, granularity="daily"):
             assert granularity == "daily"
@@ -2285,7 +2576,9 @@ def test_populate_feature_deep_dive_prefers_most_drifted_feature(monkeypatch) ->
     app = create_app()
     fn = _find_callback_by_output(app, "deepdive-feature-select")
 
-    options, value, dimension_options, selected_dimension = fn("/features", "", "fraud_model_demo", 0, {}, None, "")
+    options, value, dimension_options, selected_dimension = fn(
+        "/features", "", "fraud_model_demo", 0, {}, None, ""
+    )
 
     assert [option["value"] for option in options] == ["amount", "device_score", "velocity_7d"]
     assert value == "device_score"
@@ -2319,9 +2612,13 @@ def test_render_feature_deep_dive_reports_distribution_context(monkeypatch) -> N
 
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
     app = create_app()
-    fn = _find_callback_by_input_and_output(app, "deepdive-feature-select", "deepdive-distribution-container")
+    fn = _find_callback_by_input_and_output(
+        app, "deepdive-feature-select", "deepdive-distribution-container"
+    )
 
-    distribution, dimension, context = fn("/features", "fraud_model_demo", "amount", "region", 0, {}, 0, "auto", 40, "", "off", 1.0)
+    distribution, dimension, context = fn(
+        "/features", "fraud_model_demo", "amount", "region", 0, {}, 0, "auto", 40, "", "off", 1.0
+    )
 
     assert "Distribution: amount" in str(distribution)
     assert "amount by region" in str(dimension).lower()
@@ -2351,9 +2648,13 @@ def test_render_feature_deep_dive_iqr_mode_requests_exact_samples(monkeypatch) -
     backend = _FakeBackend()
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: backend)
     app = create_app()
-    fn = _find_callback_by_input_and_output(app, "deepdive-feature-select", "deepdive-distribution-container")
+    fn = _find_callback_by_input_and_output(
+        app, "deepdive-feature-select", "deepdive-distribution-container"
+    )
 
-    distribution, _, context = fn("/features", "fraud_model_demo", "amount", "", 0, {}, 1, "fixed", 20, "", "iqr_fence", 1.5)
+    distribution, _, context = fn(
+        "/features", "fraud_model_demo", "amount", "", 0, {}, 1, "fixed", 20, "", "iqr_fence", 1.5
+    )
 
     assert backend.calls == [True]
     assert "Distribution: amount" in str(distribution)
@@ -2367,9 +2668,13 @@ def test_render_feature_deep_dive_handles_backend_errors(monkeypatch) -> None:
 
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
     app = create_app()
-    fn = _find_callback_by_input_and_output(app, "deepdive-feature-select", "deepdive-distribution-container")
+    fn = _find_callback_by_input_and_output(
+        app, "deepdive-feature-select", "deepdive-distribution-container"
+    )
 
-    distribution, dimension, context = fn("/features", "fraud_model_demo", "amount", "", 0, {}, 0, "auto", 40, "", "off", 1.0)
+    distribution, dimension, context = fn(
+        "/features", "fraud_model_demo", "amount", "", 0, {}, 0, "auto", 40, "", "off", 1.0
+    )
 
     assert "Could not load feature detail. Check logs and try again." in str(distribution)
     assert "feature read failed" not in str(distribution)
@@ -2379,7 +2684,9 @@ def test_render_feature_deep_dive_handles_backend_errors(monkeypatch) -> None:
 def test_render_feature_deep_dive_surfaces_custom_edge_validation(monkeypatch) -> None:
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: SimpleNamespace())
     app = create_app()
-    fn = _find_callback_by_input_and_output(app, "deepdive-feature-select", "deepdive-distribution-container")
+    fn = _find_callback_by_input_and_output(
+        app, "deepdive-feature-select", "deepdive-distribution-container"
+    )
 
     distribution, dimension, context = fn(
         "/features",
@@ -2417,9 +2724,13 @@ def test_render_feature_deep_dive_reports_unsafe_raw_fallback(monkeypatch) -> No
 
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
     app = create_app()
-    fn = _find_callback_by_input_and_output(app, "deepdive-feature-select", "deepdive-distribution-container")
+    fn = _find_callback_by_input_and_output(
+        app, "deepdive-feature-select", "deepdive-distribution-container"
+    )
 
-    distribution, _, context = fn("/features", "fraud_model_demo", "amount", "", 0, {}, 0, "auto", 40, "", "off", 1.0)
+    distribution, _, context = fn(
+        "/features", "fraud_model_demo", "amount", "", 0, {}, 0, "auto", 40, "", "off", 1.0
+    )
 
     assert "cannot enforce a hard cap on raw source-window reads" in str(distribution)
     assert "cannot enforce a hard cap on raw source-window reads" in str(context)
@@ -2473,7 +2784,9 @@ def test_analysis_pages_include_loading_wrappers() -> None:
         incidents.layout(),
     ]
 
-    assert all(any(isinstance(component, dcc.Loading) for component in _walk(page)) for page in pages)
+    assert all(
+        any(isinstance(component, dcc.Loading) for component in _walk(page)) for page in pages
+    )
 
 
 def test_labels_discovery_surfaces_zero_match_warning() -> None:
@@ -2495,7 +2808,9 @@ def test_labels_discovery_surfaces_zero_match_warning() -> None:
         order_col="label_timestamp",
     )
 
-    assert "No rows matched between inference and labels tables on this join column" in str(component)
+    assert "No rows matched between inference and labels tables on this join column" in str(
+        component
+    )
 
 
 def test_render_reference_callback_shows_archive_and_delete_actions(monkeypatch) -> None:
@@ -2767,7 +3082,9 @@ def test_populate_incident_filters_uses_incident_data(monkeypatch) -> None:
     class _FakeBackend:
         def get_incidents_data(self, limit_history=100):
             return {
-                "models": [{"id": "fraud_model_demo", "name": "Fraud Model Demo", "status": "active"}],
+                "models": [
+                    {"id": "fraud_model_demo", "name": "Fraud Model Demo", "status": "active"}
+                ],
                 "open_incidents": pd.DataFrame([{"metric_name": "psi"}]),
                 "history": pd.DataFrame([{"metric_name": "js_divergence"}]),
             }
@@ -2872,7 +3189,9 @@ def test_reference_bootstrap_retry_callback_triggers_shared_job(monkeypatch) -> 
         lambda **kwargs: SimpleNamespace(job_id=123, run_id=456),
     )
     app = create_app()
-    fn = _find_callback_by_input_and_output(app, "reference-run-bootstrap-btn", "reference-page-status")
+    fn = _find_callback_by_input_and_output(
+        app, "reference-run-bootstrap-btn", "reference-page-status"
+    )
 
     result = fn(
         1,
@@ -2891,7 +3210,9 @@ def test_reference_bootstrap_retry_callback_triggers_shared_job(monkeypatch) -> 
     assert result[1]
 
 
-def test_reference_model_selector_prefers_sidebar_selection_over_stale_page_value(monkeypatch) -> None:
+def test_reference_model_selector_prefers_sidebar_selection_over_stale_page_value(
+    monkeypatch,
+) -> None:
     class _FakeBackend:
         def list_reference_models(self, status="active"):
             assert status == "active"
@@ -2914,7 +3235,9 @@ def test_reference_model_selector_prefers_sidebar_selection_over_stale_page_valu
 
 def test_clear_reference_status_on_reference_navigation_and_selection_change() -> None:
     app = create_app()
-    fn = _find_callback_by_input_and_output(app, "reference-monitor-status-filter", "reference-page-status")
+    fn = _find_callback_by_input_and_output(
+        app, "reference-monitor-status-filter", "reference-page-status"
+    )
 
     result = fn("/reference", "fraud_model_demo", "fraud_model_demo", "active")
 
@@ -2942,7 +3265,9 @@ def test_archive_reference_monitor_callback_archives_selected_monitor(monkeypatc
 
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
     app = create_app()
-    fn = _find_callback_by_input_and_output(app, "reference-archive-confirm-btn", "reference-page-status")
+    fn = _find_callback_by_input_and_output(
+        app, "reference-archive-confirm-btn", "reference-page-status"
+    )
 
     result = fn(1, "fraud_model_demo", None, {})
 
@@ -2968,9 +3293,13 @@ def test_restore_reference_monitor_callback_ignores_non_click_invocations(monkey
             return SimpleNamespace(display_name="Fraud Model Demo", model_key="fraud_model_demo")
 
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
-    monkeypatch.setattr(callbacks_module, "ctx", SimpleNamespace(triggered_id="reference-restore-monitor-btn"))
+    monkeypatch.setattr(
+        callbacks_module, "ctx", SimpleNamespace(triggered_id="reference-restore-monitor-btn")
+    )
     app = create_app()
-    fn = _find_callback_by_input_and_output(app, "reference-restore-monitor-btn", "reference-page-status")
+    fn = _find_callback_by_input_and_output(
+        app, "reference-restore-monitor-btn", "reference-page-status"
+    )
 
     result = fn(None, "fraud_model_demo", None, {})
 
@@ -2995,9 +3324,13 @@ def test_restore_reference_monitor_callback_restores_selected_monitor(monkeypatc
             return SimpleNamespace(display_name="Fraud Model Demo", model_key="fraud_model_demo")
 
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
-    monkeypatch.setattr(callbacks_module, "ctx", SimpleNamespace(triggered_id="reference-restore-monitor-btn"))
+    monkeypatch.setattr(
+        callbacks_module, "ctx", SimpleNamespace(triggered_id="reference-restore-monitor-btn")
+    )
     app = create_app()
-    fn = _find_callback_by_input_and_output(app, "reference-restore-monitor-btn", "reference-page-status")
+    fn = _find_callback_by_input_and_output(
+        app, "reference-restore-monitor-btn", "reference-page-status"
+    )
 
     result = fn(1, "fraud_model_demo", None, {})
 
@@ -3032,7 +3365,9 @@ def test_save_reference_schedule_persists_threshold_overrides(monkeypatch) -> No
             self.repository = SimpleNamespace(
                 upsert_monitor_config=lambda updated: saved.setdefault("config", updated),
                 get_monitor_runtime_state=lambda _: None,
-                ensure_monitor_runtime_state=lambda updated: saved.setdefault("runtime_state", updated.model_key),
+                ensure_monitor_runtime_state=lambda updated: saved.setdefault(
+                    "runtime_state", updated.model_key
+                ),
             )
 
         def get_monitor_config(self, model_id):
@@ -3041,7 +3376,9 @@ def test_save_reference_schedule_persists_threshold_overrides(monkeypatch) -> No
 
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
     app = create_app()
-    fn = _find_callback_by_input_and_output(app, "reference-save-schedule-btn", "reference-page-status")
+    fn = _find_callback_by_input_and_output(
+        app, "reference-save-schedule-btn", "reference-page-status"
+    )
 
     result = fn(
         1,
@@ -3114,9 +3451,13 @@ def test_save_drift_thresholds_preserves_existing_monitor_config(monkeypatch) ->
             return config
 
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
-    monkeypatch.setattr(callbacks_module, "ctx", SimpleNamespace(triggered_id="drift-save-thresholds-btn"))
+    monkeypatch.setattr(
+        callbacks_module, "ctx", SimpleNamespace(triggered_id="drift-save-thresholds-btn")
+    )
     app = create_app()
-    fn = _find_callback_by_input_and_output(app, "drift-save-thresholds-btn", "drift-threshold-status")
+    fn = _find_callback_by_input_and_output(
+        app, "drift-save-thresholds-btn", "drift-threshold-status"
+    )
 
     result = fn(
         1,
@@ -3174,9 +3515,13 @@ def test_save_drift_thresholds_surfaces_validation_message(monkeypatch) -> None:
             return config
 
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
-    monkeypatch.setattr(callbacks_module, "ctx", SimpleNamespace(triggered_id="drift-save-thresholds-btn"))
+    monkeypatch.setattr(
+        callbacks_module, "ctx", SimpleNamespace(triggered_id="drift-save-thresholds-btn")
+    )
     app = create_app()
-    fn = _find_callback_by_input_and_output(app, "drift-save-thresholds-btn", "drift-threshold-status")
+    fn = _find_callback_by_input_and_output(
+        app, "drift-save-thresholds-btn", "drift-threshold-status"
+    )
 
     result = fn(
         1,
@@ -3204,7 +3549,9 @@ def test_save_reference_shared_schedule_callback_updates_shared_job(monkeypatch)
         lambda interval_hours: SimpleNamespace(current_label="Every 12 Hours", job_id=321),
     )
     app = create_app()
-    fn = _find_callback_by_input_and_output(app, "reference-save-shared-schedule-btn", "reference-page-status")
+    fn = _find_callback_by_input_and_output(
+        app, "reference-save-shared-schedule-btn", "reference-page-status"
+    )
 
     result = fn(1, 12)
 
@@ -3233,7 +3580,9 @@ def test_delete_reference_monitor_callback_deletes_selected_monitor(monkeypatch)
 
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
     app = create_app()
-    fn = _find_callback_by_input_and_output(app, "reference-delete-confirm-btn", "reference-page-status")
+    fn = _find_callback_by_input_and_output(
+        app, "reference-delete-confirm-btn", "reference-page-status"
+    )
 
     result = fn(1, "fraud_model_demo", None, "fraud_model_demo", {})
 
@@ -3246,7 +3595,9 @@ def test_delete_reference_monitor_callback_surfaces_unsupported_delete(monkeypat
     repository = SimpleNamespace()
 
     def delete_monitor(model_id):
-        raise callbacks_module.PermanentDeleteUnsupportedError("Permanent delete requires Unity Catalog control-plane tables.")
+        raise callbacks_module.PermanentDeleteUnsupportedError(
+            "Permanent delete requires Unity Catalog control-plane tables."
+        )
 
     repository.delete_monitor = delete_monitor
     config = SimpleNamespace(display_name="Fraud Model Demo", model_key="fraud_model_demo")
@@ -3261,7 +3612,9 @@ def test_delete_reference_monitor_callback_surfaces_unsupported_delete(monkeypat
 
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
     app = create_app()
-    fn = _find_callback_by_input_and_output(app, "reference-delete-confirm-btn", "reference-page-status")
+    fn = _find_callback_by_input_and_output(
+        app, "reference-delete-confirm-btn", "reference-page-status"
+    )
 
     result = fn(1, "fraud_model_demo", None, "fraud_model_demo", {})
 
@@ -3277,8 +3630,12 @@ def test_delete_reference_monitor_callback_blocks_when_model_key_is_ambiguous(mo
 
     repository.delete_monitor = delete_monitor
     repository.list_monitor_configs = lambda status=None: [
-        SimpleNamespace(model_key="fraud_model_demo", display_name="Fraud Model Demo A", status="active"),
-        SimpleNamespace(model_key="fraud_model_demo", display_name="Fraud Model Demo B", status="inactive"),
+        SimpleNamespace(
+            model_key="fraud_model_demo", display_name="Fraud Model Demo A", status="active"
+        ),
+        SimpleNamespace(
+            model_key="fraud_model_demo", display_name="Fraud Model Demo B", status="inactive"
+        ),
     ]
 
     class _FakeBackend:
@@ -3290,7 +3647,9 @@ def test_delete_reference_monitor_callback_blocks_when_model_key_is_ambiguous(mo
 
     monkeypatch.setattr(callbacks_module, "_make_backend", lambda session_data: _FakeBackend())
     app = create_app()
-    fn = _find_callback_by_input_and_output(app, "reference-delete-confirm-btn", "reference-page-status")
+    fn = _find_callback_by_input_and_output(
+        app, "reference-delete-confirm-btn", "reference-page-status"
+    )
 
     result = fn(1, "fraud_model_demo", None, "fraud_model_demo", {})
 
@@ -3334,7 +3693,9 @@ def test_reference_delete_confirmation_enables_delete_only_on_exact_match() -> N
 
 
 def test_sidebar_status_truncates_long_monitor_description_with_ellipsis_css(monkeypatch) -> None:
-    description = "cjc_aws_workspace_catalog.model_landscape_demo.inference_logs | model_id=fraud_model_v1"
+    description = (
+        "cjc_aws_workspace_catalog.model_landscape_demo.inference_logs | model_id=fraud_model_v1"
+    )
 
     class _FakeBackend:
         def get_model_map(self):

@@ -18,7 +18,6 @@ from model_landscape.domain.models import (
     MonitorRuntimeState,
     RefreshResult,
 )
-from model_landscape.services.inference_contracts import build_inference_contract
 from model_landscape.services.class_filters import NEGATIVE_CLASS_TOKENS, POSITIVE_CLASS_TOKENS
 from model_landscape.services.lakebase import LakebaseConnection, LakebaseReadModel
 from model_landscape.services.schema import (
@@ -34,17 +33,21 @@ from model_landscape.services.schema import (
     incident_history_migration_columns,
     incident_migration_columns,
     monitor_config_migration_columns,
-    performance_metric_migration_columns,
     performance_bin_spec_migration_columns,
+    performance_metric_migration_columns,
     quality_history_migration_columns,
     quality_metric_migration_columns,
     refresh_run_migration_columns,
     runtime_state_migration_columns,
 )
-from model_landscape.services.sql_utils import array_literal, parse_string_array, quote_column, validate_identifier
+from model_landscape.services.sql_utils import (
+    array_literal,
+    parse_string_array,
+    quote_column,
+    validate_identifier,
+)
 from model_landscape.services.table_names import TableNames
 from model_landscape.services.warehouse import WarehouseConnection, get_warehouse
-
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +107,9 @@ def _sql_probability_indicator(expression: str) -> str:
     )
 
 
-def _sql_binary_prediction_expression(prediction_expression: str, *, score_expression: str | None = None) -> str:
+def _sql_binary_prediction_expression(
+    prediction_expression: str, *, score_expression: str | None = None
+) -> str:
     parts = [_sql_binary_indicator(prediction_expression)]
     if score_expression:
         parts.append(_sql_probability_indicator(score_expression))
@@ -127,8 +132,12 @@ def _safe_json_dict(value: Any) -> dict[str, Any]:
     return {str(key): inner for key, inner in loaded.items()}
 
 
-def _combine_weighted_mean_std(parts: list[tuple[int, float | None, float | None]]) -> tuple[float | None, float | None]:
-    valid_parts = [(count, mean, std) for count, mean, std in parts if count > 0 and mean is not None]
+def _combine_weighted_mean_std(
+    parts: list[tuple[int, float | None, float | None]],
+) -> tuple[float | None, float | None]:
+    valid_parts = [
+        (count, mean, std) for count, mean, std in parts if count > 0 and mean is not None
+    ]
     if not valid_parts:
         return None, None
     total_count = sum(count for count, _, _ in valid_parts)
@@ -147,27 +156,32 @@ def _combine_weighted_mean_std(parts: list[tuple[int, float | None, float | None
     return combined_mean, combined_std
 
 
-def _non_empty_text_bounds(values: list[object] | tuple[object, ...]) -> tuple[str | None, str | None]:
+def _non_empty_text_bounds(
+    values: list[object] | tuple[object, ...],
+) -> tuple[str | None, str | None]:
     normalized = sorted(str(value).strip() for value in values if str(value).strip())
     if not normalized:
         return None, None
     return normalized[0], normalized[-1]
 
 
-def _aggregate_quality_summary_rows(model_key: str, rows: list[dict[str, Any]], computed_at: str) -> list[dict[str, Any]]:
+def _aggregate_quality_summary_rows(
+    model_key: str, rows: list[dict[str, Any]], computed_at: str
+) -> list[dict[str, Any]]:
     if not rows:
         return []
     normalized_rows = [dict(row) for row in rows]
-    dated_rows = [
-        row for row in normalized_rows
-        if _as_text(row.get("profile_date")).strip()
-    ]
+    dated_rows = [row for row in normalized_rows if _as_text(row.get("profile_date")).strip()]
     if not dated_rows:
         return []
     total_rows = sum(int(row.get("row_count", 0) or 0) for row in dated_rows)
     if total_rows <= 0:
         return []
-    profile_dates = sorted(_as_text(row.get("profile_date")).strip() for row in dated_rows if _as_text(row.get("profile_date")).strip())
+    profile_dates = sorted(
+        _as_text(row.get("profile_date")).strip()
+        for row in dated_rows
+        if _as_text(row.get("profile_date")).strip()
+    )
     daily_volume = {
         _as_text(row.get("profile_date")).strip(): int(row.get("row_count", 0) or 0)
         for row in sorted(dated_rows, key=lambda item: _as_text(item.get("profile_date")).strip())
@@ -181,30 +195,36 @@ def _aggregate_quality_summary_rows(model_key: str, rows: list[dict[str, Any]], 
             null_value = _as_float(null_pct)
             if null_value is None:
                 continue
-            null_totals[str(feature_name)] = null_totals.get(str(feature_name), 0.0) + (null_value * row_count)
+            null_totals[str(feature_name)] = null_totals.get(str(feature_name), 0.0) + (
+                null_value * row_count
+            )
     null_rates = {
         feature_name: round(weighted_total / total_rows, 2)
         for feature_name, weighted_total in sorted(null_totals.items())
     }
-    prediction_mean, prediction_std = _combine_weighted_mean_std([
-        (
-            int(row.get("row_count", 0) or 0),
-            _as_float(row.get("prediction_mean")),
-            _as_float(row.get("prediction_std")),
-        )
-        for row in dated_rows
-    ])
-    return [{
-        "model_key": model_key,
-        "total_rows": total_rows,
-        "min_date": profile_dates[0],
-        "max_date": profile_dates[-1],
-        "prediction_mean": prediction_mean,
-        "prediction_std": prediction_std,
-        "daily_volume": json.dumps(daily_volume),
-        "null_rates": json.dumps(null_rates),
-        "computed_at": computed_at,
-    }]
+    prediction_mean, prediction_std = _combine_weighted_mean_std(
+        [
+            (
+                int(row.get("row_count", 0) or 0),
+                _as_float(row.get("prediction_mean")),
+                _as_float(row.get("prediction_std")),
+            )
+            for row in dated_rows
+        ]
+    )
+    return [
+        {
+            "model_key": model_key,
+            "total_rows": total_rows,
+            "min_date": profile_dates[0],
+            "max_date": profile_dates[-1],
+            "prediction_mean": prediction_mean,
+            "prediction_std": prediction_std,
+            "daily_volume": json.dumps(daily_volume),
+            "null_rates": json.dumps(null_rates),
+            "computed_at": computed_at,
+        }
+    ]
 
 
 def _is_field_already_exists_error(error: Exception) -> bool:
@@ -231,7 +251,9 @@ def _resolve_source_labels_join_col(
     return None
 
 
-def _monitor_status_filter(status: str | list[str] | tuple[str, ...] | None) -> tuple[str, tuple[object, ...]]:
+def _monitor_status_filter(
+    status: str | list[str] | tuple[str, ...] | None,
+) -> tuple[str, tuple[object, ...]]:
     if status in (None, "", "all"):
         return "", ()
     if isinstance(status, str):
@@ -355,7 +377,7 @@ class ControlPlaneRepository:
             raise
 
     def _describe_table(self, table_name: str, *, cache: bool = True) -> pd.DataFrame:
-        describe = getattr(self._warehouse, "describe_table")
+        describe = self._warehouse.describe_table
         try:
             return describe(table_name, cache=cache)
         except TypeError:
@@ -370,7 +392,7 @@ class ControlPlaneRepository:
         }
 
     def _get_table_columns(self, table_name: str, *, cache: bool = True) -> list[str]:
-        get_columns = getattr(self._warehouse, "get_columns")
+        get_columns = self._warehouse.get_columns
         try:
             return [str(value) for value in get_columns(table_name, cache=cache)]
         except TypeError:
@@ -408,7 +430,9 @@ class ControlPlaneRepository:
             existing.add(normalized_name)
 
     def _ensure_monitor_config_columns(self) -> None:
-        self._ensure_table_columns(self._table_names.monitor_configs, monitor_config_migration_columns())
+        self._ensure_table_columns(
+            self._table_names.monitor_configs, monitor_config_migration_columns()
+        )
 
     def _ensure_refresh_run_columns(self) -> None:
         self._ensure_table_columns(self._table_names.refresh_runs, refresh_run_migration_columns())
@@ -441,7 +465,9 @@ class ControlPlaneRepository:
             return
 
     def _ensure_runtime_state_columns(self) -> None:
-        self._ensure_table_columns(self._table_names.monitor_runtime_state, runtime_state_migration_columns())
+        self._ensure_table_columns(
+            self._table_names.monitor_runtime_state, runtime_state_migration_columns()
+        )
 
     def _ensure_drift_metric_columns(self) -> None:
         self._ensure_table_columns(
@@ -514,19 +540,21 @@ class ControlPlaneRepository:
                 CASE WHEN EXISTS (
                     SELECT 1
                     FROM {self._table_names.performance_metrics}
-                    WHERE {' AND '.join(performance_filters)}
+                    WHERE {" AND ".join(performance_filters)}
                     LIMIT 1
                 ) THEN 1 ELSE 0 END AS has_performance_rows,
                 CASE WHEN EXISTS (
                     SELECT 1
                     FROM {self._table_names.daily_label_metrics}
-                    WHERE {' AND '.join(daily_label_filters)}
+                    WHERE {" AND ".join(daily_label_filters)}
                     LIMIT 1
                 ) THEN 1 ELSE 0 END AS has_daily_label_rows
             """,
             tuple([*performance_params, *daily_label_params]),
         )
-        if frame.empty or not {"has_performance_rows", "has_daily_label_rows"}.issubset(frame.columns):
+        if frame.empty or not {"has_performance_rows", "has_daily_label_rows"}.issubset(
+            frame.columns
+        ):
             return False
         row = frame.iloc[0]
         has_performance_rows = bool(int(row.get("has_performance_rows", 0) or 0))
@@ -610,7 +638,9 @@ class ControlPlaneRepository:
             incident_history_migration_columns(),
         )
 
-    def scan_source_table(self, table_name: str, preview_rows: int = 5) -> tuple[list[str], pd.DataFrame, pd.DataFrame]:
+    def scan_source_table(
+        self, table_name: str, preview_rows: int = 5
+    ) -> tuple[list[str], pd.DataFrame, pd.DataFrame]:
         validate_identifier(table_name)
         preview_rows = max(1, min(preview_rows, 20))
         schema = self._describe_table(table_name)
@@ -635,8 +665,7 @@ class ControlPlaneRepository:
             return pd.DataFrame(columns=selected_columns)
         projection_sql = ", ".join(quote_column(column) for column in selected_columns)
         hash_order_terms = ", ".join(
-            f"COALESCE(CAST({quote_column(column)} AS STRING), '')"
-            for column in selected_columns
+            f"COALESCE(CAST({quote_column(column)} AS STRING), '')" for column in selected_columns
         )
         return self._warehouse.query(
             f"""
@@ -647,7 +676,9 @@ class ControlPlaneRepository:
             """
         )
 
-    def sample_distinct_values(self, table_name: str, column_name: str, limit: int = 20) -> list[str]:
+    def sample_distinct_values(
+        self, table_name: str, column_name: str, limit: int = 20
+    ) -> list[str]:
         validate_identifier(table_name)
         column_name = validate_identifier(column_name)
         limit = max(1, min(limit, 50))
@@ -680,16 +711,24 @@ class ControlPlaneRepository:
         filters: list[str] = []
         params: list[object] = []
         if config.model_id_value and config.contract.model_id_col:
-            filters.append(f"{prefix}{quote_column(validate_identifier(config.contract.model_id_col))} = %s")
+            filters.append(
+                f"{prefix}{quote_column(validate_identifier(config.contract.model_id_col))} = %s"
+            )
             params.append(config.model_id_value)
         if config.model_version_value and config.contract.model_version_col:
-            filters.append(f"{prefix}{quote_column(validate_identifier(config.contract.model_version_col))} = %s")
+            filters.append(
+                f"{prefix}{quote_column(validate_identifier(config.contract.model_version_col))} = %s"
+            )
             params.append(config.model_version_value)
         if start_date:
-            filters.append(f"CAST({prefix}{quote_column(validate_identifier(config.contract.timestamp_col))} AS DATE) >= CAST(%s AS DATE)")
+            filters.append(
+                f"CAST({prefix}{quote_column(validate_identifier(config.contract.timestamp_col))} AS DATE) >= CAST(%s AS DATE)"
+            )
             params.append(start_date)
         if end_date:
-            filters.append(f"CAST({prefix}{quote_column(validate_identifier(config.contract.timestamp_col))} AS DATE) <= CAST(%s AS DATE)")
+            filters.append(
+                f"CAST({prefix}{quote_column(validate_identifier(config.contract.timestamp_col))} AS DATE) <= CAST(%s AS DATE)"
+            )
             params.append(end_date)
         return filters, params
 
@@ -721,7 +760,9 @@ class ControlPlaneRepository:
             ) duplicate_keys
             """
         )
-        duplicate_key_count = 0 if duplicate_keys.empty else int(duplicate_keys.iloc[0]["duplicate_key_count"] or 0)
+        duplicate_key_count = (
+            0 if duplicate_keys.empty else int(duplicate_keys.iloc[0]["duplicate_key_count"] or 0)
+        )
 
         join_presence = self._warehouse.query(
             f"""
@@ -761,7 +802,9 @@ class ControlPlaneRepository:
                 if text and text not in distinct_label_values:
                     distinct_label_values.append(text)
 
-        binary_compatible = bool(distinct_label_values) and set(distinct_label_values).issubset({"0", "1"})
+        binary_compatible = bool(distinct_label_values) and set(distinct_label_values).issubset(
+            {"0", "1"}
+        )
         match_rate_pct = round((matched_rows / inference_rows) * 100, 2) if inference_rows else 0.0
 
         return {
@@ -941,9 +984,13 @@ class ControlPlaneRepository:
         )
         self._sync_read_model()
 
-    def list_monitor_configs(self, status: str | list[str] | tuple[str, ...] | None = "active") -> list[MonitorConfig]:
+    def list_monitor_configs(
+        self, status: str | list[str] | tuple[str, ...] | None = "active"
+    ) -> list[MonitorConfig]:
         where_sql, params = _monitor_status_filter(status)
-        query = f"SELECT * FROM {self._table_names.monitor_configs}{where_sql} ORDER BY updated_at DESC"
+        query = (
+            f"SELECT * FROM {self._table_names.monitor_configs}{where_sql} ORDER BY updated_at DESC"
+        )
         if params:
             frame = self._warehouse.query_params(query, params)
         else:
@@ -953,9 +1000,13 @@ class ControlPlaneRepository:
         if configs or not requested_statuses:
             return configs
 
-        fallback_query = f"SELECT * FROM {self._table_names.monitor_configs} ORDER BY updated_at DESC"
+        fallback_query = (
+            f"SELECT * FROM {self._table_names.monitor_configs} ORDER BY updated_at DESC"
+        )
         fallback_frame = self._warehouse.query(fallback_query)
-        fallback_configs = [self._row_to_monitor_config(row) for _, row in fallback_frame.iterrows()]
+        fallback_configs = [
+            self._row_to_monitor_config(row) for _, row in fallback_frame.iterrows()
+        ]
         if not fallback_configs:
             return []
 
@@ -1024,15 +1075,16 @@ class ControlPlaneRepository:
             self._table_names.monitor_configs,
         )
         statements = [
-            f"DELETE FROM {table_name} WHERE model_key = %s;"
-            for table_name in table_names
+            f"DELETE FROM {table_name} WHERE model_key = %s;" for table_name in table_names
         ]
         atomic_sql = "\n".join(statements)
         try:
             self._warehouse.execute_atomic_params(atomic_sql, (model_key,) * len(table_names))
         except Exception as error:
             logger.exception("Atomic delete failed for %s", model_key, exc_info=error)
-            raise RuntimeError("Atomic monitor delete failed; no partial delete was applied.") from error
+            raise RuntimeError(
+                "Atomic monitor delete failed; no partial delete was applied."
+            ) from error
         self._sync_read_model()
 
     def _monitor_exists(self, model_key: str) -> bool:
@@ -1082,7 +1134,9 @@ class ControlPlaneRepository:
             performance_metric_names=parse_string_array(row.get("performance_metric_names")),
             default_performance_metric=_as_text(row.get("default_performance_metric")) or None,
             performance_binning_mode=_as_text(row.get("performance_binning_mode")) or "quantile",
-            performance_binning_clip_percentile=_as_float(row.get("performance_binning_clip_percentile")),
+            performance_binning_clip_percentile=_as_float(
+                row.get("performance_binning_clip_percentile")
+            ),
             drift_cadence_preset=_as_text(row.get("drift_cadence_preset")) or "6h",
             performance_cadence_preset=(
                 _as_text(row.get("performance_cadence_preset"))
@@ -1118,7 +1172,9 @@ class ControlPlaneRepository:
             consecutive_failures=int(row.get("consecutive_failures", 0) or 0),
         )
 
-    def list_monitor_runtime_states(self, model_keys: list[str] | None = None) -> dict[str, MonitorRuntimeState]:
+    def list_monitor_runtime_states(
+        self, model_keys: list[str] | None = None
+    ) -> dict[str, MonitorRuntimeState]:
         if model_keys:
             placeholders = ", ".join(["%s"] * len(model_keys))
             frame = self._warehouse.query_params(
@@ -1130,15 +1186,14 @@ class ControlPlaneRepository:
                 tuple(model_keys),
             )
         else:
-            frame = self._warehouse.query(f"SELECT * FROM {self._table_names.monitor_runtime_state}")
+            frame = self._warehouse.query(
+                f"SELECT * FROM {self._table_names.monitor_runtime_state}"
+            )
         if frame.empty:
             return {}
         return {
             state.model_key: state
-            for state in (
-                self._row_to_runtime_state(row)
-                for _, row in frame.iterrows()
-            )
+            for state in (self._row_to_runtime_state(row) for _, row in frame.iterrows())
         }
 
     def get_monitor_runtime_state(self, model_key: str) -> MonitorRuntimeState | None:
@@ -1216,7 +1271,9 @@ class ControlPlaneRepository:
             next_drift_due_at=now if config.schedule_enabled else None,
             next_performance_due_at=(
                 now
-                if config.schedule_enabled and config.has_labels and config.performance_cadence_preset != "disabled"
+                if config.schedule_enabled
+                and config.has_labels
+                and config.performance_cadence_preset != "disabled"
                 else None
             ),
             last_label_watermark=existing.last_label_watermark if existing else None,
@@ -1241,7 +1298,9 @@ class ControlPlaneRepository:
             next_drift_due_at=now if config.schedule_enabled else None,
             next_performance_due_at=(
                 now
-                if config.schedule_enabled and config.has_labels and config.performance_cadence_preset != "disabled"
+                if config.schedule_enabled
+                and config.has_labels
+                and config.performance_cadence_preset != "disabled"
                 else None
             ),
             last_label_watermark=existing.last_label_watermark if existing else None,
@@ -1270,7 +1329,11 @@ class ControlPlaneRepository:
                 FROM {config.source_table}
                 """
             )
-            distinct_count = 0 if distinct_models.empty else int(distinct_models.iloc[0]["distinct_model_ids"] or 0)
+            distinct_count = (
+                0
+                if distinct_models.empty
+                else int(distinct_models.iloc[0]["distinct_model_ids"] or 0)
+            )
             if distinct_count > 1:
                 raise ValueError(
                     "Source table contains multiple model_id values. Set Monitored Model ID Value so this monitor targets one model."
@@ -1297,7 +1360,9 @@ class ControlPlaneRepository:
         }
         if config.labels_order_col:
             required_columns.add(config.labels_order_col)
-        missing = sorted(column for column in required_columns if column and column not in label_columns)
+        missing = sorted(
+            column for column in required_columns if column and column not in label_columns
+        )
         if missing:
             raise ValueError(f"External labels table is missing required columns: {missing}")
 
@@ -1315,7 +1380,9 @@ class ControlPlaneRepository:
             ) duplicate_keys
             """
         )
-        duplicate_count = 0 if duplicate_keys.empty else int(duplicate_keys.iloc[0]["duplicate_key_count"] or 0)
+        duplicate_count = (
+            0 if duplicate_keys.empty else int(duplicate_keys.iloc[0]["duplicate_key_count"] or 0)
+        )
         if duplicate_count > 0:
             raise ValueError(
                 "External labels table contains duplicate join keys. Provide External Labels Order Column so Model Landscape can pick the latest label."
@@ -1354,13 +1421,20 @@ class ControlPlaneRepository:
         if config.contract.label_col and not config.labels_table:
             source_label_column = config.contract.label_col
             select_columns.append(config.contract.label_col)
-        source_columns = self._warehouse.get_columns(config.source_table) if config.labels_table else []
+        source_columns = (
+            self._warehouse.get_columns(config.source_table) if config.labels_table else []
+        )
         source_join_col = _resolve_source_labels_join_col(
             source_columns,
             config.contract.entity_id_col,
             config.labels_join_col,
         )
-        if config.labels_table and config.contract.label_col and source_join_col and config.labels_join_col:
+        if (
+            config.labels_table
+            and config.contract.label_col
+            and source_join_col
+            and config.labels_join_col
+        ):
             select_columns.append(source_join_col)
 
         deduped_columns = list(dict.fromkeys(select_columns))
@@ -1371,7 +1445,12 @@ class ControlPlaneRepository:
 
         label_projection = ""
         join_sql = ""
-        if config.labels_table and config.contract.label_col and source_join_col and config.labels_join_col:
+        if (
+            config.labels_table
+            and config.contract.label_col
+            and source_join_col
+            and config.labels_join_col
+        ):
             validate_identifier(config.labels_table)
             label_col = validate_identifier(config.contract.label_col)
             join_col = validate_identifier(config.labels_join_col)
@@ -1402,15 +1481,27 @@ class ControlPlaneRepository:
                 f" = l.{quote_column(join_col)}"
             )
 
-        filters, params = self._source_filters(config, start_date=start_date, end_date=end_date, alias="s")
+        filters, params = self._source_filters(
+            config, start_date=start_date, end_date=end_date, alias="s"
+        )
         where_sql = f" WHERE {' AND '.join(filters)}" if filters else ""
 
         source_from_sql = f"{config.source_table} s"
-        if (sample_rows_per_day and sample_rows_per_day > 0) or (max_total_rows and max_total_rows > 0):
-            sample_limit = int(sample_rows_per_day) if sample_rows_per_day and sample_rows_per_day > 0 else None
+        if (sample_rows_per_day and sample_rows_per_day > 0) or (
+            max_total_rows and max_total_rows > 0
+        ):
+            sample_limit = (
+                int(sample_rows_per_day)
+                if sample_rows_per_day and sample_rows_per_day > 0
+                else None
+            )
             total_limit = int(max_total_rows) if max_total_rows and max_total_rows > 0 else None
-            sample_columns = ", ".join(quote_column(validate_identifier(column)) for column in deduped_columns)
-            sample_filters, _ = self._source_filters(config, start_date=start_date, end_date=end_date, alias="")
+            sample_columns = ", ".join(
+                quote_column(validate_identifier(column)) for column in deduped_columns
+            )
+            sample_filters, _ = self._source_filters(
+                config, start_date=start_date, end_date=end_date, alias=""
+            )
             sample_where_sql = f" WHERE {' AND '.join(sample_filters)}" if sample_filters else ""
             hash_columns = [config.contract.timestamp_col, config.contract.prediction_col]
             if config.contract.model_id_col:
@@ -1423,8 +1514,14 @@ class ControlPlaneRepository:
                 if column
             )
             if sample_limit is not None:
-                sample_where_limit_sql = f"WHERE {quote_column('model_landscape_sample_rank')} <= {sample_limit}"
-                total_limit_sql = f"ORDER BY xxhash64({hash_order_terms}) LIMIT {total_limit}" if total_limit else ""
+                sample_where_limit_sql = (
+                    f"WHERE {quote_column('model_landscape_sample_rank')} <= {sample_limit}"
+                )
+                total_limit_sql = (
+                    f"ORDER BY xxhash64({hash_order_terms}) LIMIT {total_limit}"
+                    if total_limit
+                    else ""
+                )
                 source_from_sql = f"""
                     (
                         SELECT {sample_columns}
@@ -1443,7 +1540,11 @@ class ControlPlaneRepository:
                     ) s
                 """
             else:
-                total_limit_sql = f"ORDER BY xxhash64({hash_order_terms}) LIMIT {total_limit}" if total_limit else ""
+                total_limit_sql = (
+                    f"ORDER BY xxhash64({hash_order_terms}) LIMIT {total_limit}"
+                    if total_limit
+                    else ""
+                )
                 source_from_sql = f"""
                     (
                         SELECT {sample_columns}
@@ -1452,7 +1553,9 @@ class ControlPlaneRepository:
                         {total_limit_sql}
                     ) s
                 """
-            params = list(self._source_filters(config, start_date=start_date, end_date=end_date, alias="")[1])
+            params = list(
+                self._source_filters(config, start_date=start_date, end_date=end_date, alias="")[1]
+            )
             where_sql = ""
 
         query = f"""
@@ -1462,7 +1565,11 @@ class ControlPlaneRepository:
             {where_sql}
             ORDER BY s.{quote_column(ts_col)}
         """
-        frame = self._warehouse.query_params(query, tuple(params)) if params else self._warehouse.query(query)
+        frame = (
+            self._warehouse.query_params(query, tuple(params))
+            if params
+            else self._warehouse.query(query)
+        )
         if source_label_column and source_label_column not in frame.columns:
             frame[source_label_column] = pd.NA
         return frame
@@ -1482,17 +1589,26 @@ class ControlPlaneRepository:
         prediction_expr = f"s.{quote_column(validate_identifier(config.contract.prediction_col))}"
         score_expr = None
         if config.contract.prediction_score_col:
-            score_expr = f"s.{quote_column(validate_identifier(config.contract.prediction_score_col))}"
+            score_expr = (
+                f"s.{quote_column(validate_identifier(config.contract.prediction_score_col))}"
+            )
 
         label_expr = None
         join_sql = ""
-        source_columns = self._warehouse.get_columns(config.source_table) if config.labels_table else []
+        source_columns = (
+            self._warehouse.get_columns(config.source_table) if config.labels_table else []
+        )
         source_join_col = _resolve_source_labels_join_col(
             source_columns,
             config.contract.entity_id_col,
             config.labels_join_col,
         )
-        if config.labels_table and config.contract.label_col and source_join_col and config.labels_join_col:
+        if (
+            config.labels_table
+            and config.contract.label_col
+            and source_join_col
+            and config.labels_join_col
+        ):
             validate_identifier(config.labels_table)
             label_col = validate_identifier(config.contract.label_col)
             join_col = validate_identifier(config.labels_join_col)
@@ -1528,9 +1644,13 @@ class ControlPlaneRepository:
         if not label_expr:
             return []
 
-        filters, params = self._source_filters(config, start_date=start_date, end_date=end_date, alias="s")
+        filters, params = self._source_filters(
+            config, start_date=start_date, end_date=end_date, alias="s"
+        )
         where_sql = f" WHERE {' AND '.join(filters)}" if filters else ""
-        pred_binary_expr = _sql_binary_prediction_expression(prediction_expr, score_expression=score_expr)
+        pred_binary_expr = _sql_binary_prediction_expression(
+            prediction_expr, score_expression=score_expr
+        )
         label_binary_expr = _sql_binary_indicator(label_expr)
         frame = self._warehouse.query_params(
             f"""
@@ -1569,7 +1689,11 @@ class ControlPlaneRepository:
             actual_positive_count = tp + fn
             total_count = tp + fp + fn + tn
             precision = (tp / predicted_positive_count) if predicted_positive_count > 0 else None
-            recall = (tp / actual_positive_count) if predicted_positive_count > 0 and actual_positive_count > 0 else None
+            recall = (
+                (tp / actual_positive_count)
+                if predicted_positive_count > 0 and actual_positive_count > 0
+                else None
+            )
             f1 = None
             if precision is not None and recall is not None and (precision + recall) > 0:
                 f1 = (2.0 * precision * recall) / (precision + recall)
@@ -1611,17 +1735,26 @@ class ControlPlaneRepository:
         prediction_expr = f"s.{quote_column(validate_identifier(config.contract.prediction_col))}"
         score_expr = None
         if config.contract.prediction_score_col:
-            score_expr = f"s.{quote_column(validate_identifier(config.contract.prediction_score_col))}"
+            score_expr = (
+                f"s.{quote_column(validate_identifier(config.contract.prediction_score_col))}"
+            )
 
         label_expr = None
         join_sql = ""
-        source_columns = self._warehouse.get_columns(config.source_table) if config.labels_table else []
+        source_columns = (
+            self._warehouse.get_columns(config.source_table) if config.labels_table else []
+        )
         source_join_col = _resolve_source_labels_join_col(
             source_columns,
             config.contract.entity_id_col,
             config.labels_join_col,
         )
-        if config.labels_table and config.contract.label_col and source_join_col and config.labels_join_col:
+        if (
+            config.labels_table
+            and config.contract.label_col
+            and source_join_col
+            and config.labels_join_col
+        ):
             validate_identifier(config.labels_table)
             label_col = validate_identifier(config.contract.label_col)
             join_col = validate_identifier(config.labels_join_col)
@@ -1659,12 +1792,19 @@ class ControlPlaneRepository:
 
         normalized_basis = str(class_basis or "").strip().lower()
         normalized_value = str(class_value or "").strip().lower()
-        if normalized_basis not in {"actual", "predicted"} or normalized_value not in {"positive", "negative"}:
+        if normalized_basis not in {"actual", "predicted"} or normalized_value not in {
+            "positive",
+            "negative",
+        }:
             return []
 
-        filters, params = self._source_filters(config, start_date=start_date, end_date=end_date, alias="s")
+        filters, params = self._source_filters(
+            config, start_date=start_date, end_date=end_date, alias="s"
+        )
         where_sql = f" WHERE {' AND '.join(filters)}" if filters else ""
-        pred_binary_expr = _sql_binary_prediction_expression(prediction_expr, score_expression=score_expr)
+        pred_binary_expr = _sql_binary_prediction_expression(
+            prediction_expr, score_expression=score_expr
+        )
         label_binary_expr = _sql_binary_indicator(label_expr)
         class_filter_column = "label_binary" if normalized_basis == "actual" else "pred_binary"
         class_filter_value = 1 if normalized_value == "positive" else 0
@@ -1712,7 +1852,12 @@ class ControlPlaneRepository:
         rows: list[dict[str, Any]] = []
         for _, row in frame.iterrows():
             null_rates = {
-                feature: round(float(pd.to_numeric(pd.Series([row.get(feature)]), errors="coerce").iloc[0] or 0.0), 2)
+                feature: round(
+                    float(
+                        pd.to_numeric(pd.Series([row.get(feature)]), errors="coerce").iloc[0] or 0.0
+                    ),
+                    2,
+                )
                 for feature in config.contract.feature_columns
             }
             rows.append(
@@ -1736,7 +1881,9 @@ class ControlPlaneRepository:
         end_date: str | None = None,
     ) -> dict[str, Any]:
         self.validate_monitor_source(config)
-        filters, params = self._source_filters(config, start_date=start_date, end_date=end_date, alias="s")
+        filters, params = self._source_filters(
+            config, start_date=start_date, end_date=end_date, alias="s"
+        )
         where_sql = f" WHERE {' AND '.join(filters)}" if filters else ""
         ts_col = quote_column(validate_identifier(config.contract.timestamp_col))
         prediction_col = quote_column(validate_identifier(config.contract.prediction_col))
@@ -1780,8 +1927,7 @@ class ControlPlaneRepository:
                     f" = l.{quote_column(join_col)}"
                 )
                 label_count_sql = (
-                    f"SUM(CASE WHEN {label_expr} IS NOT NULL THEN 1 ELSE 0 END) "
-                    "AS label_row_count"
+                    f"SUM(CASE WHEN {label_expr} IS NOT NULL THEN 1 ELSE 0 END) AS label_row_count"
                 )
         elif config.contract.label_col:
             label_count_sql = (
@@ -1789,8 +1935,9 @@ class ControlPlaneRepository:
                 "AS label_row_count"
             )
 
-        summary = self._warehouse.query_params(
-            f"""
+        summary = (
+            self._warehouse.query_params(
+                f"""
             SELECT
                 COUNT(*) AS total_rows,
                 CAST(MIN(s.{ts_col}) AS STRING) AS min_ts,
@@ -1802,9 +1949,11 @@ class ControlPlaneRepository:
             {join_sql}
             {where_sql}
             """,
-            tuple(params),
-        ) if params else self._warehouse.query(
-            f"""
+                tuple(params),
+            )
+            if params
+            else self._warehouse.query(
+                f"""
             SELECT
                 COUNT(*) AS total_rows,
                 CAST(MIN(s.{ts_col}) AS STRING) AS min_ts,
@@ -1816,6 +1965,7 @@ class ControlPlaneRepository:
             {join_sql}
             {where_sql}
             """
+            )
         )
         if summary.empty:
             return {
@@ -1841,11 +1991,19 @@ class ControlPlaneRepository:
             GROUP BY CAST(s.{ts_col} AS DATE)
             ORDER BY day_key
         """
-        daily_volume_frame = self._warehouse.query_params(daily_volume_query, tuple(params)) if params else self._warehouse.query(daily_volume_query)
-        daily_volume = {
-            str(row["day_key"]): int(row["row_count"] or 0)
-            for _, row in daily_volume_frame.iterrows()
-        } if not daily_volume_frame.empty else {}
+        daily_volume_frame = (
+            self._warehouse.query_params(daily_volume_query, tuple(params))
+            if params
+            else self._warehouse.query(daily_volume_query)
+        )
+        daily_volume = (
+            {
+                str(row["day_key"]): int(row["row_count"] or 0)
+                for _, row in daily_volume_frame.iterrows()
+            }
+            if not daily_volume_frame.empty
+            else {}
+        )
 
         null_rates: dict[str, float] = {}
         if config.contract.feature_columns:
@@ -1858,11 +2016,23 @@ class ControlPlaneRepository:
                 FROM {config.source_table} s
                 {where_sql}
             """
-            null_rate_frame = self._warehouse.query_params(null_rate_query, tuple(params)) if params else self._warehouse.query(null_rate_query)
+            null_rate_frame = (
+                self._warehouse.query_params(null_rate_query, tuple(params))
+                if params
+                else self._warehouse.query(null_rate_query)
+            )
             if not null_rate_frame.empty:
                 null_row = null_rate_frame.iloc[0].to_dict()
                 null_rates = {
-                    feature: round(float(pd.to_numeric(pd.Series([null_row.get(feature)]), errors="coerce").iloc[0] or 0.0), 2)
+                    feature: round(
+                        float(
+                            pd.to_numeric(pd.Series([null_row.get(feature)]), errors="coerce").iloc[
+                                0
+                            ]
+                            or 0.0
+                        ),
+                        2,
+                    )
                     for feature in config.contract.feature_columns
                 }
 
@@ -1889,10 +2059,14 @@ class ControlPlaneRepository:
         filters: list[str] = []
         params: list[object] = []
         if config.model_id_value and config.contract.model_id_col:
-            filters.append(f"{quote_column(validate_identifier(config.contract.model_id_col))} = %s")
+            filters.append(
+                f"{quote_column(validate_identifier(config.contract.model_id_col))} = %s"
+            )
             params.append(config.model_id_value)
         if config.model_version_value and config.contract.model_version_col:
-            filters.append(f"{quote_column(validate_identifier(config.contract.model_version_col))} = %s")
+            filters.append(
+                f"{quote_column(validate_identifier(config.contract.model_version_col))} = %s"
+            )
             params.append(config.model_version_value)
         if start_date:
             filters.append(f"CAST({quote_column(ts_col)} AS DATE) >= CAST(%s AS DATE)")
@@ -1908,7 +2082,11 @@ class ControlPlaneRepository:
             FROM {config.source_table}
             {where_sql}
         """
-        frame = self._warehouse.query_params(query, tuple(params)) if params else self._warehouse.query(query)
+        frame = (
+            self._warehouse.query_params(query, tuple(params))
+            if params
+            else self._warehouse.query(query)
+        )
         if frame.empty:
             return None, None
         min_ts = _as_text(frame.iloc[0].get("min_ts")) or None
@@ -1931,14 +2109,18 @@ class ControlPlaneRepository:
                 FROM {config.labels_table}
                 """
             )
-        elif config.contract.label_col and config.contract.label_col in self._warehouse.get_columns(config.source_table):
+        elif config.contract.label_col and config.contract.label_col in self._warehouse.get_columns(
+            config.source_table
+        ):
             filters, params = self._source_filters(
                 config,
                 start_date=start_date,
                 end_date=end_date,
                 alias="",
             )
-            filters.append(f"{quote_column(validate_identifier(config.contract.label_col))} IS NOT NULL")
+            filters.append(
+                f"{quote_column(validate_identifier(config.contract.label_col))} IS NOT NULL"
+            )
             where_sql = f"WHERE {' AND '.join(filters)}"
             query = f"""
                 SELECT
@@ -1947,7 +2129,11 @@ class ControlPlaneRepository:
                 FROM {config.source_table}
                 {where_sql}
             """
-            frame = self._warehouse.query_params(query, tuple(params)) if params else self._warehouse.query(query)
+            frame = (
+                self._warehouse.query_params(query, tuple(params))
+                if params
+                else self._warehouse.query(query)
+            )
             if frame.empty:
                 return None
             label_count = int(frame.iloc[0].get("label_count", 0) or 0)
@@ -1978,7 +2164,7 @@ class ControlPlaneRepository:
                     CAST(window_start AS STRING) AS window_start,
                     CAST(window_end AS STRING) AS window_end
                 FROM {self._table_names.comparison_windows}
-                WHERE {' AND '.join(comparison_filters)}
+                WHERE {" AND ".join(comparison_filters)}
                 """,
                 tuple(comparison_params),
             )
@@ -1997,7 +2183,7 @@ class ControlPlaneRepository:
                     CAST(window_start AS STRING) AS window_start,
                     CAST(window_end AS STRING) AS window_end
                 FROM {self._table_names.drift_metrics}
-                WHERE {' AND '.join(drift_filters)}
+                WHERE {" AND ".join(drift_filters)}
                 """,
                 tuple(drift_params),
             )
@@ -2005,12 +2191,14 @@ class ControlPlaneRepository:
             return set()
         keys: set[tuple[str, str, str, str]] = set()
         for _, row in frame.iterrows():
-            keys.add((
-                _as_text(row.get("baseline_start")),
-                _as_text(row.get("baseline_end")),
-                _as_text(row.get("window_start")),
-                _as_text(row.get("window_end")),
-            ))
+            keys.add(
+                (
+                    _as_text(row.get("baseline_start")),
+                    _as_text(row.get("baseline_end")),
+                    _as_text(row.get("window_start")),
+                    _as_text(row.get("window_end")),
+                )
+            )
         return keys
 
     def get_latest_published_generation_id(self, model_key: str) -> str | None:
@@ -2032,7 +2220,9 @@ class ControlPlaneRepository:
         generation_id = _as_text(frame.iloc[0].get("generation_id")).strip()
         return generation_id or None
 
-    def _generation_scoped_tables(self, *, include_quality_metrics: bool = False) -> tuple[str, ...]:
+    def _generation_scoped_tables(
+        self, *, include_quality_metrics: bool = False
+    ) -> tuple[str, ...]:
         tables = [
             self._table_names.comparison_windows,
             self._table_names.drift_metrics,
@@ -2070,11 +2260,15 @@ class ControlPlaneRepository:
         if not source_run_column:
             return
         value_columns = [column for column in columns if column != source_run_column]
-        insert_columns = ", ".join(quote_column(column) for column in value_columns + [source_run_column])
-        select_columns = ", ".join([
-            *(quote_column(column) for column in value_columns),
-            f"CAST(%s AS STRING) AS {quote_column(source_run_column)}",
-        ])
+        insert_columns = ", ".join(
+            quote_column(column) for column in value_columns + [source_run_column]
+        )
+        select_columns = ", ".join(
+            [
+                *(quote_column(column) for column in value_columns),
+                f"CAST(%s AS STRING) AS {quote_column(source_run_column)}",
+            ]
+        )
         self._warehouse.execute_params(
             f"""
             INSERT INTO {table_name} ({insert_columns})
@@ -2311,7 +2505,7 @@ class ControlPlaneRepository:
             f"""
             SELECT *
             FROM {self._table_names.incident_history}
-            WHERE {' AND '.join(filters)}
+            WHERE {" AND ".join(filters)}
             ORDER BY observed_at DESC, window_end DESC
             LIMIT {max(1, limit)}
             """,
@@ -2354,7 +2548,9 @@ class ControlPlaneRepository:
             return []
         return [row.to_dict() for _, row in frame.iterrows()]
 
-    def get_latest_refresh_run(self, model_key: str, scope: str, statuses: tuple[str, ...] | None = None) -> dict[str, Any] | None:
+    def get_latest_refresh_run(
+        self, model_key: str, scope: str, statuses: tuple[str, ...] | None = None
+    ) -> dict[str, Any] | None:
         filters = ["model_key = %s", "scope = %s"]
         params: list[object] = [model_key, scope]
         if statuses:
@@ -2365,7 +2561,7 @@ class ControlPlaneRepository:
             f"""
             SELECT *
             FROM {self._table_names.refresh_runs}
-            WHERE {' AND '.join(filters)}
+            WHERE {" AND ".join(filters)}
             ORDER BY started_at DESC
             LIMIT 1
             """,
@@ -2416,7 +2612,7 @@ class ControlPlaneRepository:
             WITH filtered_rows AS (
                 SELECT *
                 FROM {self._table_names.daily_quality_profiles}
-                WHERE {' AND '.join(filters)}
+                WHERE {" AND ".join(filters)}
             ),
             recent_dates AS (
                 SELECT profile_date
@@ -2467,7 +2663,7 @@ class ControlPlaneRepository:
             WITH filtered_rows AS (
                 SELECT *
                 FROM {self._table_names.daily_class_quality_profiles}
-                WHERE {' AND '.join(filters)}
+                WHERE {" AND ".join(filters)}
             ),
             recent_dates AS (
                 SELECT profile_date
@@ -2510,7 +2706,7 @@ class ControlPlaneRepository:
             WITH filtered_rows AS (
                 SELECT *
                 FROM {self._table_names.daily_feature_profiles}
-                WHERE {' AND '.join(filters)}
+                WHERE {" AND ".join(filters)}
             ),
             recent_dates AS (
                 SELECT profile_date
@@ -2561,7 +2757,7 @@ class ControlPlaneRepository:
             WITH filtered_rows AS (
                 SELECT *
                 FROM {self._table_names.daily_class_feature_profiles}
-                WHERE {' AND '.join(filters)}
+                WHERE {" AND ".join(filters)}
             ),
             recent_dates AS (
                 SELECT profile_date
@@ -2604,7 +2800,7 @@ class ControlPlaneRepository:
             WITH filtered_rows AS (
                 SELECT *
                 FROM {self._table_names.daily_performance_profiles}
-                WHERE {' AND '.join(filters)}
+                WHERE {" AND ".join(filters)}
             ),
             recent_dates AS (
                 SELECT profile_date
@@ -2647,7 +2843,7 @@ class ControlPlaneRepository:
             WITH filtered_rows AS (
                 SELECT *
                 FROM {self._table_names.daily_label_metrics}
-                WHERE {' AND '.join(filters)}
+                WHERE {" AND ".join(filters)}
             ),
             recent_dates AS (
                 SELECT profile_date
@@ -2677,7 +2873,7 @@ class ControlPlaneRepository:
             f"""
             SELECT 1 AS has_rows
             FROM {self._table_names.daily_label_metrics}
-            WHERE {' AND '.join(filters)}
+            WHERE {" AND ".join(filters)}
             LIMIT 1
             """,
             tuple(params),
@@ -2696,7 +2892,7 @@ class ControlPlaneRepository:
             f"""
             SELECT feature_name, edges_json
             FROM {self._table_names.performance_bin_specs}
-            WHERE {' AND '.join(filters)}
+            WHERE {" AND ".join(filters)}
             ORDER BY feature_name
             """,
             tuple(params),
@@ -2771,7 +2967,7 @@ class ControlPlaneRepository:
             f"""
             SELECT *
             FROM {self._table_names.daily_quality_profiles}
-            WHERE {' AND '.join(filters)}
+            WHERE {" AND ".join(filters)}
             ORDER BY profile_date
             """,
             tuple(params),
@@ -2790,30 +2986,52 @@ class ControlPlaneRepository:
         )
         quality_rows = _aggregate_quality_summary_rows(
             model_key,
-            self._get_daily_quality_profile_rows_for_generation(model_key, source_run_id=source_run_id),
+            self._get_daily_quality_profile_rows_for_generation(
+                model_key, source_run_id=source_run_id
+            ),
             pd.Timestamp.now(tz=timezone.utc).isoformat(),
         )
         self._insert_quality_rows(quality_rows, source_run_id=source_run_id)
 
-    def replace_all_refresh_results(self, model_key: str, result: RefreshResult, source_run_id: str | None = None) -> None:
+    def replace_all_refresh_results(
+        self, model_key: str, result: RefreshResult, source_run_id: str | None = None
+    ) -> None:
         generation_id = source_run_id or ""
         self._insert_window_rows(result.window_rows, source_run_id=source_run_id)
         self._insert_drift_rows(result.drift_rows, source_run_id=generation_id)
         self._insert_quality_history_rows(result.quality_history_rows, source_run_id=generation_id)
-        self._insert_daily_quality_profile_rows(result.daily_quality_profile_rows, source_run_id=source_run_id)
-        self._insert_daily_class_quality_profile_rows(result.daily_class_quality_profile_rows, source_run_id=source_run_id)
-        self._insert_daily_feature_profile_rows(result.daily_feature_profile_rows, source_run_id=source_run_id)
-        self._insert_daily_class_feature_profile_rows(result.daily_class_feature_profile_rows, source_run_id=source_run_id)
+        self._insert_daily_quality_profile_rows(
+            result.daily_quality_profile_rows, source_run_id=source_run_id
+        )
+        self._insert_daily_class_quality_profile_rows(
+            result.daily_class_quality_profile_rows, source_run_id=source_run_id
+        )
+        self._insert_daily_feature_profile_rows(
+            result.daily_feature_profile_rows, source_run_id=source_run_id
+        )
+        self._insert_daily_class_feature_profile_rows(
+            result.daily_class_feature_profile_rows, source_run_id=source_run_id
+        )
         self._insert_performance_rows(result.performance_rows, source_run_id=generation_id)
-        self._insert_daily_performance_profile_rows(result.daily_performance_profile_rows, source_run_id=source_run_id)
-        self._insert_daily_label_metric_rows(result.daily_label_metric_rows, source_run_id=source_run_id)
-        self.replace_performance_bin_specs(model_key, result.performance_bin_specs, source_run_id=generation_id)
+        self._insert_daily_performance_profile_rows(
+            result.daily_performance_profile_rows, source_run_id=source_run_id
+        )
+        self._insert_daily_label_metric_rows(
+            result.daily_label_metric_rows, source_run_id=source_run_id
+        )
+        self.replace_performance_bin_specs(
+            model_key, result.performance_bin_specs, source_run_id=generation_id
+        )
         self._insert_incident_rows(result.incident_rows, source_run_id=generation_id)
-        self._insert_incident_history_rows(result.incident_history_rows, source_run_id=generation_id)
+        self._insert_incident_history_rows(
+            result.incident_history_rows, source_run_id=generation_id
+        )
         self._rewrite_quality_summary(model_key, source_run_id=generation_id)
         self._sync_read_model()
 
-    def append_refresh_result(self, model_key: str, result: RefreshResult, source_run_id: str | None = None) -> None:
+    def append_refresh_result(
+        self, model_key: str, result: RefreshResult, source_run_id: str | None = None
+    ) -> None:
         previous_generation_id = self.get_latest_published_generation_id(model_key)
         generation_id = source_run_id or previous_generation_id or ""
         if previous_generation_id and generation_id and previous_generation_id != generation_id:
@@ -2839,8 +3057,12 @@ class ControlPlaneRepository:
             for row in result.performance_rows
         }
         quality_windows = {_as_text(row.get("window_id")) for row in result.quality_history_rows}
-        incident_history_windows = {_as_text(row.get("window_id")) for row in result.incident_history_rows}
-        daily_quality_dates = {_as_text(row.get("profile_date")) for row in result.daily_quality_profile_rows}
+        incident_history_windows = {
+            _as_text(row.get("window_id")) for row in result.incident_history_rows
+        }
+        daily_quality_dates = {
+            _as_text(row.get("profile_date")) for row in result.daily_quality_profile_rows
+        }
         daily_class_quality_keys = {
             (
                 _as_text(row.get("profile_date")),
@@ -2849,7 +3071,9 @@ class ControlPlaneRepository:
             )
             for row in result.daily_class_quality_profile_rows
         }
-        daily_feature_dates = {_as_text(row.get("profile_date")) for row in result.daily_feature_profile_rows}
+        daily_feature_dates = {
+            _as_text(row.get("profile_date")) for row in result.daily_feature_profile_rows
+        }
         daily_class_feature_keys = {
             (
                 _as_text(row.get("profile_date")),
@@ -2858,8 +3082,12 @@ class ControlPlaneRepository:
             )
             for row in result.daily_class_feature_profile_rows
         }
-        daily_performance_dates = {_as_text(row.get("profile_date")) for row in result.daily_performance_profile_rows}
-        daily_label_metric_dates = {_as_text(row.get("profile_date")) for row in result.daily_label_metric_rows}
+        daily_performance_dates = {
+            _as_text(row.get("profile_date")) for row in result.daily_performance_profile_rows
+        }
+        daily_label_metric_dates = {
+            _as_text(row.get("profile_date")) for row in result.daily_label_metric_rows
+        }
 
         for baseline_start, baseline_end, window_start, window_end in drift_windows:
             self._warehouse.execute_params(
@@ -2964,19 +3192,35 @@ class ControlPlaneRepository:
         self._insert_window_rows(result.window_rows, source_run_id=generation_id)
         self._insert_drift_rows(result.drift_rows, source_run_id=generation_id)
         self._insert_quality_history_rows(result.quality_history_rows, source_run_id=generation_id)
-        self._insert_daily_quality_profile_rows(result.daily_quality_profile_rows, source_run_id=generation_id)
-        self._insert_daily_class_quality_profile_rows(result.daily_class_quality_profile_rows, source_run_id=generation_id)
-        self._insert_daily_feature_profile_rows(result.daily_feature_profile_rows, source_run_id=generation_id)
-        self._insert_daily_class_feature_profile_rows(result.daily_class_feature_profile_rows, source_run_id=generation_id)
+        self._insert_daily_quality_profile_rows(
+            result.daily_quality_profile_rows, source_run_id=generation_id
+        )
+        self._insert_daily_class_quality_profile_rows(
+            result.daily_class_quality_profile_rows, source_run_id=generation_id
+        )
+        self._insert_daily_feature_profile_rows(
+            result.daily_feature_profile_rows, source_run_id=generation_id
+        )
+        self._insert_daily_class_feature_profile_rows(
+            result.daily_class_feature_profile_rows, source_run_id=generation_id
+        )
         self._insert_performance_rows(result.performance_rows, source_run_id=generation_id)
-        self._insert_daily_performance_profile_rows(result.daily_performance_profile_rows, source_run_id=generation_id)
-        self._insert_daily_label_metric_rows(result.daily_label_metric_rows, source_run_id=generation_id)
+        self._insert_daily_performance_profile_rows(
+            result.daily_performance_profile_rows, source_run_id=generation_id
+        )
+        self._insert_daily_label_metric_rows(
+            result.daily_label_metric_rows, source_run_id=generation_id
+        )
         if result.performance_bin_specs:
             persisted_specs = self.get_performance_bin_specs(model_key)
             persisted_specs.update(result.performance_bin_specs)
-            self.replace_performance_bin_specs(model_key, persisted_specs, source_run_id=generation_id)
+            self.replace_performance_bin_specs(
+                model_key, persisted_specs, source_run_id=generation_id
+            )
         self._insert_incident_rows(result.incident_rows, source_run_id=generation_id)
-        self._insert_incident_history_rows(result.incident_history_rows, source_run_id=generation_id)
+        self._insert_incident_history_rows(
+            result.incident_history_rows, source_run_id=generation_id
+        )
         self._rewrite_quality_summary(model_key, source_run_id=generation_id)
         self._sync_read_model()
 
@@ -3071,7 +3315,9 @@ class ControlPlaneRepository:
             payload,
         )
 
-    def _insert_quality_history_rows(self, rows: list[dict], *, source_run_id: str | None = None) -> None:
+    def _insert_quality_history_rows(
+        self, rows: list[dict], *, source_run_id: str | None = None
+    ) -> None:
         payload = [
             (
                 row["model_key"],
@@ -3100,7 +3346,9 @@ class ControlPlaneRepository:
             payload,
         )
 
-    def _insert_daily_quality_profile_rows(self, rows: list[dict], *, source_run_id: str | None = None) -> None:
+    def _insert_daily_quality_profile_rows(
+        self, rows: list[dict], *, source_run_id: str | None = None
+    ) -> None:
         payload = [
             (
                 row["model_key"],
@@ -3126,7 +3374,9 @@ class ControlPlaneRepository:
             payload,
         )
 
-    def _insert_daily_class_quality_profile_rows(self, rows: list[dict], *, source_run_id: str | None = None) -> None:
+    def _insert_daily_class_quality_profile_rows(
+        self, rows: list[dict], *, source_run_id: str | None = None
+    ) -> None:
         payload = [
             (
                 row["model_key"],
@@ -3154,7 +3404,9 @@ class ControlPlaneRepository:
             payload,
         )
 
-    def _insert_daily_feature_profile_rows(self, rows: list[dict], *, source_run_id: str | None = None) -> None:
+    def _insert_daily_feature_profile_rows(
+        self, rows: list[dict], *, source_run_id: str | None = None
+    ) -> None:
         payload = [
             (
                 row["model_key"],
@@ -3186,7 +3438,9 @@ class ControlPlaneRepository:
             payload,
         )
 
-    def _insert_daily_class_feature_profile_rows(self, rows: list[dict], *, source_run_id: str | None = None) -> None:
+    def _insert_daily_class_feature_profile_rows(
+        self, rows: list[dict], *, source_run_id: str | None = None
+    ) -> None:
         payload = [
             (
                 row["model_key"],
@@ -3220,7 +3474,9 @@ class ControlPlaneRepository:
             payload,
         )
 
-    def _insert_performance_rows(self, rows: list[dict], *, source_run_id: str | None = None) -> None:
+    def _insert_performance_rows(
+        self, rows: list[dict], *, source_run_id: str | None = None
+    ) -> None:
         payload = [
             (
                 row["model_key"],
@@ -3252,7 +3508,9 @@ class ControlPlaneRepository:
             payload,
         )
 
-    def _insert_daily_performance_profile_rows(self, rows: list[dict], *, source_run_id: str | None = None) -> None:
+    def _insert_daily_performance_profile_rows(
+        self, rows: list[dict], *, source_run_id: str | None = None
+    ) -> None:
         payload = [
             (
                 row["model_key"],
@@ -3278,7 +3536,9 @@ class ControlPlaneRepository:
             payload,
         )
 
-    def _insert_daily_label_metric_rows(self, rows: list[dict], *, source_run_id: str | None = None) -> None:
+    def _insert_daily_label_metric_rows(
+        self, rows: list[dict], *, source_run_id: str | None = None
+    ) -> None:
         payload = [
             (
                 row["model_key"],
@@ -3339,7 +3599,9 @@ class ControlPlaneRepository:
             payload,
         )
 
-    def _insert_incident_history_rows(self, rows: list[dict], *, source_run_id: str | None = None) -> None:
+    def _insert_incident_history_rows(
+        self, rows: list[dict], *, source_run_id: str | None = None
+    ) -> None:
         payload = [
             (
                 row["model_key"],
@@ -3370,7 +3632,9 @@ class ControlPlaneRepository:
             payload,
         )
 
-    def get_current_incident_state(self, model_key: str) -> dict[tuple[str, str, str], dict[str, Any]]:
+    def get_current_incident_state(
+        self, model_key: str
+    ) -> dict[tuple[str, str, str], dict[str, Any]]:
         generation_id = self.get_latest_published_generation_id(model_key)
         if not generation_id:
             return {}
@@ -3382,7 +3646,7 @@ class ControlPlaneRepository:
             f"""
             SELECT model_key, feature_name, metric_name, severity, status, metric_value, window_end, observed_at
             FROM {self._table_names.incidents}
-            WHERE {' AND '.join(filters)}
+            WHERE {" AND ".join(filters)}
             """,
             tuple(params),
         )
@@ -3548,9 +3812,13 @@ class ControlPlaneRepository:
                 incidents = self._read_model.get_open_incidents()
                 if not incidents.empty:
                     return incidents
-                logger.warning("Lakebase incidents read returned no rows, falling back to warehouse.")
+                logger.warning(
+                    "Lakebase incidents read returned no rows, falling back to warehouse."
+                )
             except Exception as error:
-                logger.warning("Lakebase incidents read failed, falling back to warehouse: %s", error)
+                logger.warning(
+                    "Lakebase incidents read failed, falling back to warehouse: %s", error
+                )
         return self._get_open_incidents_from_warehouse()
 
 
@@ -3566,19 +3834,29 @@ def _build_read_model(
     lakebase_sslmode: str | None = None,
     lakebase_schema: str | None = None,
 ) -> LakebaseReadModel | None:
-    enabled = settings.use_lakebase_read_model if use_lakebase_read_model is None else use_lakebase_read_model
-    if not enabled and not any((
-        lakebase_instance_name,
-        lakebase_database_name,
-        lakebase_host,
-        settings.lakebase_instance_name,
-        settings.lakebase_database_name,
-        settings.lakebase_host,
-    )):
+    enabled = (
+        settings.use_lakebase_read_model
+        if use_lakebase_read_model is None
+        else use_lakebase_read_model
+    )
+    if not enabled and not any(
+        (
+            lakebase_instance_name,
+            lakebase_database_name,
+            lakebase_host,
+            settings.lakebase_instance_name,
+            settings.lakebase_database_name,
+            settings.lakebase_host,
+        )
+    ):
         return None
     connection = LakebaseConnection(
-        instance_name=lakebase_instance_name if lakebase_instance_name is not None else settings.lakebase_instance_name,
-        database_name=lakebase_database_name if lakebase_database_name is not None else settings.lakebase_database_name,
+        instance_name=lakebase_instance_name
+        if lakebase_instance_name is not None
+        else settings.lakebase_instance_name,
+        database_name=lakebase_database_name
+        if lakebase_database_name is not None
+        else settings.lakebase_database_name,
         host=lakebase_host if lakebase_host is not None else settings.lakebase_host,
         port=lakebase_port if lakebase_port is not None else settings.lakebase_port,
         user=lakebase_pguser if lakebase_pguser is not None else settings.lakebase_pguser,
@@ -3591,6 +3869,8 @@ def _build_read_model(
         connection=connection,
         schema=lakebase_schema or settings.lakebase_schema,
     )
+
+
 def build_repository(
     *,
     warehouse_id: str = "",

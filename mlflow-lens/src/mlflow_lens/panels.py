@@ -15,25 +15,27 @@ import pandas as pd
 from mlflow_lens._artifacts import log_json_artifact
 from mlflow_lens._version import __version__
 
-PANEL_TYPES = frozenset({
-    # Original 4 (Dash app contract — JSON shape must stay stable):
-    "confusion_matrix",
-    "roc_curve",
-    "feature_importance",
-    "learning_curve",
-    # Classification:
-    "classification_report",
-    "precision_recall_curve",
-    "class_prediction_error",
-    "discrimination_threshold",
-    # Regression:
-    "prediction_error",
-    "residuals",
-    "alpha_selection",
-    # Model selection:
-    "validation_curve",
-    "cv_scores",
-})
+PANEL_TYPES = frozenset(
+    {
+        # Original 4 (Dash app contract — JSON shape must stay stable):
+        "confusion_matrix",
+        "roc_curve",
+        "feature_importance",
+        "learning_curve",
+        # Classification:
+        "classification_report",
+        "precision_recall_curve",
+        "class_prediction_error",
+        "discrimination_threshold",
+        # Regression:
+        "prediction_error",
+        "residuals",
+        "alpha_selection",
+        # Model selection:
+        "validation_curve",
+        "cv_scores",
+    }
+)
 
 
 def log_panel(
@@ -57,10 +59,7 @@ def log_panel(
         The panel payload that was logged.
     """
     if panel_type not in PANEL_TYPES:
-        raise ValueError(
-            f"Unknown panel type {panel_type!r}. "
-            f"Supported: {sorted(PANEL_TYPES)}"
-        )
+        raise ValueError(f"Unknown panel type {panel_type!r}. Supported: {sorted(PANEL_TYPES)}")
 
     if isinstance(data, pd.DataFrame):
         serialized = data.to_dict(orient="records")

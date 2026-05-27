@@ -40,9 +40,7 @@ def _build(y_true: Any, y_pred: Any, classes: list[Any], **layout: Any) -> tuple
     rows = []
     for i, true_cls in enumerate(label_strs):
         for j, pred_cls in enumerate(label_strs):
-            rows.append(
-                {"true": true_cls, "predicted": pred_cls, "count": int(cm[i, j])}
-            )
+            rows.append({"true": true_cls, "predicted": pred_cls, "count": int(cm[i, j])})
     data = rows
     return fig, data
 
@@ -70,9 +68,7 @@ def _from_predictions(
 ) -> tuple:
     """Class prediction error from pre-computed predictions."""
     if classes is None:
-        classes = sorted(
-            set(np.asarray(y_true).tolist()) | set(np.asarray(y_pred).tolist())
-        )
+        classes = sorted(set(np.asarray(y_true).tolist()) | set(np.asarray(y_pred).tolist()))
     return _build(y_true, y_pred, classes, **layout)
 
 

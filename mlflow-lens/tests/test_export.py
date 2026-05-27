@@ -1,5 +1,4 @@
 import pytest
-
 from mlflow_lens.export import to_delta
 
 

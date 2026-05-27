@@ -12,11 +12,30 @@ from model_landscape.services.inference_contracts import build_inference_contrac
 from model_landscape.services.mlflow_discovery import MLflowDiscoveryService
 from model_landscape.services.onboarding import build_default_baseline
 
-
-NUMERIC_TYPE_TOKENS = ("tinyint", "smallint", "int", "bigint", "float", "double", "decimal", "numeric", "real")
+NUMERIC_TYPE_TOKENS = (
+    "tinyint",
+    "smallint",
+    "int",
+    "bigint",
+    "float",
+    "double",
+    "decimal",
+    "numeric",
+    "real",
+)
 STRING_TYPE_TOKENS = ("string", "varchar", "char", "text")
 TIMESTAMP_TYPE_TOKENS = ("timestamp", "date")
-RESERVED_FEATURE_TOKENS = ("id", "timestamp", "ts", "date", "time", "label", "target", "prediction", "score")
+RESERVED_FEATURE_TOKENS = (
+    "id",
+    "timestamp",
+    "ts",
+    "date",
+    "time",
+    "label",
+    "target",
+    "prediction",
+    "score",
+)
 ENTITY_KEY_PATTERNS = (
     "entity_id",
     "request_id",
@@ -56,10 +75,7 @@ def _option_texts(values: Iterable[object]) -> list[str]:
 def _schema_types(schema: pd.DataFrame) -> dict[str, str]:
     if schema.empty or "col_name" not in schema.columns:
         return {}
-    return {
-        str(row["col_name"]): str(row.get("data_type") or "")
-        for _, row in schema.iterrows()
-    }
+    return {str(row["col_name"]): str(row.get("data_type") or "") for _, row in schema.iterrows()}
 
 
 def _is_type(data_type: str, tokens: tuple[str, ...]) -> bool:
@@ -91,7 +107,12 @@ def _matches_pattern(column_name: str, patterns: tuple[str, ...]) -> int:
     return 10_000
 
 
-def _rank_columns(columns: list[str], patterns: tuple[str, ...], data_types: dict[str, str], preferred_types: tuple[str, ...] = ()) -> list[str]:
+def _rank_columns(
+    columns: list[str],
+    patterns: tuple[str, ...],
+    data_types: dict[str, str],
+    preferred_types: tuple[str, ...] = (),
+) -> list[str]:
     ranked = sorted(
         columns,
         key=lambda column: (
@@ -169,7 +190,9 @@ def _preview_looks_like_model_identifier(preview: pd.DataFrame, column_name: str
     return any(_looks_like_model_identifier(value) for value in values)
 
 
-def _fallback_column(columns: list[str], data_types: dict[str, str], preferred_types: tuple[str, ...] = ()) -> str:
+def _fallback_column(
+    columns: list[str], data_types: dict[str, str], preferred_types: tuple[str, ...] = ()
+) -> str:
     if not columns:
         return ""
     if preferred_types:
@@ -186,8 +209,12 @@ def _is_binary_label_values(values: list[str]) -> bool:
     return normalized.issubset({"0", "1", "0.0", "1.0", "true", "false"})
 
 
-def _timestamp_candidates(columns: list[str], data_types: dict[str, str], preview: pd.DataFrame) -> list[str]:
-    typed = _rank_columns(columns, TIMESTAMP_PATTERNS, data_types, preferred_types=TIMESTAMP_TYPE_TOKENS)
+def _timestamp_candidates(
+    columns: list[str], data_types: dict[str, str], preview: pd.DataFrame
+) -> list[str]:
+    typed = _rank_columns(
+        columns, TIMESTAMP_PATTERNS, data_types, preferred_types=TIMESTAMP_TYPE_TOKENS
+    )
     string_candidates = [
         column
         for column in columns
@@ -196,20 +223,28 @@ def _timestamp_candidates(columns: list[str], data_types: dict[str, str], previe
         and _preview_looks_like_timestamp(preview, column)
     ]
     string_ranked = _rank_columns(string_candidates, TIMESTAMP_PATTERNS, data_types)
-    return _dedupe_columns([*typed, *string_ranked, *sorted(set(string_candidates) - set(string_ranked))])
+    return _dedupe_columns(
+        [*typed, *string_ranked, *sorted(set(string_candidates) - set(string_ranked))]
+    )
 
 
-def _model_id_candidates(columns: list[str], data_types: dict[str, str], preview: pd.DataFrame) -> list[str]:
+def _model_id_candidates(
+    columns: list[str], data_types: dict[str, str], preview: pd.DataFrame
+) -> list[str]:
     primary = [
         column
-        for column in _rank_columns(columns, MODEL_ID_PATTERNS, data_types, preferred_types=STRING_TYPE_TOKENS)
+        for column in _rank_columns(
+            columns, MODEL_ID_PATTERNS, data_types, preferred_types=STRING_TYPE_TOKENS
+        )
         if "version" not in column.lower()
     ]
     if primary:
         return primary
     version_fallback = [
         column
-        for column in _rank_columns(columns, MODEL_VERSION_PATTERNS, data_types, preferred_types=STRING_TYPE_TOKENS)
+        for column in _rank_columns(
+            columns, MODEL_VERSION_PATTERNS, data_types, preferred_types=STRING_TYPE_TOKENS
+        )
         if _preview_looks_like_model_identifier(preview, column)
     ]
     return _dedupe_columns(version_fallback)
@@ -242,7 +277,10 @@ def _shared_join_candidates(
         and _type_category(label_types.get(column, "")) == "string"
     ]
     if source_join_col and source_join_col in shared_string_columns:
-        return [source_join_col, *[column for column in shared_string_columns if column != source_join_col]]
+        return [
+            source_join_col,
+            *[column for column in shared_string_columns if column != source_join_col],
+        ]
     if len(shared_string_columns) == 1:
         return shared_string_columns
     return sorted(
@@ -250,9 +288,15 @@ def _shared_join_candidates(
         key=lambda column: (
             0 if source_join_col and column == source_join_col else 1,
             _matches_pattern(column, ENTITY_KEY_PATTERNS),
-            0 if _type_category(source_types.get(column, "")) == _type_category(label_types.get(column, "")) else 1,
+            0
+            if _type_category(source_types.get(column, ""))
+            == _type_category(label_types.get(column, ""))
+            else 1,
             0 if _type_category(source_types.get(column, "")) == "string" else 1,
-            -min(_preview_unique_count(source_preview, column), _preview_unique_count(label_preview, column)),
+            -min(
+                _preview_unique_count(source_preview, column),
+                _preview_unique_count(label_preview, column),
+            ),
             column.lower(),
         ),
     )
@@ -349,16 +393,30 @@ class MonitorDiscoveryService:
             )
             if column != (prediction_candidates[0] if prediction_candidates else None)
         ]
-        entity_id_candidates = _rank_columns(columns, ENTITY_KEY_PATTERNS, schema_types, preferred_types=STRING_TYPE_TOKENS)
+        entity_id_candidates = _rank_columns(
+            columns, ENTITY_KEY_PATTERNS, schema_types, preferred_types=STRING_TYPE_TOKENS
+        )
         label_candidates = _rank_columns(columns, LABEL_PATTERNS, schema_types)
 
-        timestamp_col = timestamp_candidates[0] if timestamp_candidates else _fallback_column(columns, schema_types, TIMESTAMP_TYPE_TOKENS)
+        timestamp_col = (
+            timestamp_candidates[0]
+            if timestamp_candidates
+            else _fallback_column(columns, schema_types, TIMESTAMP_TYPE_TOKENS)
+        )
         model_id_col = model_id_candidates[0] if model_id_candidates else None
-        prediction_col = prediction_candidates[0] if prediction_candidates else _fallback_column(columns, schema_types, NUMERIC_TYPE_TOKENS)
-        prediction_score_col = prediction_score_candidates[0] if prediction_score_candidates else None
+        prediction_col = (
+            prediction_candidates[0]
+            if prediction_candidates
+            else _fallback_column(columns, schema_types, NUMERIC_TYPE_TOKENS)
+        )
+        prediction_score_col = (
+            prediction_score_candidates[0] if prediction_score_candidates else None
+        )
         version_candidates = [
             column
-            for column in _rank_columns(columns, MODEL_VERSION_PATTERNS, schema_types, preferred_types=STRING_TYPE_TOKENS)
+            for column in _rank_columns(
+                columns, MODEL_VERSION_PATTERNS, schema_types, preferred_types=STRING_TYPE_TOKENS
+            )
             if column != model_id_col
         ]
         model_version_col = version_candidates[0] if version_candidates else None
@@ -371,10 +429,14 @@ class MonitorDiscoveryService:
         }
         for label, candidates in required_candidates.items():
             if not candidates:
-                warnings.append(f"Could not confidently detect a {label} column from the source schema.")
+                warnings.append(
+                    f"Could not confidently detect a {label} column from the source schema."
+                )
                 requires_review = True
             elif len(candidates) > 1:
-                warnings.append(f"Multiple plausible {label} columns were found; review the inferred mapping.")
+                warnings.append(
+                    f"Multiple plausible {label} columns were found; review the inferred mapping."
+                )
                 requires_review = True
 
         reserved = {
@@ -391,7 +453,10 @@ class MonitorDiscoveryService:
             for column in columns
             if column not in reserved
             and _is_type(schema_types.get(column, ""), NUMERIC_TYPE_TOKENS)
-            and not any(token == column.lower() or token in column.lower() for token in RESERVED_FEATURE_TOKENS)
+            and not any(
+                token == column.lower() or token in column.lower()
+                for token in RESERVED_FEATURE_TOKENS
+            )
         ]
         low_cardinality_slices = [
             column
@@ -402,15 +467,21 @@ class MonitorDiscoveryService:
             and not column.lower().endswith("_id")
         ]
 
-        mlflow_features = [column for column in mlflow.feature_columns if column in numeric_features]
+        mlflow_features = [
+            column for column in mlflow.feature_columns if column in numeric_features
+        ]
         selected_features = mlflow_features or numeric_features
         if mlflow.feature_columns and not mlflow_features:
-            warnings.append("MLflow signature features did not overlap the numeric source columns; using table heuristics.")
+            warnings.append(
+                "MLflow signature features did not overlap the numeric source columns; using table heuristics."
+            )
             requires_review = True
         if not selected_features:
             fallback_features = [column for column in columns if column not in reserved]
             selected_features = fallback_features
-            warnings.append("No numeric feature columns were detected; review the inferred feature set before activation.")
+            warnings.append(
+                "No numeric feature columns were detected; review the inferred feature set before activation."
+            )
             requires_review = True
 
         labels_join_col = None
@@ -421,13 +492,17 @@ class MonitorDiscoveryService:
         label_preview_rows: tuple[dict[str, str], ...] = ()
         label_validation: dict[str, object] = {}
         if labels_table:
-            label_columns, label_preview, label_schema = self._repository.scan_source_table(labels_table, preview_rows=5)
+            label_columns, label_preview, label_schema = self._repository.scan_source_table(
+                labels_table, preview_rows=5
+            )
             label_types = _schema_types(label_schema)
             label_columns = tuple(label_columns)
             label_schema_rows = tuple(label_schema.fillna("").astype(str).to_dict("records"))
             label_preview_rows = tuple(label_preview.fillna("").astype(str).to_dict("records"))
 
-            order_candidates = _timestamp_candidates(list(label_columns), label_types, label_preview)
+            order_candidates = _timestamp_candidates(
+                list(label_columns), label_types, label_preview
+            )
             join_candidates = [
                 column
                 for column in _shared_join_candidates(
@@ -474,21 +549,37 @@ class MonitorDiscoveryService:
             label_col = (
                 label_candidates_external[0]
                 if label_candidates_external
-                else (binary_label_candidates[0] if binary_label_candidates else (categorical_label_candidates[0] if categorical_label_candidates else source_label_col))
+                else (
+                    binary_label_candidates[0]
+                    if binary_label_candidates
+                    else (
+                        categorical_label_candidates[0]
+                        if categorical_label_candidates
+                        else source_label_col
+                    )
+                )
             )
             labels_join_col = join_candidates[0] if join_candidates else entity_id_col
             labels_order_col = order_candidates[0] if order_candidates else None
 
-            source_labels_join_col = _resolve_source_labels_join_col(columns, entity_id_col, labels_join_col)
+            source_labels_join_col = _resolve_source_labels_join_col(
+                columns, entity_id_col, labels_join_col
+            )
 
             if not label_col or not labels_join_col:
-                warnings.append("External labels table needs a join column and label column; review advanced mappings.")
+                warnings.append(
+                    "External labels table needs a join column and label column; review advanced mappings."
+                )
                 requires_review = True
             elif not source_labels_join_col:
-                warnings.append("Could not find a matching inference-table join column for external labels; review mappings.")
+                warnings.append(
+                    "Could not find a matching inference-table join column for external labels; review mappings."
+                )
                 requires_review = True
             elif labels_join_col not in label_columns:
-                warnings.append("Detected labels join column is not present in the labels table schema.")
+                warnings.append(
+                    "Detected labels join column is not present in the labels table schema."
+                )
                 requires_review = True
             else:
                 label_validation = self._repository.profile_labels_mapping(
@@ -510,8 +601,13 @@ class MonitorDiscoveryService:
                     warnings.append(
                         f"Labels join leaves {int(label_validation.get('unmatched_rows', 0) or 0)} inference rows unmatched."
                     )
-                if int(label_validation.get("duplicate_join_keys", 0) or 0) > 0 and not labels_order_col:
-                    warnings.append("Labels table has duplicate join keys and no timestamp-like order column was detected.")
+                if (
+                    int(label_validation.get("duplicate_join_keys", 0) or 0) > 0
+                    and not labels_order_col
+                ):
+                    warnings.append(
+                        "Labels table has duplicate join keys and no timestamp-like order column was detected."
+                    )
                     requires_review = True
                 distinct_label_values = list(label_validation.get("distinct_label_values", ()))
                 if distinct_label_values and not bool(label_validation.get("binary_compatible")):
@@ -546,7 +642,9 @@ class MonitorDiscoveryService:
         )
 
         if model_version_col and not model_version_value and len(sampled_versions) > 1:
-            warnings.append("Could not confirm a single model version from the bounded source sample; review the monitored version scope.")
+            warnings.append(
+                "Could not confirm a single model version from the bounded source sample; review the monitored version scope."
+            )
             requires_review = True
 
         problem_type = mlflow.problem_type or self._infer_problem_type(
@@ -631,7 +729,9 @@ class MonitorDiscoveryService:
         for candidate in candidates:
             if candidate and candidate in normalized:
                 return normalized[candidate], False
-        warnings.append("Could not confirm a single monitored model ID from the bounded source sample and MLflow metadata.")
+        warnings.append(
+            "Could not confirm a single monitored model ID from the bounded source sample and MLflow metadata."
+        )
         return None, True
 
     def _infer_model_version_scope(

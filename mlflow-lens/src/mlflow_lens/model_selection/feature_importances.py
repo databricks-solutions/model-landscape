@@ -63,10 +63,7 @@ def _build(
         )
     )
 
-    rows = [
-        {"feature": n, "importance": float(v)}
-        for n, v in zip(names_sorted, values_sorted)
-    ]
+    rows = [{"feature": n, "importance": float(v)} for n, v in zip(names_sorted, values_sorted)]
     data = rows
     return fig, data
 
@@ -87,9 +84,7 @@ def feature_importances(
     """
     values = _extract(model)
     if len(values) != len(feature_names):
-        raise ValueError(
-            f"got {len(values)} importances but {len(feature_names)} names"
-        )
+        raise ValueError(f"got {len(values)} importances but {len(feature_names)} names")
     return _build(list(feature_names), values, top_n=top_n, **layout)
 
 

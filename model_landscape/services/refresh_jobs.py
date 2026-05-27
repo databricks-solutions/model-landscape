@@ -120,7 +120,8 @@ def _jobs_with_exact_name(jobs: list[object], refresh_job_name: str) -> list[obj
     return [
         job
         for job in jobs
-        if getattr(job, "job_id", None) and _normalized_job_name(_job_name(job)) == normalized_target
+        if getattr(job, "job_id", None)
+        and _normalized_job_name(_job_name(job)) == normalized_target
     ]
 
 
@@ -129,7 +130,8 @@ def _jobs_with_suffix_name(jobs: list[object], refresh_job_name: str) -> list[ob
     return [
         job
         for job in jobs
-        if getattr(job, "job_id", None) and _normalized_job_name(_job_name(job)).endswith(normalized_target)
+        if getattr(job, "job_id", None)
+        and _normalized_job_name(_job_name(job)).endswith(normalized_target)
     ]
 
 
@@ -138,7 +140,8 @@ def _jobs_with_contains_name(jobs: list[object], refresh_job_name: str) -> list[
     return [
         job
         for job in jobs
-        if getattr(job, "job_id", None) and normalized_target in _normalized_job_name(_job_name(job))
+        if getattr(job, "job_id", None)
+        and normalized_target in _normalized_job_name(_job_name(job))
     ]
 
 
@@ -242,7 +245,10 @@ def _principal_candidates(workspace_client) -> tuple[set[str], str | None]:
     try:
         identity = workspace_client.current_user.me()
     except Exception:
-        return set(), "Could not verify the current app principal against refresh workflow permissions."
+        return (
+            set(),
+            "Could not verify the current app principal against refresh workflow permissions.",
+        )
 
     principal_candidates = {
         _normalized_job_name(getattr(identity, "user_name", None)),
@@ -250,7 +256,10 @@ def _principal_candidates(workspace_client) -> tuple[set[str], str | None]:
     }
     principal_candidates.discard("")
     if not principal_candidates:
-        return set(), "Could not identify the current app principal to verify refresh workflow permissions."
+        return (
+            set(),
+            "Could not identify the current app principal to verify refresh workflow permissions.",
+        )
     return principal_candidates, None
 
 
@@ -274,7 +283,13 @@ def _job_permission_levels(workspace_client, job_id: int) -> tuple[set[str] | No
         if not principal_candidates.intersection(principal_names):
             continue
         permission_levels = {
-            _clean(getattr(getattr(permission, "permission_level", None), "value", getattr(permission, "permission_level", None))).upper()
+            _clean(
+                getattr(
+                    getattr(permission, "permission_level", None),
+                    "value",
+                    getattr(permission, "permission_level", None),
+                )
+            ).upper()
             for permission in (getattr(acl, "all_permissions", None) or [])
         }
         return permission_levels, None
@@ -289,7 +304,11 @@ def _scheduler_path_status(job: object) -> tuple[bool, str, str | None]:
     schedule = getattr(job_settings, "schedule", None)
     if schedule is not None:
         if _pause_status(schedule) == "PAUSED":
-            return False, "schedule", "Resolved refresh workflow has a cron schedule, but it is paused."
+            return (
+                False,
+                "schedule",
+                "Resolved refresh workflow has a cron schedule, but it is paused.",
+            )
         return True, "schedule", None
 
     trigger = getattr(job_settings, "trigger", None)
@@ -301,7 +320,11 @@ def _scheduler_path_status(job: object) -> tuple[bool, str, str | None]:
     continuous = getattr(job_settings, "continuous", None)
     if continuous is not None:
         if _pause_status(continuous) == "PAUSED":
-            return False, "continuous", "Resolved refresh workflow is configured for continuous execution, but it is paused."
+            return (
+                False,
+                "continuous",
+                "Resolved refresh workflow is configured for continuous execution, but it is paused.",
+            )
         return True, "continuous", None
 
     return False, "missing", "Resolved refresh workflow has no schedule or trigger configured."
@@ -320,7 +343,9 @@ def _direct_run_now_permission(workspace_client, job_id: int) -> tuple[bool | No
     return False, None
 
 
-def _direct_schedule_manage_permission(workspace_client, job_id: int) -> tuple[bool | None, str | None]:
+def _direct_schedule_manage_permission(
+    workspace_client, job_id: int
+) -> tuple[bool | None, str | None]:
     permission_levels, warning = _job_permission_levels(workspace_client, job_id)
     if permission_levels is None:
         return None, (
@@ -341,7 +366,6 @@ def resolve_refresh_workflow_status(
 ) -> RefreshWorkflowStatus:
     configured_via, configured_value = _configured_job_selector(workflow_kind)
     job_id_env_name, job_name_env_name = _workflow_env_names(workflow_kind)
-    workflow_name = _workflow_display_name(workflow_kind)
     if configured_via == "none":
         return RefreshWorkflowStatus(
             configured=False,
@@ -356,7 +380,9 @@ def resolve_refresh_workflow_status(
             max_concurrent_runs=None,
             run_now_available=None,
             blocking_issues=(
-                (f"Set {job_id_env_name} (preferred) or {job_name_env_name} in the app environment.",)
+                (
+                    f"Set {job_id_env_name} (preferred) or {job_name_env_name} in the app environment.",
+                )
                 if workflow_kind == "shared"
                 else ()
             ),
@@ -366,7 +392,9 @@ def resolve_refresh_workflow_status(
     client = workspace_client or _workspace_client()
     warnings: list[str] = []
     if configured_via == "name":
-        warnings.append(f"{job_name_env_name} works, but {job_id_env_name} is more reliable for production wiring.")
+        warnings.append(
+            f"{job_name_env_name} works, but {job_id_env_name} is more reliable for production wiring."
+        )
 
     try:
         job_id = resolve_refresh_job_id(client, workflow_kind=workflow_kind)
@@ -398,9 +426,13 @@ def resolve_refresh_workflow_status(
     max_concurrent_runs = getattr(job_settings, "max_concurrent_runs", None)
     if workflow_kind == "shared":
         if queue_enabled is not True:
-            warnings.append("The shared refresh workflow should enable queueing so overlapping runs wait instead of failing.")
+            warnings.append(
+                "The shared refresh workflow should enable queueing so overlapping runs wait instead of failing."
+            )
         if max_concurrent_runs != 1:
-            warnings.append("The shared refresh workflow should set max_concurrent_runs=1 to avoid overlap.")
+            warnings.append(
+                "The shared refresh workflow should set max_concurrent_runs=1 to avoid overlap."
+            )
 
     run_now_available, run_now_warning = _direct_run_now_permission(client, int(job_id))
     if run_now_warning:
@@ -434,7 +466,9 @@ def validate_workspace_readiness(
     workspace_client=None,
 ) -> WorkspaceReadiness:
     warehouse_ready = bool(_clean(settings.sql_warehouse_id))
-    workflow_status = resolve_refresh_workflow_status(workspace_client=workspace_client, workflow_kind="shared")
+    workflow_status = resolve_refresh_workflow_status(
+        workspace_client=workspace_client, workflow_kind="shared"
+    )
     bootstrap_selector_via, _ = _configured_job_selector("bootstrap")
     bootstrap_mode = "shared_default"
     bootstrap_status: RefreshWorkflowStatus | None = None
@@ -465,7 +499,9 @@ def validate_workspace_readiness(
         warnings.extend(bootstrap_status.blocking_issues)
         warnings.extend(bootstrap_status.warnings)
     if lakebase_requested and not lakebase_ready:
-        warnings.append("Lakebase fields are only partially configured; the app will operate in warehouse mode until they are completed.")
+        warnings.append(
+            "Lakebase fields are only partially configured; the app will operate in warehouse mode until they are completed."
+        )
 
     if blocking_issues:
         overall_mode = "not_ready"
@@ -499,13 +535,19 @@ def validate_workspace_readiness(
             bootstrap_status.job_id if bootstrap_status is not None else workflow_status.job_id
         ),
         bootstrap_workflow_configured_via=(
-            bootstrap_status.configured_via if bootstrap_status is not None else workflow_status.configured_via
+            bootstrap_status.configured_via
+            if bootstrap_status is not None
+            else workflow_status.configured_via
         ),
         bootstrap_workflow_configured_value=(
-            bootstrap_status.configured_value if bootstrap_status is not None else workflow_status.configured_value
+            bootstrap_status.configured_value
+            if bootstrap_status is not None
+            else workflow_status.configured_value
         ),
         bootstrap_run_now_available=(
-            bootstrap_status.run_now_available if bootstrap_status is not None else workflow_status.run_now_available
+            bootstrap_status.run_now_available
+            if bootstrap_status is not None
+            else workflow_status.run_now_available
         ),
         lakebase_ready=lakebase_ready,
         overall_mode=overall_mode,
@@ -530,7 +572,11 @@ def resolve_shared_workflow_schedule_status(workspace_client=None) -> SharedWork
     checked_at = _checked_at_text()
     warnings = list(workflow_status.warnings)
     blocking_issues = list(workflow_status.blocking_issues)
-    if not workflow_status.configured or not workflow_status.resolved or workflow_status.job_id is None:
+    if (
+        not workflow_status.configured
+        or not workflow_status.resolved
+        or workflow_status.job_id is None
+    ):
         return SharedWorkflowScheduleStatus(
             configured=workflow_status.configured,
             resolved=workflow_status.resolved,
@@ -560,7 +606,9 @@ def resolve_shared_workflow_schedule_status(workspace_client=None) -> SharedWork
             "continuous": "Shared workflow uses continuous execution, not a cron schedule.",
             "missing": "Shared workflow has no editable cron schedule.",
         }.get(workflow_status.scheduler_mode, "Shared workflow does not expose a cron schedule.")
-        manage_available, manage_warning = _direct_schedule_manage_permission(client, workflow_status.job_id)
+        manage_available, manage_warning = _direct_schedule_manage_permission(
+            client, workflow_status.job_id
+        )
         if manage_warning:
             warnings.append(manage_warning)
         return SharedWorkflowScheduleStatus(
@@ -586,7 +634,9 @@ def resolve_shared_workflow_schedule_status(workspace_client=None) -> SharedWork
     timezone_id = _clean(getattr(schedule, "timezone_id", None)) or "UTC"
     paused = _pause_status(schedule) == "PAUSED"
     interval_hours = _quartz_interval_hours(current_expression)
-    manage_available, manage_warning = _direct_schedule_manage_permission(client, workflow_status.job_id)
+    manage_available, manage_warning = _direct_schedule_manage_permission(
+        client, workflow_status.job_id
+    )
     if manage_warning:
         warnings.append(manage_warning)
     supported = interval_hours in SCHEDULE_INTERVAL_OPTIONS
@@ -602,7 +652,9 @@ def resolve_shared_workflow_schedule_status(workspace_client=None) -> SharedWork
         scheduler_mode=workflow_status.scheduler_mode,
         current_expression=current_expression,
         current_interval_hours=interval_hours,
-        current_label=_schedule_interval_label(interval_hours) if supported else f"Custom cron: {current_expression or '(unset)'}",
+        current_label=_schedule_interval_label(interval_hours)
+        if supported
+        else f"Custom cron: {current_expression or '(unset)'}",
         timezone_id=timezone_id,
         paused=paused,
         editable=bool(manage_available) and supported,
@@ -614,11 +666,15 @@ def resolve_shared_workflow_schedule_status(workspace_client=None) -> SharedWork
     )
 
 
-def update_shared_workflow_schedule(interval_hours: int, workspace_client=None) -> SharedWorkflowScheduleStatus:
+def update_shared_workflow_schedule(
+    interval_hours: int, workspace_client=None
+) -> SharedWorkflowScheduleStatus:
     client = workspace_client or _workspace_client()
     status = resolve_shared_workflow_schedule_status(client)
     if not status.configured or not status.resolved or status.job_id is None:
-        raise RefreshJobConfigError("Shared refresh workflow is not configured or could not be resolved.")
+        raise RefreshJobConfigError(
+            "Shared refresh workflow is not configured or could not be resolved."
+        )
     if not status.supported:
         raise RefreshJobConfigError(
             "Shared workflow schedule editing is only supported when the job already uses a cron schedule."
@@ -693,28 +749,38 @@ def build_refresh_job_named_params(
     return params
 
 
-def resolve_refresh_job_id(workspace_client=None, *, workflow_kind: str = "shared", allow_shared_fallback: bool = False) -> int:
+def resolve_refresh_job_id(
+    workspace_client=None, *, workflow_kind: str = "shared", allow_shared_fallback: bool = False
+) -> int:
     configured_job_id, refresh_job_name = "", ""
     configured_via, configured_value = _configured_job_selector(workflow_kind)
     job_id_env_name, job_name_env_name = _workflow_env_names(workflow_kind)
     workflow_name = _workflow_display_name(workflow_kind)
 
     if configured_via == "none" and workflow_kind == "bootstrap" and allow_shared_fallback:
-        return resolve_refresh_job_id(workspace_client, workflow_kind="shared", allow_shared_fallback=False)
+        return resolve_refresh_job_id(
+            workspace_client, workflow_kind="shared", allow_shared_fallback=False
+        )
 
     configured_job_id = configured_value if configured_via == "id" else ""
     if configured_job_id:
         try:
             return int(configured_job_id)
         except ValueError as error:
-            raise RefreshJobConfigError(f"{job_id_env_name} must be an integer, got {configured_job_id!r}.") from error
+            raise RefreshJobConfigError(
+                f"{job_id_env_name} must be an integer, got {configured_job_id!r}."
+            ) from error
 
     refresh_job_name = configured_value if configured_via == "name" else ""
     if not refresh_job_name:
-        raise RefreshJobConfigError(f"Neither {job_id_env_name} nor {job_name_env_name} is configured.")
+        raise RefreshJobConfigError(
+            f"Neither {job_id_env_name} nor {job_name_env_name} is configured."
+        )
 
     client = workspace_client or _workspace_client()
-    exact_matches = _jobs_with_exact_name(list(client.jobs.list(name=refresh_job_name, limit=25)), refresh_job_name)
+    exact_matches = _jobs_with_exact_name(
+        list(client.jobs.list(name=refresh_job_name, limit=25)), refresh_job_name
+    )
     if len(exact_matches) > 1:
         if workflow_kind == "shared":
             raise RefreshJobLookupError(
@@ -803,7 +869,9 @@ def trigger_refresh_job(
 ) -> RefreshJobTrigger:
     client = workspace_client or _workspace_client()
     resolved_scope = _clean(scope).lower() or "scheduler"
-    requested_workflow_kind = "bootstrap" if resolved_scope in {"bootstrap", "backfill"} else "shared"
+    requested_workflow_kind = (
+        "bootstrap" if resolved_scope in {"bootstrap", "backfill"} else "shared"
+    )
     configured_bootstrap = _configured_job_selector("bootstrap")[0] != "none"
     workflow_kind = requested_workflow_kind
     used_shared_fallback = False

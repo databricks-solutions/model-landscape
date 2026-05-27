@@ -15,11 +15,6 @@ import textwrap
 from pathlib import Path
 
 import numpy as np
-from sklearn.datasets import load_breast_cancer, load_diabetes, load_iris
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LinearRegression, LogisticRegression, Ridge
-from sklearn.model_selection import train_test_split
-
 from mlflow_lens.classifier import (
     class_prediction_error,
     classification_report,
@@ -35,6 +30,10 @@ from mlflow_lens.model_selection import (
     validation_curve,
 )
 from mlflow_lens.regressor import alpha_selection, prediction_error, residuals
+from sklearn.datasets import load_breast_cancer, load_diabetes, load_iris
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LinearRegression, LogisticRegression, Ridge
+from sklearn.model_selection import train_test_split
 
 DOCS_DIR = Path(__file__).resolve().parent
 GALLERY_DIR = DOCS_DIR / "gallery"

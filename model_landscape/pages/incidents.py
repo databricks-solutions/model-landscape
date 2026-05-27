@@ -19,7 +19,11 @@ def layout():
                     dbc.Col(
                         [
                             dbc.Label("Monitor", className="text-muted"),
-                            dcc.Dropdown(id="incidents-monitor-filter", placeholder="All monitors", className="dash-dropdown"),
+                            dcc.Dropdown(
+                                id="incidents-monitor-filter",
+                                placeholder="All monitors",
+                                className="dash-dropdown",
+                            ),
                         ],
                         md=4,
                     ),
@@ -58,7 +62,11 @@ def layout():
                     dbc.Col(
                         [
                             dbc.Label("Metric", className="text-muted"),
-                            dcc.Dropdown(id="incidents-metric-filter", placeholder="All metrics", className="dash-dropdown"),
+                            dcc.Dropdown(
+                                id="incidents-metric-filter",
+                                placeholder="All metrics",
+                                className="dash-dropdown",
+                            ),
                         ],
                         md=3,
                     ),

@@ -4,7 +4,6 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-
 REFRESH_JOB_PYPI_DEPENDENCIES: tuple[str, ...] = (
     "dash>=2.18,<3.0",
     "dash-bootstrap-components>=1.6,<2.0",
@@ -120,7 +119,10 @@ def build_manual_refresh_job_payload(settings: ManualRefreshJobSettings) -> dict
         {"name": "control_plane_schema", "default": settings.control_plane_schema},
         {"name": "scope", "default": "scheduler"},
         {"name": "model_key", "default": ""},
-        {"name": "use_lakebase_read_model", "default": "true" if settings.use_lakebase_read_model else "false"},
+        {
+            "name": "use_lakebase_read_model",
+            "default": "true" if settings.use_lakebase_read_model else "false",
+        },
         {"name": "lakebase_instance_name", "default": settings.lakebase_instance_name},
         {"name": "lakebase_database_name", "default": settings.lakebase_database_name},
         {"name": "lakebase_host", "default": settings.lakebase_host},

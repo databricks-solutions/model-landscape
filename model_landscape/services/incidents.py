@@ -15,7 +15,9 @@ def _observed_at(row: dict[str, Any]) -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _incident_candidate(row: dict[str, Any], thresholds: dict[str, dict[str, float]]) -> dict[str, Any] | None:
+def _incident_candidate(
+    row: dict[str, Any], thresholds: dict[str, dict[str, float]]
+) -> dict[str, Any] | None:
     active_thresholds = merged_thresholds(thresholds)
     metric_name = str(row["metric_name"])
     metric_thresholds = active_thresholds.get(metric_name)
@@ -65,7 +67,11 @@ def _incident_map(
         existing = incidents.get(key)
         candidate_rank = _SEVERITY_RANK.get(str(candidate["severity"]), 0)
         existing_rank = _SEVERITY_RANK.get(str(existing["severity"]), 0) if existing else 0
-        if existing is None or candidate_rank > existing_rank or float(candidate["metric_value"]) > float(existing["metric_value"]):
+        if (
+            existing is None
+            or candidate_rank > existing_rank
+            or float(candidate["metric_value"]) > float(existing["metric_value"])
+        ):
             incidents[key] = candidate
     return incidents
 
@@ -101,7 +107,9 @@ def build_incident_history(
     for window in ordered_windows:
         window_id = str(window.get("window_id") or "")
         current = _incident_map(rows_by_window.get(window_id, []), active_thresholds)
-        observed_at = str(window.get("created_at") or "").strip() or datetime.now(timezone.utc).isoformat(timespec="seconds")
+        observed_at = str(window.get("created_at") or "").strip() or datetime.now(
+            timezone.utc
+        ).isoformat(timespec="seconds")
         for key in sorted(set(previous) | set(current)):
             previous_row = previous.get(key)
             current_row = current.get(key)
@@ -143,10 +151,18 @@ def build_incident_history(
                     "status": status,
                     "metric_value": metric_value,
                     "window_id": window_id,
-                    "window_start": str(window.get("window_start") or event_row.get("window_start") or ""),
-                    "window_end": str(window.get("window_end") or event_row.get("window_end") or ""),
-                    "baseline_start": str(window.get("baseline_start") or event_row.get("baseline_start") or ""),
-                    "baseline_end": str(window.get("baseline_end") or event_row.get("baseline_end") or ""),
+                    "window_start": str(
+                        window.get("window_start") or event_row.get("window_start") or ""
+                    ),
+                    "window_end": str(
+                        window.get("window_end") or event_row.get("window_end") or ""
+                    ),
+                    "baseline_start": str(
+                        window.get("baseline_start") or event_row.get("baseline_start") or ""
+                    ),
+                    "baseline_end": str(
+                        window.get("baseline_end") or event_row.get("baseline_end") or ""
+                    ),
                     "observed_at": observed_at,
                 }
             )

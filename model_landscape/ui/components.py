@@ -94,9 +94,17 @@ def make_model_status_card(
                         [
                             dbc.Col(
                                 [
-                                    html.H5(model_name, className="mb-1 text-light", style=MODEL_TITLE_STYLE, title=model_name),
+                                    html.H5(
+                                        model_name,
+                                        className="mb-1 text-light",
+                                        style=MODEL_TITLE_STYLE,
+                                        title=model_name,
+                                    ),
                                     dbc.Badge(
-                                        [html.I(className="fas fa-spinner fa-spin me-1"), "Computing..."],
+                                        [
+                                            html.I(className="fas fa-spinner fa-spin me-1"),
+                                            "Computing...",
+                                        ],
                                         color="info",
                                         className="mb-2",
                                     ),
@@ -112,12 +120,20 @@ def make_model_status_card(
                         ],
                         className="align-items-start",
                     ),
-                    html.P(description, className="text-muted mb-2", style=MODEL_DESCRIPTION_STYLE, title=description)
+                    html.P(
+                        description,
+                        className="text-muted mb-2",
+                        style=MODEL_DESCRIPTION_STYLE,
+                        title=description,
+                    )
                     if description
                     else None,
                     html.Hr(style={"borderColor": COLORS["grid"], "margin": "8px 0"}),
                     html.P(
-                        [html.I(className="fas fa-clock me-2"), "Drift calculations are running. Results will appear shortly."],
+                        [
+                            html.I(className="fas fa-clock me-2"),
+                            "Drift calculations are running. Results will appear shortly.",
+                        ],
                         className="text-muted mb-0",
                         style={"fontSize": "0.85rem"},
                     ),
@@ -130,7 +146,9 @@ def make_model_status_card(
     status, badge_color, border = get_drift_status(resolved_max_metric, metric_key, thresholds)
     badges = [dbc.Badge(status, color=badge_color, className="mb-2")]
     freshness_badges = {
-        "pending_bootstrap": dbc.Badge("Pending Bootstrap", color="secondary", className="ms-1 mb-2"),
+        "pending_bootstrap": dbc.Badge(
+            "Pending Bootstrap", color="secondary", className="ms-1 mb-2"
+        ),
         "stale": dbc.Badge("Refresh Overdue", color="warning", className="ms-1 mb-2"),
         "failed": dbc.Badge("Last Run Failed", color="danger", className="ms-1 mb-2"),
         "manual": dbc.Badge("Manual Schedule", color="dark", className="ms-1 mb-2"),
@@ -139,14 +157,19 @@ def make_model_status_card(
         badges.append(freshness_badges[freshness_status])
     if has_labels:
         badges.append(
-            dbc.Badge([html.I(className="fas fa-tag me-1"), "Labels"], color="info", className="ms-1 mb-2")
+            dbc.Badge(
+                [html.I(className="fas fa-tag me-1"), "Labels"], color="info", className="ms-1 mb-2"
+            )
         )
     if max_null_rate is not None and max_null_rate > 0:
         null_status, null_badge_color, _ = get_drift_status(max_null_rate, "null_rate", thresholds)
         if null_status != "Healthy":
             badges.append(
                 dbc.Badge(
-                    [html.I(className="fas fa-exclamation-triangle me-1"), f"Nulls {max_null_rate:.1f}%"],
+                    [
+                        html.I(className="fas fa-exclamation-triangle me-1"),
+                        f"Nulls {max_null_rate:.1f}%",
+                    ],
                     color=null_badge_color,
                     className="ms-1 mb-2",
                 )
@@ -157,15 +180,33 @@ def make_model_status_card(
             [
                 dbc.Row(
                     [
-                        dbc.Col([html.H5(model_name, className="mb-1 text-light", style=MODEL_TITLE_STYLE, title=model_name), html.Div(badges)]),
                         dbc.Col(
-                            html.I(className="fas fa-robot fa-2x", style={"color": border, "opacity": "0.7"}),
+                            [
+                                html.H5(
+                                    model_name,
+                                    className="mb-1 text-light",
+                                    style=MODEL_TITLE_STYLE,
+                                    title=model_name,
+                                ),
+                                html.Div(badges),
+                            ]
+                        ),
+                        dbc.Col(
+                            html.I(
+                                className="fas fa-robot fa-2x",
+                                style={"color": border, "opacity": "0.7"},
+                            ),
                             width="auto",
                         ),
                     ],
                     className="align-items-start",
                 ),
-                html.P(description, className="text-muted mb-2", style=MODEL_DESCRIPTION_STYLE, title=description)
+                html.P(
+                    description,
+                    className="text-muted mb-2",
+                    style=MODEL_DESCRIPTION_STYLE,
+                    title=description,
+                )
                 if description
                 else None,
                 html.Small(
@@ -180,14 +221,21 @@ def make_model_status_card(
                                 html.Small(f"Max {metric_label}", className="text-muted d-block"),
                                 html.Span(
                                     f"{resolved_max_metric:.4f}",
-                                    style={"color": border, "fontWeight": "600", "fontSize": "1.1rem"},
+                                    style={
+                                        "color": border,
+                                        "fontWeight": "600",
+                                        "fontSize": "1.1rem",
+                                    },
                                 ),
                             ]
                         ),
                         dbc.Col(
                             [
                                 html.Small(f"Avg {metric_label}", className="text-muted d-block"),
-                                html.Span(f"{resolved_avg_metric:.4f}", style={"fontWeight": "600", "fontSize": "1.1rem"}),
+                                html.Span(
+                                    f"{resolved_avg_metric:.4f}",
+                                    style={"fontWeight": "600", "fontSize": "1.1rem"},
+                                ),
                             ]
                         ),
                         dbc.Col(

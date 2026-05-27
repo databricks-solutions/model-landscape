@@ -21,12 +21,14 @@ from model_landscape.services.refresh_engine import (
 
 def test_split_baseline_current_uses_two_recent_adjacent_windows() -> None:
     start = datetime(2026, 1, 1)
-    frame = pd.DataFrame({
-        "event_ts": [start + timedelta(days=index) for index in range(10)],
-        "model_id": ["m1"] * 10,
-        "prediction": [0.1 * index for index in range(10)],
-        "f1": [float(index) for index in range(10)],
-    })
+    frame = pd.DataFrame(
+        {
+            "event_ts": [start + timedelta(days=index) for index in range(10)],
+            "model_id": ["m1"] * 10,
+            "prediction": [0.1 * index for index in range(10)],
+            "f1": [float(index) for index in range(10)],
+        }
+    )
     baseline, current = split_baseline_current(frame, "event_ts", 3)
     assert len(baseline) == 3
     assert len(current) == 3
@@ -37,17 +39,22 @@ def test_split_baseline_current_uses_two_recent_adjacent_windows() -> None:
 
 def test_generate_window_pairs_backfills_all_rolling_windows() -> None:
     start = datetime(2026, 1, 1)
-    frame = pd.DataFrame({
-        "event_ts": [start + timedelta(days=index) for index in range(21)],
-        "model_id": ["m1"] * 21,
-        "prediction": [0.1 * index for index in range(21)],
-        "f1": [float(index) for index in range(21)],
-    })
+    frame = pd.DataFrame(
+        {
+            "event_ts": [start + timedelta(days=index) for index in range(21)],
+            "model_id": ["m1"] * 21,
+            "prediction": [0.1 * index for index in range(21)],
+            "f1": [float(index) for index in range(21)],
+        }
+    )
 
     pairs = generate_window_pairs(frame, "event_ts", build_default_baseline(7))
 
     assert len(pairs) == 8
-    assert {key: pairs[0][2][key] for key in ("baseline_start", "baseline_end", "window_start", "window_end")} == {
+    assert {
+        key: pairs[0][2][key]
+        for key in ("baseline_start", "baseline_end", "window_start", "window_end")
+    } == {
         "baseline_start": "2026-01-01",
         "baseline_end": "2026-01-07",
         "window_start": "2026-01-08",
@@ -55,7 +62,10 @@ def test_generate_window_pairs_backfills_all_rolling_windows() -> None:
     }
     assert pairs[0][2]["baseline_kind"] == "rolling"
     assert pairs[0][2]["window_grain"] == "daily"
-    assert {key: pairs[-1][2][key] for key in ("baseline_start", "baseline_end", "window_start", "window_end")} == {
+    assert {
+        key: pairs[-1][2][key]
+        for key in ("baseline_start", "baseline_end", "window_start", "window_end")
+    } == {
         "baseline_start": "2026-01-08",
         "baseline_end": "2026-01-14",
         "window_start": "2026-01-15",
@@ -69,14 +79,18 @@ def test_refresh_monitor_backfill_produces_all_window_rows() -> None:
     for day in range(21):
         regime = 0 if day < 7 else 1 if day < 14 else 2
         for offset in range(2):
-            rows.append({
-                "event_ts": start + timedelta(days=day, hours=offset),
-                "model_id": "m1",
-                "prediction": [0.15, 0.35, 0.55, 0.85][regime + offset if regime < 2 else 2 + offset],
-                "label": 0 if regime < 2 else 1,
-                "f1": float((day * 2) + offset + (regime * 5)),
-                "f2": float((day * 3) + offset + (regime * 7)),
-            })
+            rows.append(
+                {
+                    "event_ts": start + timedelta(days=day, hours=offset),
+                    "model_id": "m1",
+                    "prediction": [0.15, 0.35, 0.55, 0.85][
+                        regime + offset if regime < 2 else 2 + offset
+                    ],
+                    "label": 0 if regime < 2 else 1,
+                    "f1": float((day * 2) + offset + (regime * 5)),
+                    "f2": float((day * 3) + offset + (regime * 7)),
+                }
+            )
     frame = pd.DataFrame(rows)
     contract = build_contract(
         columns=list(frame.columns),
@@ -105,21 +119,25 @@ def test_refresh_monitor_backfill_produces_all_window_rows() -> None:
     assert len(result.window_rows) == 8
     assert isinstance(result.incident_history_rows, list)
     assert all(row["window_id"] for row in result.incident_history_rows)
-    assert result.window_rows[0]["window_id"].startswith("m1|rolling|2026-01-01|2026-01-07|2026-01-08|2026-01-14")
+    assert result.window_rows[0]["window_id"].startswith(
+        "m1|rolling|2026-01-01|2026-01-07|2026-01-08|2026-01-14"
+    )
     assert result.quality_rows[0]["max_date"] == "2026-01-21"
     assert all(row["window_end"] == "2026-01-21" for row in result.incident_rows)
 
 
 def test_refresh_monitor_produces_deduplicated_incidents() -> None:
     start = datetime(2026, 1, 1)
-    frame = pd.DataFrame({
-        "event_ts": [start + timedelta(days=index) for index in range(20)],
-        "model_id": ["m1"] * 20,
-        "prediction": [0.2] * 10 + [0.8] * 10,
-        "label": [0] * 10 + [1] * 10,
-        "f1": [1.0] * 10 + [10.0] * 10,
-        "f2": [1.0] * 10 + [20.0] * 10,
-    })
+    frame = pd.DataFrame(
+        {
+            "event_ts": [start + timedelta(days=index) for index in range(20)],
+            "model_id": ["m1"] * 20,
+            "prediction": [0.2] * 10 + [0.8] * 10,
+            "label": [0] * 10 + [1] * 10,
+            "f1": [1.0] * 10 + [10.0] * 10,
+            "f2": [1.0] * 10 + [20.0] * 10,
+        }
+    )
     contract = build_contract(
         columns=list(frame.columns),
         timestamp_col="event_ts",
@@ -139,7 +157,12 @@ def test_refresh_monitor_produces_deduplicated_incidents() -> None:
         inference_df=frame,
     )
     assert result.drift_rows
-    assert len({(row["model_key"], row["feature_name"], row["metric_name"]) for row in result.incident_rows}) == len(result.incident_rows)
+    assert len(
+        {
+            (row["model_key"], row["feature_name"], row["metric_name"])
+            for row in result.incident_rows
+        }
+    ) == len(result.incident_rows)
     assert result.drift_rows[0]["window_start"] == "2026-01-14"
     if result.performance_rows:
         assert result.performance_rows[0]["window_start"] == "2026-01-14"
@@ -147,12 +170,14 @@ def test_refresh_monitor_produces_deduplicated_incidents() -> None:
 
 def test_split_baseline_current_supports_fixed_baseline_range() -> None:
     start = datetime(2026, 1, 1)
-    frame = pd.DataFrame({
-        "event_ts": [start + timedelta(days=index) for index in range(20)],
-        "model_id": ["m1"] * 20,
-        "prediction": [0.1 * index for index in range(20)],
-        "f1": [float(index) for index in range(20)],
-    })
+    frame = pd.DataFrame(
+        {
+            "event_ts": [start + timedelta(days=index) for index in range(20)],
+            "model_id": ["m1"] * 20,
+            "prediction": [0.1 * index for index in range(20)],
+            "f1": [float(index) for index in range(20)],
+        }
+    )
 
     baseline, current = split_baseline_current(
         frame,
@@ -168,12 +193,14 @@ def test_split_baseline_current_supports_fixed_baseline_range() -> None:
 
 def test_generate_window_pairs_supports_fixed_baseline_history() -> None:
     start = datetime(2026, 1, 1)
-    frame = pd.DataFrame({
-        "event_ts": [start + timedelta(days=index) for index in range(20)],
-        "model_id": ["m1"] * 20,
-        "prediction": [0.1 * index for index in range(20)],
-        "f1": [float(index) for index in range(20)],
-    })
+    frame = pd.DataFrame(
+        {
+            "event_ts": [start + timedelta(days=index) for index in range(20)],
+            "model_id": ["m1"] * 20,
+            "prediction": [0.1 * index for index in range(20)],
+            "f1": [float(index) for index in range(20)],
+        }
+    )
 
     pairs = generate_window_pairs(
         frame,
@@ -182,14 +209,20 @@ def test_generate_window_pairs_supports_fixed_baseline_history() -> None:
     )
 
     assert len(pairs) == 11
-    assert {key: pairs[0][2][key] for key in ("baseline_start", "baseline_end", "window_start", "window_end")} == {
+    assert {
+        key: pairs[0][2][key]
+        for key in ("baseline_start", "baseline_end", "window_start", "window_end")
+    } == {
         "baseline_start": "2026-01-01",
         "baseline_end": "2026-01-05",
         "window_start": "2026-01-06",
         "window_end": "2026-01-10",
     }
     assert pairs[0][2]["baseline_kind"] == "fixed"
-    assert {key: pairs[-1][2][key] for key in ("baseline_start", "baseline_end", "window_start", "window_end")} == {
+    assert {
+        key: pairs[-1][2][key]
+        for key in ("baseline_start", "baseline_end", "window_start", "window_end")
+    } == {
         "baseline_start": "2026-01-01",
         "baseline_end": "2026-01-05",
         "window_start": "2026-01-16",
@@ -202,14 +235,16 @@ def test_refresh_monitor_backfill_supports_regression_metrics_and_categorical_dr
     rows = []
     for day in range(21):
         for offset in range(2):
-            rows.append({
-                "event_ts": start + timedelta(days=day, hours=offset),
-                "model_id": "m1",
-                "prediction": float(day + offset),
-                "label": float(day + (offset * 0.5)),
-                "amount": float((day * 2) + offset),
-                "segment": "baseline" if day < 10 else "current",
-            })
+            rows.append(
+                {
+                    "event_ts": start + timedelta(days=day, hours=offset),
+                    "model_id": "m1",
+                    "prediction": float(day + offset),
+                    "label": float(day + (offset * 0.5)),
+                    "amount": float((day * 2) + offset),
+                    "segment": "baseline" if day < 10 else "current",
+                }
+            )
     frame = pd.DataFrame(rows)
     contract = build_contract(
         columns=list(frame.columns),
@@ -234,32 +269,38 @@ def test_refresh_monitor_backfill_supports_regression_metrics_and_categorical_dr
     )
 
     assert {"rmse", "mae"} == {row["metric_name"] for row in result.performance_rows}
-    assert any(row["feature_name"] == "segment" and row["metric_name"] == "psi" for row in result.drift_rows)
+    assert any(
+        row["feature_name"] == "segment" and row["metric_name"] == "psi"
+        for row in result.drift_rows
+    )
 
 
 def test_daily_profile_builders_emit_quality_feature_and_performance_rows() -> None:
     start = datetime(2026, 1, 1)
-    frame = pd.DataFrame([
-        {
-            "event_ts": start + timedelta(hours=offset),
-            "model_id": "m1",
-            "prediction": 0.1 + (offset * 0.1),
-            "label": offset % 2,
-            "amount": 10.0 + offset,
-            "segment": "a" if offset < 6 else "b",
-        }
-        for offset in range(12)
-    ] + [
-        {
-            "event_ts": start + timedelta(days=1, hours=offset),
-            "model_id": "m1",
-            "prediction": 0.2 + (offset * 0.05),
-            "label": (offset + 1) % 2,
-            "amount": 20.0 + offset,
-            "segment": "b" if offset < 6 else "c",
-        }
-        for offset in range(12)
-    ])
+    frame = pd.DataFrame(
+        [
+            {
+                "event_ts": start + timedelta(hours=offset),
+                "model_id": "m1",
+                "prediction": 0.1 + (offset * 0.1),
+                "label": offset % 2,
+                "amount": 10.0 + offset,
+                "segment": "a" if offset < 6 else "b",
+            }
+            for offset in range(12)
+        ]
+        + [
+            {
+                "event_ts": start + timedelta(days=1, hours=offset),
+                "model_id": "m1",
+                "prediction": 0.2 + (offset * 0.05),
+                "label": (offset + 1) % 2,
+                "amount": 20.0 + offset,
+                "segment": "b" if offset < 6 else "c",
+            }
+            for offset in range(12)
+        ]
+    )
     contract = build_contract(
         columns=list(frame.columns),
         timestamp_col="event_ts",
@@ -277,9 +318,15 @@ def test_daily_profile_builders_emit_quality_feature_and_performance_rows() -> N
         baseline=build_default_baseline(),
     )
 
-    quality_rows = build_daily_quality_profile_rows(config=config, inference_df=frame, computed_at="2026-01-02T00:00:00Z")
-    feature_rows = build_daily_feature_profile_rows(config=config, inference_df=frame, computed_at="2026-01-02T00:00:00Z")
-    performance_rows = build_daily_performance_profile_rows(config=config, inference_df=frame, computed_at="2026-01-02T00:00:00Z")
+    quality_rows = build_daily_quality_profile_rows(
+        config=config, inference_df=frame, computed_at="2026-01-02T00:00:00Z"
+    )
+    feature_rows = build_daily_feature_profile_rows(
+        config=config, inference_df=frame, computed_at="2026-01-02T00:00:00Z"
+    )
+    performance_rows = build_daily_performance_profile_rows(
+        config=config, inference_df=frame, computed_at="2026-01-02T00:00:00Z"
+    )
 
     assert {row["profile_date"] for row in quality_rows} == {"2026-01-01", "2026-01-02"}
     assert {row["feature_name"] for row in feature_rows} == {"amount", "segment"}
@@ -289,26 +336,30 @@ def test_daily_profile_builders_emit_quality_feature_and_performance_rows() -> N
 
 
 def test_daily_performance_profiles_reuse_canonical_bin_specs_across_runs() -> None:
-    bootstrap_frame = pd.DataFrame([
-        {
-            "event_ts": datetime(2026, 1, 1, hour=offset),
-            "model_id": "m1",
-            "prediction": 0.8 if offset % 2 else 0.2,
-            "label": offset % 2,
-            "amount": float(offset),
-        }
-        for offset in range(12)
-    ])
-    incremental_frame = pd.DataFrame([
-        {
-            "event_ts": datetime(2026, 1, 2, hour=offset),
-            "model_id": "m1",
-            "prediction": 0.8 if offset % 2 else 0.2,
-            "label": offset % 2,
-            "amount": float(100 + offset),
-        }
-        for offset in range(12)
-    ])
+    bootstrap_frame = pd.DataFrame(
+        [
+            {
+                "event_ts": datetime(2026, 1, 1, hour=offset),
+                "model_id": "m1",
+                "prediction": 0.8 if offset % 2 else 0.2,
+                "label": offset % 2,
+                "amount": float(offset),
+            }
+            for offset in range(12)
+        ]
+    )
+    incremental_frame = pd.DataFrame(
+        [
+            {
+                "event_ts": datetime(2026, 1, 2, hour=offset),
+                "model_id": "m1",
+                "prediction": 0.8 if offset % 2 else 0.2,
+                "label": offset % 2,
+                "amount": float(100 + offset),
+            }
+            for offset in range(12)
+        ]
+    )
     contract = build_contract(
         columns=list(bootstrap_frame.columns),
         timestamp_col="event_ts",
@@ -363,14 +414,18 @@ def test_daily_profiles_can_derive_window_history_without_raw_window_reloads() -
     for day in range(21):
         regime = 0 if day < 7 else 1 if day < 14 else 2
         for offset in range(2):
-            rows.append({
-                "event_ts": start + timedelta(days=day, hours=offset),
-                "model_id": "m1",
-                "prediction": [0.15, 0.35, 0.55, 0.85][regime + offset if regime < 2 else 2 + offset],
-                "label": 0 if regime < 2 else 1,
-                "amount": float((day * 2) + offset + (regime * 4)),
-                "segment": "baseline" if day < 10 else "current",
-            })
+            rows.append(
+                {
+                    "event_ts": start + timedelta(days=day, hours=offset),
+                    "model_id": "m1",
+                    "prediction": [0.15, 0.35, 0.55, 0.85][
+                        regime + offset if regime < 2 else 2 + offset
+                    ],
+                    "label": 0 if regime < 2 else 1,
+                    "amount": float((day * 2) + offset + (regime * 4)),
+                    "segment": "baseline" if day < 10 else "current",
+                }
+            )
     frame = pd.DataFrame(rows)
     contract = build_contract(
         columns=list(frame.columns),
@@ -390,9 +445,15 @@ def test_daily_profiles_can_derive_window_history_without_raw_window_reloads() -
     )
     computed_at = "2026-01-22T00:00:00Z"
 
-    quality_rows = build_daily_quality_profile_rows(config=config, inference_df=frame, computed_at=computed_at)
-    feature_rows = build_daily_feature_profile_rows(config=config, inference_df=frame, computed_at=computed_at)
-    performance_rows = build_daily_performance_profile_rows(config=config, inference_df=frame, computed_at=computed_at)
+    quality_rows = build_daily_quality_profile_rows(
+        config=config, inference_df=frame, computed_at=computed_at
+    )
+    feature_rows = build_daily_feature_profile_rows(
+        config=config, inference_df=frame, computed_at=computed_at
+    )
+    performance_rows = build_daily_performance_profile_rows(
+        config=config, inference_df=frame, computed_at=computed_at
+    )
     metadata_list = generate_window_metadata(
         min_date="2026-01-01",
         max_date="2026-01-21",
@@ -412,7 +473,10 @@ def test_daily_profiles_can_derive_window_history_without_raw_window_reloads() -
     assert len(result.window_rows) == 8
     assert len(result.quality_history_rows) == 8
     assert len({row["window_end"] for row in result.drift_rows}) == 8
-    assert any(row["feature_name"] == "segment" and row["metric_name"] == "psi" for row in result.drift_rows)
+    assert any(
+        row["feature_name"] == "segment" and row["metric_name"] == "psi"
+        for row in result.drift_rows
+    )
     assert {row["metric_name"] for row in result.performance_rows} == {"precision"}
     assert all(row["window_id"] for row in result.performance_rows)
     assert all(row["window_id"] for row in result.incident_history_rows)

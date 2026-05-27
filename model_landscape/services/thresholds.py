@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Literal, Mapping
-
+from collections.abc import Mapping
+from typing import Any, Literal
 
 DEFAULT_THRESHOLDS: dict[str, dict[str, float]] = {
     "psi": {"warning": 0.1, "critical": 0.2},
@@ -39,7 +39,9 @@ def normalize_threshold_overrides(overrides: Mapping[str, Any] | None = None) ->
         if warning is None and critical is None:
             continue
         if warning is None or critical is None:
-            raise ValueError(f"{metric} threshold overrides must provide both warning and critical values.")
+            raise ValueError(
+                f"{metric} threshold overrides must provide both warning and critical values."
+            )
         if critical <= warning:
             raise ValueError(f"{metric} critical threshold must be greater than warning.")
         normalized[metric] = {
@@ -59,16 +61,22 @@ def merged_thresholds(overrides: Mapping[str, Any] | None = None) -> ThresholdMa
     return resolved
 
 
-def metric_thresholds(metric: str = "psi", overrides: Mapping[str, Any] | None = None) -> dict[str, float]:
+def metric_thresholds(
+    metric: str = "psi", overrides: Mapping[str, Any] | None = None
+) -> dict[str, float]:
     return merged_thresholds(overrides).get(metric, DEFAULT_THRESHOLDS["psi"])
 
 
-def get_thresholds(metric: str = "psi", overrides: Mapping[str, Any] | None = None) -> tuple[float, float]:
+def get_thresholds(
+    metric: str = "psi", overrides: Mapping[str, Any] | None = None
+) -> tuple[float, float]:
     thresholds = metric_thresholds(metric, overrides)
     return float(thresholds["warning"]), float(thresholds["critical"])
 
 
-def drift_severity(value: float | int | None, metric: str = "psi", overrides: Mapping[str, Any] | None = None) -> Severity:
+def drift_severity(
+    value: float | int | None, metric: str = "psi", overrides: Mapping[str, Any] | None = None
+) -> Severity:
     warning, critical = get_thresholds(metric, overrides)
     numeric = float(value or 0.0)
     if numeric >= critical:

@@ -9,7 +9,6 @@ import pandas as pd
 
 from model_landscape.services.sql_utils import validate_identifier
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -40,7 +39,9 @@ class WarehouseConnection:
             from databricks.sdk import WorkspaceClient
 
             workspace = WorkspaceClient()
-            host = (workspace.config.host or "").replace("https://", "").replace("http://", "").rstrip("/") or self._host
+            host = (workspace.config.host or "").replace("https://", "").replace(
+                "http://", ""
+            ).rstrip("/") or self._host
             self._host = host
 
             try:
@@ -57,7 +58,9 @@ class WarehouseConnection:
                 headers = workspace.config.authenticate()
                 token = headers.get("Authorization", "").replace("Bearer ", "")
                 if not token:
-                    raise RuntimeError("No Databricks auth token available for SQL connection") from error
+                    raise RuntimeError(
+                        "No Databricks auth token available for SQL connection"
+                    ) from error
                 self._conn = sql.connect(
                     server_hostname=host,
                     http_path=self._http_path,
@@ -83,7 +86,11 @@ class WarehouseConnection:
         rows = cursor.fetchall()
         frame = pd.DataFrame(rows, columns=columns)
         for column in frame.columns:
-            if len(frame) > 0 and frame[column].dtype == object and isinstance(frame[column].iloc[0], decimal.Decimal):
+            if (
+                len(frame) > 0
+                and frame[column].dtype == object
+                and isinstance(frame[column].iloc[0], decimal.Decimal)
+            ):
                 frame[column] = frame[column].astype(float)
         return frame
 
@@ -143,7 +150,7 @@ class WarehouseConnection:
         if not rows:
             return
         for index in range(0, len(rows), batch_size):
-            batch = rows[index:index + batch_size]
+            batch = rows[index : index + batch_size]
             param_dict: dict[str, object] = {}
             placeholders: list[str] = []
             for row_index, row in enumerate(batch):
@@ -154,7 +161,11 @@ class WarehouseConnection:
                     names.append(f":{key}")
                 placeholders.append("(" + ", ".join(names) + ")")
             sql = f"{insert_template} {', '.join(placeholders)}"
-            self._retry(lambda cursor, statement=sql, parameters=param_dict: cursor.execute(statement, parameters=parameters))
+            self._retry(
+                lambda cursor, statement=sql, parameters=param_dict: cursor.execute(
+                    statement, parameters=parameters
+                )
+            )
         self._invalidate_cache()
 
     def describe_table(self, table_name: str, *, cache: bool = True) -> pd.DataFrame:
@@ -164,7 +175,9 @@ class WarehouseConnection:
             return pd.DataFrame(columns=["col_name", "data_type"])
         frame = frame[~frame["col_name"].astype(str).str.startswith("#", na=False)].copy()
         frame = frame[frame["col_name"].astype(str).str.strip() != ""]
-        keep = [column for column in ("col_name", "data_type", "comment") if column in frame.columns]
+        keep = [
+            column for column in ("col_name", "data_type", "comment") if column in frame.columns
+        ]
         return frame[keep].reset_index(drop=True)
 
     def get_columns(self, table_name: str, *, cache: bool = True) -> list[str]:

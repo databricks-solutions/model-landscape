@@ -16,14 +16,18 @@ from model_landscape.analytics.drift import (
 )
 from model_landscape.analytics.performance import (
     compute_bin_edges,
-    compute_daily_classification_metrics,
     compute_classification_metrics,
+    compute_daily_classification_metrics,
     compute_regression_metrics,
     rank_degradation_contributors,
 )
 from model_landscape.domain.models import BaselinePolicy, MonitorConfig, RefreshResult
 from model_landscape.domain.performance_metrics import default_performance_metric_names
-from model_landscape.services.class_filters import normalized_binary_series, resolved_prediction_binary_series, supports_binary_class_filters
+from model_landscape.services.class_filters import (
+    normalized_binary_series,
+    resolved_prediction_binary_series,
+    supports_binary_class_filters,
+)
 from model_landscape.services.incidents import build_incident_history, build_incidents
 
 
@@ -39,8 +43,12 @@ WindowKey = tuple[str, str, str, str]
 
 def _normalize_frame(df: pd.DataFrame, timestamp_col: str) -> pd.DataFrame:
     ordered = df.copy()
-    ordered[timestamp_col] = pd.to_datetime(ordered[timestamp_col], errors="coerce", utc=True).dt.tz_localize(None)
-    ordered = ordered[ordered[timestamp_col].notna()].sort_values(timestamp_col).reset_index(drop=True)
+    ordered[timestamp_col] = pd.to_datetime(
+        ordered[timestamp_col], errors="coerce", utc=True
+    ).dt.tz_localize(None)
+    ordered = (
+        ordered[ordered[timestamp_col].notna()].sort_values(timestamp_col).reset_index(drop=True)
+    )
     return ordered
 
 
@@ -69,8 +77,12 @@ def slice_window_pair(
     baseline_end = pd.Timestamp(metadata["baseline_end"]).normalize()
     current_start = pd.Timestamp(metadata["window_start"]).normalize()
     current_end = pd.Timestamp(metadata["window_end"]).normalize()
-    baseline_df = _slice_window(ordered, timestamp_col=timestamp_col, start=baseline_start, end=baseline_end)
-    current_df = _slice_window(ordered, timestamp_col=timestamp_col, start=current_start, end=current_end)
+    baseline_df = _slice_window(
+        ordered, timestamp_col=timestamp_col, start=baseline_start, end=baseline_end
+    )
+    current_df = _slice_window(
+        ordered, timestamp_col=timestamp_col, start=current_start, end=current_end
+    )
     return baseline_df, current_df
 
 
@@ -193,13 +205,19 @@ def generate_window_pairs(
     ordered = _normalize_frame(df, timestamp_col)
     if ordered.empty:
         return []
-    policy = baseline if isinstance(baseline, BaselinePolicy) else BaselinePolicy(kind="rolling", n_days=int(baseline))
+    policy = (
+        baseline
+        if isinstance(baseline, BaselinePolicy)
+        else BaselinePolicy(kind="rolling", n_days=int(baseline))
+    )
     earliest_date = ordered[timestamp_col].min().normalize()
     latest_date = ordered[timestamp_col].max().normalize()
     metadata_list = (
         _fixed_metadata(model_key=model_key, latest_date=latest_date, policy=policy)
         if policy.kind == "fixed"
-        else _rolling_metadata(model_key=model_key, earliest_date=earliest_date, latest_date=latest_date, policy=policy)
+        else _rolling_metadata(
+            model_key=model_key, earliest_date=earliest_date, latest_date=latest_date, policy=policy
+        )
     )
     existing = existing_window_keys or set()
     pairs: list[tuple[pd.DataFrame, pd.DataFrame, dict[str, str]]] = []
@@ -210,8 +228,12 @@ def generate_window_pairs(
         baseline_end = pd.Timestamp(metadata["baseline_end"]).normalize()
         current_start = pd.Timestamp(metadata["window_start"]).normalize()
         current_end = pd.Timestamp(metadata["window_end"]).normalize()
-        baseline_df = _slice_window(ordered, timestamp_col=timestamp_col, start=baseline_start, end=baseline_end)
-        current_df = _slice_window(ordered, timestamp_col=timestamp_col, start=current_start, end=current_end)
+        baseline_df = _slice_window(
+            ordered, timestamp_col=timestamp_col, start=baseline_start, end=baseline_end
+        )
+        current_df = _slice_window(
+            ordered, timestamp_col=timestamp_col, start=current_start, end=current_end
+        )
         if baseline_df.empty or current_df.empty:
             continue
         pairs.append((baseline_df, current_df, metadata))
@@ -232,11 +254,17 @@ def generate_window_metadata(
     latest_date = pd.Timestamp(max_date).normalize()
     if pd.isna(earliest_date) or pd.isna(latest_date) or earliest_date > latest_date:
         return []
-    policy = baseline if isinstance(baseline, BaselinePolicy) else BaselinePolicy(kind="rolling", n_days=int(baseline))
+    policy = (
+        baseline
+        if isinstance(baseline, BaselinePolicy)
+        else BaselinePolicy(kind="rolling", n_days=int(baseline))
+    )
     metadata_list = (
         _fixed_metadata(model_key=model_key, latest_date=latest_date, policy=policy)
         if policy.kind == "fixed"
-        else _rolling_metadata(model_key=model_key, earliest_date=earliest_date, latest_date=latest_date, policy=policy)
+        else _rolling_metadata(
+            model_key=model_key, earliest_date=earliest_date, latest_date=latest_date, policy=policy
+        )
     )
     existing = existing_window_keys or set()
     return [metadata for metadata in metadata_list if _window_key(metadata) not in existing]
@@ -267,26 +295,28 @@ def _build_drift_rows(
     rows: list[dict[str, Any]] = []
     for _, row in drift_metrics.iterrows():
         for metric_name in ("psi", "kl_divergence", "js_divergence"):
-            rows.append({
-                "model_key": config.model_key,
-                "feature_name": row["feature_name"],
-                "metric_name": metric_name,
-                "metric_value": float(row[metric_name]),
-                "window_id": metadata["window_id"],
-                "window_start": metadata["window_start"],
-                "window_end": metadata["window_end"],
-                "baseline_start": metadata["baseline_start"],
-                "baseline_end": metadata["baseline_end"],
-                "ref_mean": float(row["ref_mean"]),
-                "cur_mean": float(row["cur_mean"]),
-                "ref_std": float(row["ref_std"]),
-                "cur_std": float(row["cur_std"]),
-                "ref_null_pct": float(row["ref_null_pct"]),
-                "cur_null_pct": float(row["cur_null_pct"]),
-                "ref_count": int(row["ref_count"]),
-                "cur_count": int(row["cur_count"]),
-                "computed_at": computed_at,
-            })
+            rows.append(
+                {
+                    "model_key": config.model_key,
+                    "feature_name": row["feature_name"],
+                    "metric_name": metric_name,
+                    "metric_value": float(row[metric_name]),
+                    "window_id": metadata["window_id"],
+                    "window_start": metadata["window_start"],
+                    "window_end": metadata["window_end"],
+                    "baseline_start": metadata["baseline_start"],
+                    "baseline_end": metadata["baseline_end"],
+                    "ref_mean": float(row["ref_mean"]),
+                    "cur_mean": float(row["cur_mean"]),
+                    "ref_std": float(row["ref_std"]),
+                    "cur_std": float(row["cur_std"]),
+                    "ref_null_pct": float(row["ref_null_pct"]),
+                    "cur_null_pct": float(row["cur_null_pct"]),
+                    "ref_count": int(row["ref_count"]),
+                    "cur_count": int(row["cur_count"]),
+                    "computed_at": computed_at,
+                }
+            )
     return rows
 
 
@@ -297,21 +327,28 @@ def _build_performance_rows(
     metadata: dict[str, str],
     computed_at: str,
 ) -> list[dict[str, Any]]:
-    return [{
-        "model_key": config.model_key,
-        "window_id": metadata["window_id"],
-        "feature_name": row["feature_name"],
-        "bin_label": row["bin_label"],
-        "baseline_metric": float(row["baseline_metric"]),
-        "current_metric": float(row["current_metric"]),
-        "delta": float(row["delta"]),
-        "volume_pct": float(row["volume_pct"]),
-        "contribution": float(row["contribution"]),
-        "metric_name": str(row.get("metric_name") or config.default_performance_metric or default_performance_metric_names(config.problem_type)[0]),
-        "window_start": metadata["window_start"],
-        "window_end": metadata["window_end"],
-        "computed_at": computed_at,
-    } for _, row in performance_frame.iterrows()]
+    return [
+        {
+            "model_key": config.model_key,
+            "window_id": metadata["window_id"],
+            "feature_name": row["feature_name"],
+            "bin_label": row["bin_label"],
+            "baseline_metric": float(row["baseline_metric"]),
+            "current_metric": float(row["current_metric"]),
+            "delta": float(row["delta"]),
+            "volume_pct": float(row["volume_pct"]),
+            "contribution": float(row["contribution"]),
+            "metric_name": str(
+                row.get("metric_name")
+                or config.default_performance_metric
+                or default_performance_metric_names(config.problem_type)[0]
+            ),
+            "window_start": metadata["window_start"],
+            "window_end": metadata["window_end"],
+            "computed_at": computed_at,
+        }
+        for _, row in performance_frame.iterrows()
+    ]
 
 
 def _build_quality_rows(
@@ -320,26 +357,42 @@ def _build_quality_rows(
     inference_df: pd.DataFrame,
     computed_at: str,
 ) -> list[dict[str, Any]]:
-    return [{
-        "model_key": config.model_key,
-        "total_rows": int(len(inference_df)),
-        "min_date": str(pd.to_datetime(inference_df[config.contract.timestamp_col]).min().date()),
-        "max_date": str(pd.to_datetime(inference_df[config.contract.timestamp_col]).max().date()),
-        "prediction_mean": _safe_float(pd.to_numeric(inference_df[config.contract.prediction_col], errors="coerce").mean()),
-        "prediction_std": _safe_float(pd.to_numeric(inference_df[config.contract.prediction_col], errors="coerce").std()),
-        "daily_volume": json.dumps({
-            str(index): int(value)
-            for index, value in inference_df.groupby(
-                pd.to_datetime(inference_df[config.contract.timestamp_col]).dt.date
-            ).size().items()
-        }),
-        "null_rates": json.dumps({
-            feature: round(float(inference_df[feature].isna().mean() * 100), 2)
-            for feature in config.contract.feature_columns
-            if feature in inference_df.columns
-        }),
-        "computed_at": computed_at,
-    }]
+    return [
+        {
+            "model_key": config.model_key,
+            "total_rows": int(len(inference_df)),
+            "min_date": str(
+                pd.to_datetime(inference_df[config.contract.timestamp_col]).min().date()
+            ),
+            "max_date": str(
+                pd.to_datetime(inference_df[config.contract.timestamp_col]).max().date()
+            ),
+            "prediction_mean": _safe_float(
+                pd.to_numeric(inference_df[config.contract.prediction_col], errors="coerce").mean()
+            ),
+            "prediction_std": _safe_float(
+                pd.to_numeric(inference_df[config.contract.prediction_col], errors="coerce").std()
+            ),
+            "daily_volume": json.dumps(
+                {
+                    str(index): int(value)
+                    for index, value in inference_df.groupby(
+                        pd.to_datetime(inference_df[config.contract.timestamp_col]).dt.date
+                    )
+                    .size()
+                    .items()
+                }
+            ),
+            "null_rates": json.dumps(
+                {
+                    feature: round(float(inference_df[feature].isna().mean() * 100), 2)
+                    for feature in config.contract.feature_columns
+                    if feature in inference_df.columns
+                }
+            ),
+            "computed_at": computed_at,
+        }
+    ]
 
 
 def build_quality_rows_from_profile(
@@ -351,17 +404,19 @@ def build_quality_rows_from_profile(
     total_rows = int(profile.get("total_rows", 0) or 0)
     if total_rows <= 0:
         return []
-    return [{
-        "model_key": config.model_key,
-        "total_rows": total_rows,
-        "min_date": str(profile.get("min_date") or ""),
-        "max_date": str(profile.get("max_date") or ""),
-        "prediction_mean": _safe_float(profile.get("prediction_mean")),
-        "prediction_std": _safe_float(profile.get("prediction_std")),
-        "daily_volume": json.dumps(profile.get("daily_volume") or {}),
-        "null_rates": json.dumps(profile.get("null_rates") or {}),
-        "computed_at": computed_at,
-    }]
+    return [
+        {
+            "model_key": config.model_key,
+            "total_rows": total_rows,
+            "min_date": str(profile.get("min_date") or ""),
+            "max_date": str(profile.get("max_date") or ""),
+            "prediction_mean": _safe_float(profile.get("prediction_mean")),
+            "prediction_std": _safe_float(profile.get("prediction_std")),
+            "daily_volume": json.dumps(profile.get("daily_volume") or {}),
+            "null_rates": json.dumps(profile.get("null_rates") or {}),
+            "computed_at": computed_at,
+        }
+    ]
 
 
 def _build_quality_history_row(
@@ -379,13 +434,19 @@ def _build_quality_history_row(
         "baseline_start": metadata["baseline_start"],
         "baseline_end": metadata["baseline_end"],
         "row_count": int(len(current_df)),
-        "prediction_mean": _safe_float(pd.to_numeric(current_df[config.contract.prediction_col], errors="coerce").mean()),
-        "prediction_std": _safe_float(pd.to_numeric(current_df[config.contract.prediction_col], errors="coerce").std()),
-        "null_rates": json.dumps({
-            feature: round(float(current_df[feature].isna().mean() * 100), 2)
-            for feature in config.contract.feature_columns
-            if feature in current_df.columns
-        }),
+        "prediction_mean": _safe_float(
+            pd.to_numeric(current_df[config.contract.prediction_col], errors="coerce").mean()
+        ),
+        "prediction_std": _safe_float(
+            pd.to_numeric(current_df[config.contract.prediction_col], errors="coerce").std()
+        ),
+        "null_rates": json.dumps(
+            {
+                feature: round(float(current_df[feature].isna().mean() * 100), 2)
+                for feature in config.contract.feature_columns
+                if feature in current_df.columns
+            }
+        ),
         "computed_at": computed_at,
     }
 
@@ -394,7 +455,9 @@ def _profile_date_series(frame: pd.DataFrame, timestamp_col: str) -> pd.Series:
     return pd.to_datetime(frame[timestamp_col], errors="coerce").dt.date.astype(str)
 
 
-def _daily_profile_groups(frame: pd.DataFrame, timestamp_col: str) -> list[tuple[str, pd.DataFrame]]:
+def _daily_profile_groups(
+    frame: pd.DataFrame, timestamp_col: str
+) -> list[tuple[str, pd.DataFrame]]:
     if frame.empty or timestamp_col not in frame.columns:
         return []
     working = frame.copy()
@@ -403,27 +466,36 @@ def _daily_profile_groups(frame: pd.DataFrame, timestamp_col: str) -> list[tuple
     if working.empty:
         return []
     return [
-        (str(profile_date), group.drop(columns=["_model_landscape_profile_date"]).reset_index(drop=True))
+        (
+            str(profile_date),
+            group.drop(columns=["_model_landscape_profile_date"]).reset_index(drop=True),
+        )
         for profile_date, group in working.groupby("_model_landscape_profile_date", sort=True)
     ]
 
 
-def _serialize_numeric_distribution(values: pd.Series, n_bins: int = 20, sample_limit: int = 1000) -> str:
+def _serialize_numeric_distribution(
+    values: pd.Series, n_bins: int = 20, sample_limit: int = 1000
+) -> str:
     numeric = pd.to_numeric(values, errors="coerce").dropna()
     if numeric.empty:
         return json.dumps({})
     histogram_values = numeric.to_numpy(dtype=float, copy=False)
     if len(histogram_values) == 1:
         value = float(histogram_values[0])
-        return json.dumps({"edges": [value, value], "counts": [1], "sample_values": [round(value, 6)]})
+        return json.dumps(
+            {"edges": [value, value], "counts": [1], "sample_values": [round(value, 6)]}
+        )
     edges = compute_bin_edges(histogram_values, n_bins=min(n_bins, max(2, len(histogram_values))))
     counts, _ = np.histogram(histogram_values, bins=edges)
     sample_values = [round(float(value), 6) for value in histogram_values[:sample_limit].tolist()]
-    return json.dumps({
-        "edges": [round(float(edge), 6) for edge in edges.tolist()],
-        "counts": [int(count) for count in counts.tolist()],
-        "sample_values": sample_values,
-    })
+    return json.dumps(
+        {
+            "edges": [round(float(edge), 6) for edge in edges.tolist()],
+            "counts": [int(count) for count in counts.tolist()],
+            "sample_values": sample_values,
+        }
+    )
 
 
 def _serialize_categorical_distribution(values: pd.Series) -> str:
@@ -434,12 +506,10 @@ def _serialize_categorical_distribution(values: pd.Series) -> str:
     return json.dumps({str(key): int(value) for key, value in counts.items()})
 
 
-def _rows_for_date_range(rows: list[dict[str, Any]], start_date: str, end_date: str) -> list[dict[str, Any]]:
-    return [
-        row
-        for row in rows
-        if start_date <= str(row.get("profile_date") or "") <= end_date
-    ]
+def _rows_for_date_range(
+    rows: list[dict[str, Any]], start_date: str, end_date: str
+) -> list[dict[str, Any]]:
+    return [row for row in rows if start_date <= str(row.get("profile_date") or "") <= end_date]
 
 
 def _weighted_null_rates(rows: list[dict[str, Any]]) -> dict[str, float]:
@@ -457,7 +527,9 @@ def _weighted_null_rates(rows: list[dict[str, Any]]) -> dict[str, float]:
             continue
         for feature, value in null_rates.items():
             try:
-                weighted_sums[str(feature)] = weighted_sums.get(str(feature), 0.0) + (float(value) * row_count)
+                weighted_sums[str(feature)] = weighted_sums.get(str(feature), 0.0) + (
+                    float(value) * row_count
+                )
             except (TypeError, ValueError):
                 continue
     return {
@@ -496,14 +568,16 @@ def _combine_mean_std(
             continue
         if std is not None and count > 1:
             if sample_std:
-                variance_numerator += (count - 1) * (std ** 2)
+                variance_numerator += (count - 1) * (std**2)
             else:
-                variance_numerator += count * (std ** 2)
+                variance_numerator += count * (std**2)
         variance_numerator += count * ((mean - combined_mean) ** 2)
     if population_output:
         combined_std = float(np.sqrt(variance_numerator / total_count)) if total_count > 0 else None
     else:
-        combined_std = float(np.sqrt(variance_numerator / (total_count - 1))) if total_count > 1 else None
+        combined_std = (
+            float(np.sqrt(variance_numerator / (total_count - 1))) if total_count > 1 else None
+        )
     return combined_mean, combined_std, total_count
 
 
@@ -544,7 +618,9 @@ def _aggregate_numeric_profile_rows(rows: list[dict[str, Any]]) -> dict[str, Any
     return {
         "row_count": total_rows,
         "non_null_count": non_null_count,
-        "null_pct": round(float((total_rows - non_null_count) / total_rows * 100), 2) if total_rows else 0.0,
+        "null_pct": round(float((total_rows - non_null_count) / total_rows * 100), 2)
+        if total_rows
+        else 0.0,
         "mean": mean,
         "std": std,
         "sample_values": _downsample_numeric_values(sample_values),
@@ -573,7 +649,9 @@ def _aggregate_categorical_counts(rows: list[dict[str, Any]]) -> tuple[dict[str,
     return counts, total_rows, non_null_count
 
 
-def _build_window_rows(config: MonitorConfig, metadata_list: list[dict[str, str]], computed_at: str) -> list[dict[str, Any]]:
+def _build_window_rows(
+    config: MonitorConfig, metadata_list: list[dict[str, str]], computed_at: str
+) -> list[dict[str, Any]]:
     return [
         {
             "window_id": metadata["window_id"],
@@ -614,19 +692,21 @@ def _derive_quality_history_rows(
             sample_std=True,
             population_output=False,
         )
-        rows.append({
-            "model_key": config.model_key,
-            "window_id": metadata["window_id"],
-            "window_start": metadata["window_start"],
-            "window_end": metadata["window_end"],
-            "baseline_start": metadata["baseline_start"],
-            "baseline_end": metadata["baseline_end"],
-            "row_count": sum(int(row.get("row_count", 0) or 0) for row in current_rows),
-            "prediction_mean": prediction_mean,
-            "prediction_std": prediction_std,
-            "null_rates": json.dumps(_weighted_null_rates(current_rows)),
-            "computed_at": computed_at,
-        })
+        rows.append(
+            {
+                "model_key": config.model_key,
+                "window_id": metadata["window_id"],
+                "window_start": metadata["window_start"],
+                "window_end": metadata["window_end"],
+                "baseline_start": metadata["baseline_start"],
+                "baseline_end": metadata["baseline_end"],
+                "row_count": sum(int(row.get("row_count", 0) or 0) for row in current_rows),
+                "prediction_mean": prediction_mean,
+                "prediction_std": prediction_std,
+                "null_rates": json.dumps(_weighted_null_rates(current_rows)),
+                "computed_at": computed_at,
+            }
+        )
     return rows
 
 
@@ -647,8 +727,12 @@ def _derive_drift_rows(
             feature_rows = profiles_by_feature.get(feature, [])
             if not feature_rows:
                 continue
-            baseline_rows = _rows_for_date_range(feature_rows, metadata["baseline_start"], metadata["baseline_end"])
-            current_rows = _rows_for_date_range(feature_rows, metadata["window_start"], metadata["window_end"])
+            baseline_rows = _rows_for_date_range(
+                feature_rows, metadata["baseline_start"], metadata["baseline_end"]
+            )
+            current_rows = _rows_for_date_range(
+                feature_rows, metadata["window_start"], metadata["window_end"]
+            )
             if not baseline_rows or not current_rows:
                 continue
             if feature in categorical_set:
@@ -656,34 +740,46 @@ def _derive_drift_rows(
                 cur_counts, cur_total, cur_non_null = _aggregate_categorical_counts(current_rows)
                 if not ref_counts or not cur_counts:
                     continue
-                psi, kl_divergence, js_divergence = compute_categorical_distribution_metrics(ref_counts, cur_counts)
-                rows.extend([
-                    {
-                        "model_key": config.model_key,
-                        "feature_name": feature,
-                        "metric_name": metric_name,
-                        "metric_value": float(metric_value),
-                        "window_id": metadata["window_id"],
-                        "window_start": metadata["window_start"],
-                        "window_end": metadata["window_end"],
-                        "baseline_start": metadata["baseline_start"],
-                        "baseline_end": metadata["baseline_end"],
-                        "ref_mean": float("nan"),
-                        "cur_mean": float("nan"),
-                        "ref_std": float("nan"),
-                        "cur_std": float("nan"),
-                        "ref_null_pct": round(float((ref_total - ref_non_null) / ref_total * 100), 2) if ref_total else 0.0,
-                        "cur_null_pct": round(float((cur_total - cur_non_null) / cur_total * 100), 2) if cur_total else 0.0,
-                        "ref_count": ref_non_null,
-                        "cur_count": cur_non_null,
-                        "computed_at": computed_at,
-                    }
-                    for metric_name, metric_value in (
-                        ("psi", psi),
-                        ("kl_divergence", kl_divergence),
-                        ("js_divergence", js_divergence),
-                    )
-                ])
+                psi, kl_divergence, js_divergence = compute_categorical_distribution_metrics(
+                    ref_counts, cur_counts
+                )
+                rows.extend(
+                    [
+                        {
+                            "model_key": config.model_key,
+                            "feature_name": feature,
+                            "metric_name": metric_name,
+                            "metric_value": float(metric_value),
+                            "window_id": metadata["window_id"],
+                            "window_start": metadata["window_start"],
+                            "window_end": metadata["window_end"],
+                            "baseline_start": metadata["baseline_start"],
+                            "baseline_end": metadata["baseline_end"],
+                            "ref_mean": float("nan"),
+                            "cur_mean": float("nan"),
+                            "ref_std": float("nan"),
+                            "cur_std": float("nan"),
+                            "ref_null_pct": round(
+                                float((ref_total - ref_non_null) / ref_total * 100), 2
+                            )
+                            if ref_total
+                            else 0.0,
+                            "cur_null_pct": round(
+                                float((cur_total - cur_non_null) / cur_total * 100), 2
+                            )
+                            if cur_total
+                            else 0.0,
+                            "ref_count": ref_non_null,
+                            "cur_count": cur_non_null,
+                            "computed_at": computed_at,
+                        }
+                        for metric_name, metric_value in (
+                            ("psi", psi),
+                            ("kl_divergence", kl_divergence),
+                            ("js_divergence", js_divergence),
+                        )
+                    ]
+                )
                 continue
             baseline_stats = _aggregate_numeric_profile_rows(baseline_rows)
             current_stats = _aggregate_numeric_profile_rows(current_rows)
@@ -691,37 +787,49 @@ def _derive_drift_rows(
             cur_samples = current_stats["sample_values"]
             if len(ref_samples) < 2 or len(cur_samples) < 2:
                 continue
-            rows.extend([
-                {
-                    "model_key": config.model_key,
-                    "feature_name": feature,
-                    "metric_name": metric_name,
-                    "metric_value": round(float(metric_value), 6),
-                    "window_id": metadata["window_id"],
-                    "window_start": metadata["window_start"],
-                    "window_end": metadata["window_end"],
-                    "baseline_start": metadata["baseline_start"],
-                    "baseline_end": metadata["baseline_end"],
-                    "ref_mean": float(baseline_stats["mean"]) if baseline_stats["mean"] is not None else float("nan"),
-                    "cur_mean": float(current_stats["mean"]) if current_stats["mean"] is not None else float("nan"),
-                    "ref_std": float(baseline_stats["std"]) if baseline_stats["std"] is not None else float("nan"),
-                    "cur_std": float(current_stats["std"]) if current_stats["std"] is not None else float("nan"),
-                    "ref_null_pct": baseline_stats["null_pct"],
-                    "cur_null_pct": current_stats["null_pct"],
-                    "ref_count": int(baseline_stats["non_null_count"]),
-                    "cur_count": int(current_stats["non_null_count"]),
-                    "computed_at": computed_at,
-                }
-                for metric_name, metric_value in (
-                    ("psi", compute_psi(ref_samples, cur_samples)),
-                    ("kl_divergence", compute_kl(ref_samples, cur_samples)),
-                    ("js_divergence", compute_js(ref_samples, cur_samples)),
-                )
-            ])
+            rows.extend(
+                [
+                    {
+                        "model_key": config.model_key,
+                        "feature_name": feature,
+                        "metric_name": metric_name,
+                        "metric_value": round(float(metric_value), 6),
+                        "window_id": metadata["window_id"],
+                        "window_start": metadata["window_start"],
+                        "window_end": metadata["window_end"],
+                        "baseline_start": metadata["baseline_start"],
+                        "baseline_end": metadata["baseline_end"],
+                        "ref_mean": float(baseline_stats["mean"])
+                        if baseline_stats["mean"] is not None
+                        else float("nan"),
+                        "cur_mean": float(current_stats["mean"])
+                        if current_stats["mean"] is not None
+                        else float("nan"),
+                        "ref_std": float(baseline_stats["std"])
+                        if baseline_stats["std"] is not None
+                        else float("nan"),
+                        "cur_std": float(current_stats["std"])
+                        if current_stats["std"] is not None
+                        else float("nan"),
+                        "ref_null_pct": baseline_stats["null_pct"],
+                        "cur_null_pct": current_stats["null_pct"],
+                        "ref_count": int(baseline_stats["non_null_count"]),
+                        "cur_count": int(current_stats["non_null_count"]),
+                        "computed_at": computed_at,
+                    }
+                    for metric_name, metric_value in (
+                        ("psi", compute_psi(ref_samples, cur_samples)),
+                        ("kl_divergence", compute_kl(ref_samples, cur_samples)),
+                        ("js_divergence", compute_js(ref_samples, cur_samples)),
+                    )
+                ]
+            )
     return rows
 
 
-def _aggregate_performance_metric_rows(rows: list[dict[str, Any]]) -> dict[tuple[str, str, str], tuple[float, int]]:
+def _aggregate_performance_metric_rows(
+    rows: list[dict[str, Any]],
+) -> dict[tuple[str, str, str], tuple[float, int]]:
     totals: dict[tuple[str, str, str], tuple[float, int]] = {}
     for row in rows:
         key = (
@@ -839,21 +947,23 @@ def _derive_performance_rows(
                 else current_metric - baseline_metric
             )
             volume_pct = round(float(current_row_count / total_current_rows * 100), 2)
-            rows.append({
-                "model_key": config.model_key,
-                "window_id": metadata["window_id"],
-                "feature_name": key[0],
-                "bin_label": key[1],
-                "baseline_metric": round(float(baseline_metric), 4),
-                "current_metric": round(float(current_metric), 4),
-                "delta": round(float(delta), 4),
-                "volume_pct": volume_pct,
-                "contribution": round(float(delta * volume_pct / 100), 4),
-                "metric_name": key[2],
-                "window_start": metadata["window_start"],
-                "window_end": metadata["window_end"],
-                "computed_at": computed_at,
-            })
+            rows.append(
+                {
+                    "model_key": config.model_key,
+                    "window_id": metadata["window_id"],
+                    "feature_name": key[0],
+                    "bin_label": key[1],
+                    "baseline_metric": round(float(baseline_metric), 4),
+                    "current_metric": round(float(current_metric), 4),
+                    "delta": round(float(delta), 4),
+                    "volume_pct": volume_pct,
+                    "contribution": round(float(delta * volume_pct / 100), 4),
+                    "metric_name": key[2],
+                    "window_start": metadata["window_start"],
+                    "window_end": metadata["window_end"],
+                    "computed_at": computed_at,
+                }
+            )
     return rows
 
 
@@ -864,25 +974,35 @@ def build_daily_quality_profile_rows(
     computed_at: str,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for profile_date, day_frame in _daily_profile_groups(inference_df, config.contract.timestamp_col):
-        rows.append({
-            "model_key": config.model_key,
-            "profile_date": profile_date,
-            "row_count": int(len(day_frame)),
-            "prediction_mean": _safe_float(pd.to_numeric(day_frame[config.contract.prediction_col], errors="coerce").mean()),
-            "prediction_std": _safe_float(pd.to_numeric(day_frame[config.contract.prediction_col], errors="coerce").std()),
-            "null_rates": json.dumps({
-                feature: round(float(day_frame[feature].isna().mean() * 100), 2)
-                for feature in config.contract.feature_columns
-                if feature in day_frame.columns
-            }),
-            "label_row_count": (
-                int(day_frame[config.contract.label_col].notna().sum())
-                if config.contract.label_col and config.contract.label_col in day_frame.columns
-                else 0
-            ),
-            "computed_at": computed_at,
-        })
+    for profile_date, day_frame in _daily_profile_groups(
+        inference_df, config.contract.timestamp_col
+    ):
+        rows.append(
+            {
+                "model_key": config.model_key,
+                "profile_date": profile_date,
+                "row_count": int(len(day_frame)),
+                "prediction_mean": _safe_float(
+                    pd.to_numeric(day_frame[config.contract.prediction_col], errors="coerce").mean()
+                ),
+                "prediction_std": _safe_float(
+                    pd.to_numeric(day_frame[config.contract.prediction_col], errors="coerce").std()
+                ),
+                "null_rates": json.dumps(
+                    {
+                        feature: round(float(day_frame[feature].isna().mean() * 100), 2)
+                        for feature in config.contract.feature_columns
+                        if feature in day_frame.columns
+                    }
+                ),
+                "label_row_count": (
+                    int(day_frame[config.contract.label_col].notna().sum())
+                    if config.contract.label_col and config.contract.label_col in day_frame.columns
+                    else 0
+                ),
+                "computed_at": computed_at,
+            }
+        )
     return rows
 
 
@@ -897,7 +1017,9 @@ def build_daily_class_quality_profile_rows(
     rows: list[dict[str, Any]] = []
     label_col = config.contract.label_col
     prediction_col = config.contract.prediction_col
-    for profile_date, day_frame in _daily_profile_groups(inference_df, config.contract.timestamp_col):
+    for profile_date, day_frame in _daily_profile_groups(
+        inference_df, config.contract.timestamp_col
+    ):
         for class_basis in ("actual", "predicted"):
             for class_value in ("positive", "negative"):
                 mask = _class_mask(
@@ -911,22 +1033,30 @@ def build_daily_class_quality_profile_rows(
                 filtered = day_frame[mask.fillna(False)]
                 if filtered.empty:
                     continue
-                rows.append({
-                    "model_key": config.model_key,
-                    "profile_date": profile_date,
-                    "class_basis": class_basis,
-                    "class_value": class_value,
-                    "row_count": int(len(filtered)),
-                    "prediction_mean": _safe_float(pd.to_numeric(filtered[prediction_col], errors="coerce").mean()),
-                    "prediction_std": _safe_float(pd.to_numeric(filtered[prediction_col], errors="coerce").std()),
-                    "null_rates": json.dumps({
-                        feature: round(float(filtered[feature].isna().mean() * 100), 2)
-                        for feature in config.contract.feature_columns
-                        if feature in filtered.columns
-                    }),
-                    "label_row_count": int(filtered[label_col].notna().sum()),
-                    "computed_at": computed_at,
-                })
+                rows.append(
+                    {
+                        "model_key": config.model_key,
+                        "profile_date": profile_date,
+                        "class_basis": class_basis,
+                        "class_value": class_value,
+                        "row_count": int(len(filtered)),
+                        "prediction_mean": _safe_float(
+                            pd.to_numeric(filtered[prediction_col], errors="coerce").mean()
+                        ),
+                        "prediction_std": _safe_float(
+                            pd.to_numeric(filtered[prediction_col], errors="coerce").std()
+                        ),
+                        "null_rates": json.dumps(
+                            {
+                                feature: round(float(filtered[feature].isna().mean() * 100), 2)
+                                for feature in config.contract.feature_columns
+                                if feature in filtered.columns
+                            }
+                        ),
+                        "label_row_count": int(filtered[label_col].notna().sum()),
+                        "computed_at": computed_at,
+                    }
+                )
     return rows
 
 
@@ -938,7 +1068,9 @@ def build_daily_feature_profile_rows(
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     categorical_set = set(config.contract.categorical_columns)
-    for profile_date, day_frame in _daily_profile_groups(inference_df, config.contract.timestamp_col):
+    for profile_date, day_frame in _daily_profile_groups(
+        inference_df, config.contract.timestamp_col
+    ):
         for feature in config.contract.feature_columns:
             if feature not in day_frame.columns:
                 continue
@@ -946,38 +1078,44 @@ def build_daily_feature_profile_rows(
             row_count = int(len(series))
             feature_kind = "categorical" if feature in categorical_set else "numeric"
             if feature_kind == "categorical":
-                rows.append({
+                rows.append(
+                    {
+                        "model_key": config.model_key,
+                        "profile_date": profile_date,
+                        "feature_name": feature,
+                        "feature_kind": feature_kind,
+                        "row_count": row_count,
+                        "non_null_count": int(series.notna().sum()),
+                        "null_pct": round(float(series.isna().mean() * 100), 2)
+                        if row_count
+                        else 0.0,
+                        "mean": None,
+                        "std": None,
+                        "min_value": None,
+                        "max_value": None,
+                        "distribution_json": _serialize_categorical_distribution(series),
+                        "computed_at": computed_at,
+                    }
+                )
+                continue
+            numeric = pd.to_numeric(series, errors="coerce")
+            rows.append(
+                {
                     "model_key": config.model_key,
                     "profile_date": profile_date,
                     "feature_name": feature,
                     "feature_kind": feature_kind,
                     "row_count": row_count,
-                    "non_null_count": int(series.notna().sum()),
-                    "null_pct": round(float(series.isna().mean() * 100), 2) if row_count else 0.0,
-                    "mean": None,
-                    "std": None,
-                    "min_value": None,
-                    "max_value": None,
-                    "distribution_json": _serialize_categorical_distribution(series),
+                    "non_null_count": int(numeric.notna().sum()),
+                    "null_pct": round(float(numeric.isna().mean() * 100), 2) if row_count else 0.0,
+                    "mean": _safe_float(numeric.mean()),
+                    "std": _safe_float(numeric.std()),
+                    "min_value": _safe_float(numeric.min()),
+                    "max_value": _safe_float(numeric.max()),
+                    "distribution_json": _serialize_numeric_distribution(numeric),
                     "computed_at": computed_at,
-                })
-                continue
-            numeric = pd.to_numeric(series, errors="coerce")
-            rows.append({
-                "model_key": config.model_key,
-                "profile_date": profile_date,
-                "feature_name": feature,
-                "feature_kind": feature_kind,
-                "row_count": row_count,
-                "non_null_count": int(numeric.notna().sum()),
-                "null_pct": round(float(numeric.isna().mean() * 100), 2) if row_count else 0.0,
-                "mean": _safe_float(numeric.mean()),
-                "std": _safe_float(numeric.std()),
-                "min_value": _safe_float(numeric.min()),
-                "max_value": _safe_float(numeric.max()),
-                "distribution_json": _serialize_numeric_distribution(numeric),
-                "computed_at": computed_at,
-            })
+                }
+            )
     return rows
 
 
@@ -993,7 +1131,9 @@ def build_daily_class_feature_profile_rows(
     categorical_set = set(config.contract.categorical_columns)
     label_col = config.contract.label_col
     prediction_col = config.contract.prediction_col
-    for profile_date, day_frame in _daily_profile_groups(inference_df, config.contract.timestamp_col):
+    for profile_date, day_frame in _daily_profile_groups(
+        inference_df, config.contract.timestamp_col
+    ):
         for class_basis in ("actual", "predicted"):
             for class_value in ("positive", "negative"):
                 mask = _class_mask(
@@ -1014,7 +1154,31 @@ def build_daily_class_feature_profile_rows(
                     row_count = int(len(series))
                     feature_kind = "categorical" if feature in categorical_set else "numeric"
                     if feature_kind == "categorical":
-                        rows.append({
+                        rows.append(
+                            {
+                                "model_key": config.model_key,
+                                "profile_date": profile_date,
+                                "class_basis": class_basis,
+                                "class_value": class_value,
+                                "feature_name": feature,
+                                "feature_kind": feature_kind,
+                                "row_count": row_count,
+                                "non_null_count": int(series.notna().sum()),
+                                "null_pct": round(float(series.isna().mean() * 100), 2)
+                                if row_count
+                                else 0.0,
+                                "mean": None,
+                                "std": None,
+                                "min_value": None,
+                                "max_value": None,
+                                "distribution_json": _serialize_categorical_distribution(series),
+                                "computed_at": computed_at,
+                            }
+                        )
+                        continue
+                    numeric = pd.to_numeric(series, errors="coerce")
+                    rows.append(
+                        {
                             "model_key": config.model_key,
                             "profile_date": profile_date,
                             "class_basis": class_basis,
@@ -1022,34 +1186,18 @@ def build_daily_class_feature_profile_rows(
                             "feature_name": feature,
                             "feature_kind": feature_kind,
                             "row_count": row_count,
-                            "non_null_count": int(series.notna().sum()),
-                            "null_pct": round(float(series.isna().mean() * 100), 2) if row_count else 0.0,
-                            "mean": None,
-                            "std": None,
-                            "min_value": None,
-                            "max_value": None,
-                            "distribution_json": _serialize_categorical_distribution(series),
+                            "non_null_count": int(numeric.notna().sum()),
+                            "null_pct": round(float(numeric.isna().mean() * 100), 2)
+                            if row_count
+                            else 0.0,
+                            "mean": _safe_float(numeric.mean()),
+                            "std": _safe_float(numeric.std()),
+                            "min_value": _safe_float(numeric.min()),
+                            "max_value": _safe_float(numeric.max()),
+                            "distribution_json": _serialize_numeric_distribution(numeric),
                             "computed_at": computed_at,
-                        })
-                        continue
-                    numeric = pd.to_numeric(series, errors="coerce")
-                    rows.append({
-                        "model_key": config.model_key,
-                        "profile_date": profile_date,
-                        "class_basis": class_basis,
-                        "class_value": class_value,
-                        "feature_name": feature,
-                        "feature_kind": feature_kind,
-                        "row_count": row_count,
-                        "non_null_count": int(numeric.notna().sum()),
-                        "null_pct": round(float(numeric.isna().mean() * 100), 2) if row_count else 0.0,
-                        "mean": _safe_float(numeric.mean()),
-                        "std": _safe_float(numeric.std()),
-                        "min_value": _safe_float(numeric.min()),
-                        "max_value": _safe_float(numeric.max()),
-                        "distribution_json": _serialize_numeric_distribution(numeric),
-                        "computed_at": computed_at,
-                    })
+                        }
+                    )
     return rows
 
 
@@ -1062,30 +1210,34 @@ def build_daily_label_metric_rows(
     if not supports_binary_class_filters(config) or not config.contract.label_col:
         return []
     rows: list[dict[str, Any]] = []
-    for profile_date, day_frame in _daily_profile_groups(inference_df, config.contract.timestamp_col):
+    for profile_date, day_frame in _daily_profile_groups(
+        inference_df, config.contract.timestamp_col
+    ):
         metrics = compute_daily_classification_metrics(
             day_frame,
             config.contract.prediction_col,
             config.contract.label_col,
             prediction_score_col=config.contract.prediction_score_col,
         )
-        rows.append({
-            "model_key": config.model_key,
-            "profile_date": profile_date,
-            "actual_positive_count": int(metrics["actual_positive_count"] or 0),
-            "actual_negative_count": int(metrics["actual_negative_count"] or 0),
-            "predicted_positive_count": int(metrics["predicted_positive_count"] or 0),
-            "predicted_negative_count": int(metrics["predicted_negative_count"] or 0),
-            "tp": int(metrics["tp"] or 0),
-            "fp": int(metrics["fp"] or 0),
-            "fn": int(metrics["fn"] or 0),
-            "tn": int(metrics["tn"] or 0),
-            "precision": metrics["precision"],
-            "recall": metrics["recall"],
-            "f1": metrics["f1"],
-            "accuracy": metrics["accuracy"],
-            "computed_at": computed_at,
-        })
+        rows.append(
+            {
+                "model_key": config.model_key,
+                "profile_date": profile_date,
+                "actual_positive_count": int(metrics["actual_positive_count"] or 0),
+                "actual_negative_count": int(metrics["actual_negative_count"] or 0),
+                "predicted_positive_count": int(metrics["predicted_positive_count"] or 0),
+                "predicted_negative_count": int(metrics["predicted_negative_count"] or 0),
+                "tp": int(metrics["tp"] or 0),
+                "fp": int(metrics["fp"] or 0),
+                "fn": int(metrics["fn"] or 0),
+                "tn": int(metrics["tn"] or 0),
+                "precision": metrics["precision"],
+                "recall": metrics["recall"],
+                "f1": metrics["f1"],
+                "accuracy": metrics["accuracy"],
+                "computed_at": computed_at,
+            }
+        )
     return rows
 
 
@@ -1101,7 +1253,9 @@ def build_daily_performance_profile_rows(
         return []
     rows: list[dict[str, Any]] = []
     regression_mode = (config.problem_type or "classification").strip().lower() == "regression"
-    selected_metric_names = tuple(config.performance_metric_names or default_performance_metric_names(config.problem_type))
+    selected_metric_names = tuple(
+        config.performance_metric_names or default_performance_metric_names(config.problem_type)
+    )
     feature_edges: dict[str, np.ndarray] = {}
     if bin_specs is None:
         resolved_bin_specs = build_performance_bin_specs(
@@ -1120,7 +1274,9 @@ def build_daily_performance_profile_rows(
         if feature not in inference_df.columns:
             continue
         feature_edges[feature] = np.asarray(edges, dtype=float)
-    for profile_date, day_frame in _daily_profile_groups(inference_df, config.contract.timestamp_col):
+    for profile_date, day_frame in _daily_profile_groups(
+        inference_df, config.contract.timestamp_col
+    ):
         total_rows = max(len(day_frame), 1)
         for feature, edges in feature_edges.items():
             if feature not in day_frame.columns:
@@ -1132,7 +1288,9 @@ def build_daily_performance_profile_rows(
                 if day_slice.empty:
                     continue
                 metrics = (
-                    compute_regression_metrics(day_slice, config.contract.prediction_col, config.contract.label_col)
+                    compute_regression_metrics(
+                        day_slice, config.contract.prediction_col, config.contract.label_col
+                    )
                     if regression_mode
                     else compute_classification_metrics(
                         day_slice,
@@ -1147,17 +1305,19 @@ def build_daily_performance_profile_rows(
                     metric_value = metrics.get(metric_name)
                     if metric_value is None:
                         continue
-                    rows.append({
-                        "model_key": config.model_key,
-                        "profile_date": profile_date,
-                        "feature_name": feature,
-                        "bin_label": f"[{edges[index]:.4g}, {edges[index + 1]:.4g})",
-                        "metric_name": metric_name,
-                        "metric_value": float(metric_value),
-                        "row_count": int(len(day_slice)),
-                        "volume_pct": round(float(len(day_slice) / total_rows * 100), 2),
-                        "computed_at": computed_at,
-                    })
+                    rows.append(
+                        {
+                            "model_key": config.model_key,
+                            "profile_date": profile_date,
+                            "feature_name": feature,
+                            "bin_label": f"[{edges[index]:.4g}, {edges[index + 1]:.4g})",
+                            "metric_name": metric_name,
+                            "metric_value": float(metric_value),
+                            "row_count": int(len(day_slice)),
+                            "volume_pct": round(float(len(day_slice) / total_rows * 100), 2),
+                            "computed_at": computed_at,
+                        }
+                    )
     return rows
 
 
@@ -1199,17 +1359,19 @@ def refresh_monitor_backfill(
 
     for baseline_df, current_df, metadata in pairs:
         if include_drift_quality:
-            all_window_rows.append({
-                "window_id": metadata["window_id"],
-                "model_key": config.model_key,
-                "window_grain": metadata["window_grain"],
-                "window_start": metadata["window_start"],
-                "window_end": metadata["window_end"],
-                "baseline_start": metadata["baseline_start"],
-                "baseline_end": metadata["baseline_end"],
-                "baseline_kind": metadata["baseline_kind"],
-                "created_at": now,
-            })
+            all_window_rows.append(
+                {
+                    "window_id": metadata["window_id"],
+                    "model_key": config.model_key,
+                    "window_grain": metadata["window_grain"],
+                    "window_start": metadata["window_start"],
+                    "window_end": metadata["window_end"],
+                    "baseline_start": metadata["baseline_start"],
+                    "baseline_end": metadata["baseline_end"],
+                    "baseline_kind": metadata["baseline_kind"],
+                    "created_at": now,
+                }
+            )
             all_quality_history_rows.append(
                 _build_quality_history_row(
                     config=config,
@@ -1235,7 +1397,11 @@ def refresh_monitor_backfill(
                 latest_window_end = metadata["window_end"]
                 latest_window_drift_rows = window_drift_rows
 
-        if include_performance and config.contract.label_col and config.contract.label_col in current_df.columns:
+        if (
+            include_performance
+            and config.contract.label_col
+            and config.contract.label_col in current_df.columns
+        ):
             performance_frame = rank_degradation_contributors(
                 baseline_df=baseline_df,
                 current_df=current_df,
@@ -1258,7 +1424,11 @@ def refresh_monitor_backfill(
     if include_drift_quality and not all_drift_rows:
         return RefreshResult(
             drift_rows=[],
-            quality_rows=_build_quality_rows(config=config, inference_df=inference_df, computed_at=now) if include_drift_quality else [],
+            quality_rows=_build_quality_rows(
+                config=config, inference_df=inference_df, computed_at=now
+            )
+            if include_drift_quality
+            else [],
             performance_rows=[],
             incident_rows=[],
             incident_history_rows=[],
@@ -1276,9 +1446,15 @@ def refresh_monitor_backfill(
 
     return RefreshResult(
         drift_rows=all_drift_rows,
-        quality_rows=_build_quality_rows(config=config, inference_df=inference_df, computed_at=now) if include_drift_quality else [],
+        quality_rows=_build_quality_rows(config=config, inference_df=inference_df, computed_at=now)
+        if include_drift_quality
+        else [],
         performance_rows=all_performance_rows,
-        incident_rows=build_incidents(latest_window_drift_rows, thresholds=config.threshold_overrides) if include_drift_quality else [],
+        incident_rows=build_incidents(
+            latest_window_drift_rows, thresholds=config.threshold_overrides
+        )
+        if include_drift_quality
+        else [],
         incident_history_rows=all_incident_history_rows,
         quality_history_rows=all_quality_history_rows,
         window_rows=all_window_rows,
@@ -1290,20 +1466,30 @@ def refresh_monitor(config: MonitorConfig, inference_df: pd.DataFrame) -> Refres
     if not result.drift_rows:
         return result
     latest_window_end = max(str(row["window_end"]) for row in result.drift_rows)
-    latest_drift_rows = [row for row in result.drift_rows if str(row["window_end"]) == latest_window_end]
-    latest_performance_rows = [row for row in result.performance_rows if str(row["window_end"]) == latest_window_end]
+    latest_drift_rows = [
+        row for row in result.drift_rows if str(row["window_end"]) == latest_window_end
+    ]
+    latest_performance_rows = [
+        row for row in result.performance_rows if str(row["window_end"]) == latest_window_end
+    ]
     return RefreshResult(
         drift_rows=latest_drift_rows,
         quality_rows=result.quality_rows,
         performance_rows=latest_performance_rows,
         incident_rows=build_incidents(latest_drift_rows, thresholds=config.threshold_overrides),
         incident_history_rows=[
-            row for row in result.incident_history_rows if str(row["window_end"]) == latest_window_end
+            row
+            for row in result.incident_history_rows
+            if str(row["window_end"]) == latest_window_end
         ],
         quality_history_rows=[
-            row for row in result.quality_history_rows if str(row["window_end"]) == latest_window_end
+            row
+            for row in result.quality_history_rows
+            if str(row["window_end"]) == latest_window_end
         ],
-        window_rows=[row for row in result.window_rows if str(row["window_end"]) == latest_window_end],
+        window_rows=[
+            row for row in result.window_rows if str(row["window_end"]) == latest_window_end
+        ],
     )
 
 
@@ -1322,7 +1508,9 @@ def derive_refresh_result_from_daily_profiles(
     include_drift_quality: bool = True,
     include_performance: bool = True,
 ) -> RefreshResult:
-    window_rows = _build_window_rows(config, metadata_list, computed_at) if include_drift_quality else []
+    window_rows = (
+        _build_window_rows(config, metadata_list, computed_at) if include_drift_quality else []
+    )
     quality_history_rows = (
         _derive_quality_history_rows(
             config=config,
@@ -1356,7 +1544,11 @@ def derive_refresh_result_from_daily_profiles(
     )
     latest_window_end = max((metadata["window_end"] for metadata in metadata_list), default="")
     latest_drift_rows = [row for row in drift_rows if str(row["window_end"]) == latest_window_end]
-    incident_rows = build_incidents(latest_drift_rows, thresholds=config.threshold_overrides) if include_drift_quality else []
+    incident_rows = (
+        build_incidents(latest_drift_rows, thresholds=config.threshold_overrides)
+        if include_drift_quality
+        else []
+    )
     incident_history_rows = (
         build_incident_history(
             drift_rows,
@@ -1408,17 +1600,19 @@ def refresh_monitor_window_frames(
     window_rows: list[dict[str, Any]] = []
 
     if include_drift_quality:
-        window_rows.append({
-            "window_id": metadata["window_id"],
-            "model_key": config.model_key,
-            "window_grain": metadata["window_grain"],
-            "window_start": metadata["window_start"],
-            "window_end": metadata["window_end"],
-            "baseline_start": metadata["baseline_start"],
-            "baseline_end": metadata["baseline_end"],
-            "baseline_kind": metadata["baseline_kind"],
-            "created_at": now,
-        })
+        window_rows.append(
+            {
+                "window_id": metadata["window_id"],
+                "model_key": config.model_key,
+                "window_grain": metadata["window_grain"],
+                "window_start": metadata["window_start"],
+                "window_end": metadata["window_end"],
+                "baseline_start": metadata["baseline_start"],
+                "baseline_end": metadata["baseline_end"],
+                "baseline_kind": metadata["baseline_kind"],
+                "created_at": now,
+            }
+        )
         quality_history_rows.append(
             _build_quality_history_row(
                 config=config,
@@ -1440,7 +1634,11 @@ def refresh_monitor_window_frames(
             computed_at=now,
         )
 
-    if include_performance and config.contract.label_col and config.contract.label_col in current_df.columns:
+    if (
+        include_performance
+        and config.contract.label_col
+        and config.contract.label_col in current_df.columns
+    ):
         performance_frame = rank_degradation_contributors(
             baseline_df=baseline_df,
             current_df=current_df,
@@ -1462,7 +1660,9 @@ def refresh_monitor_window_frames(
         drift_rows=drift_rows,
         quality_rows=[],
         performance_rows=performance_rows,
-        incident_rows=build_incidents(drift_rows, thresholds=config.threshold_overrides) if drift_rows else [],
+        incident_rows=build_incidents(drift_rows, thresholds=config.threshold_overrides)
+        if drift_rows
+        else [],
         incident_history_rows=[],
         quality_history_rows=quality_history_rows,
         window_rows=window_rows,

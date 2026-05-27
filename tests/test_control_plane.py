@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import replace
 from datetime import datetime, timedelta
 from threading import Lock
-import time
 
 import pandas as pd
 import pytest
@@ -13,7 +13,10 @@ import pytest
 from model_landscape.config import settings
 from model_landscape.domain.models import MLflowLineage, MonitorConfig, RefreshResult
 from model_landscape.services import refresh_runner as refresh_runner_module
-from model_landscape.services.control_plane import ControlPlaneRepository, PermanentDeleteUnsupportedError
+from model_landscape.services.control_plane import (
+    ControlPlaneRepository,
+    PermanentDeleteUnsupportedError,
+)
 from model_landscape.services.inference_contracts import build_inference_contract as build_contract
 from model_landscape.services.onboarding import build_default_baseline, build_fixed_baseline
 from model_landscape.services.refresh_engine import (
@@ -21,7 +24,11 @@ from model_landscape.services.refresh_engine import (
     build_daily_performance_profile_rows,
     build_daily_quality_profile_rows,
 )
-from model_landscape.services.refresh_runner import MonitorRefreshResult, RefreshCounts, run_refresh_cycle
+from model_landscape.services.refresh_runner import (
+    MonitorRefreshResult,
+    RefreshCounts,
+    run_refresh_cycle,
+)
 from model_landscape.services.spark_refresh import SparkDailyProfiles
 from model_landscape.services.table_names import TableNames
 
@@ -112,9 +119,11 @@ class FakeWarehouse:
 
     def execute_params(self, sql: str, params: tuple) -> None:
         self.executed_params.append((sql, params))
-        if ("INSERT INTO" in sql and "monitor_configs" in sql) or ("MERGE INTO" in sql and "monitor_configs" in sql):
+        if ("INSERT INTO" in sql and "monitor_configs" in sql) or (
+            "MERGE INTO" in sql and "monitor_configs" in sql
+        ):
             array_literals = re.findall(r"ARRAY\\(([^)]*)\\)", sql)
-            performance_metric_names = '[]'
+            performance_metric_names = "[]"
             if len(array_literals) >= 4:
                 values = [
                     token.strip().strip("'")
@@ -189,33 +198,43 @@ class FakeWarehouse:
                 return pd.DataFrame([{"tableName": table_name}])
             return pd.DataFrame(columns=["tableName"])
         if "COUNT(*) AS total_rows" in sql and "FROM catalog.schema.inference_logs s" in sql:
-            return pd.DataFrame([{
-                "total_rows": 21,
-                "min_ts": "2026-01-01T00:00:00",
-                "max_ts": "2026-01-21T00:00:00",
-                "prediction_mean": 0.42,
-                "prediction_std": 0.11,
-                "label_row_count": 15,
-            }])
+            return pd.DataFrame(
+                [
+                    {
+                        "total_rows": 21,
+                        "min_ts": "2026-01-01T00:00:00",
+                        "max_ts": "2026-01-21T00:00:00",
+                        "prediction_mean": 0.42,
+                        "prediction_std": 0.11,
+                        "label_row_count": 15,
+                    }
+                ]
+            )
         if "GROUP BY CAST(s.`event_ts` AS DATE)" in sql:
-            return pd.DataFrame([
-                {"day_key": "2026-01-20", "row_count": 10},
-                {"day_key": "2026-01-21", "row_count": 11},
-            ])
+            return pd.DataFrame(
+                [
+                    {"day_key": "2026-01-20", "row_count": 10},
+                    {"day_key": "2026-01-21", "row_count": 11},
+                ]
+            )
         if "ROUND(AVG(CASE WHEN s.`amount` IS NULL" in sql:
             return pd.DataFrame([{"amount": 1.25, "segment": 0.0}])
         if "historical_drift AS" in sql:
-            return pd.DataFrame([{
-                "model_key": self.monitor_row["model_key"],
-                "display_name": self.monitor_row["display_name"],
-                "max_psi": 0.34,
-                "feature_count": 2,
-                "latest_window_end": "2026-01-20",
-                "total_rows": 120,
-                "latest_data_date": "2026-01-20",
-                "last_refresh_at": "2026-01-20T12:00:00+00:00",
-                "open_incident_count": 1,
-            }])
+            return pd.DataFrame(
+                [
+                    {
+                        "model_key": self.monitor_row["model_key"],
+                        "display_name": self.monitor_row["display_name"],
+                        "max_psi": 0.34,
+                        "feature_count": 2,
+                        "latest_window_end": "2026-01-20",
+                        "total_rows": 120,
+                        "latest_data_date": "2026-01-20",
+                        "last_refresh_at": "2026-01-20T12:00:00+00:00",
+                        "open_incident_count": 1,
+                    }
+                ]
+            )
         if "COUNT(DISTINCT" in sql:
             return pd.DataFrame([{"distinct_model_ids": self.distinct_model_ids}])
         if "duplicate_key_count" in sql:
@@ -227,91 +246,120 @@ class FakeWarehouse:
         if "AS sampled_value" in sql:
             return pd.DataFrame([{"sampled_value": "m1"}])
         if "FROM model_observability.control_plane.incidents" in sql and "status = 'open'" in sql:
-            return pd.DataFrame([{
-                "model_key": self.monitor_row["model_key"],
-                "feature_name": "amount",
-                "metric_name": "psi",
-                "severity": "critical",
-                "metric_value": 0.34,
-                "window_end": "2026-01-20",
-                "observed_at": "2026-01-20T12:00:00+00:00",
-            }])
-        return pd.DataFrame([
-            {
-                "event_ts": "2026-01-20T00:00:00",
-                "model_id": "m1",
-                "prediction": 0.9,
-                "entity_id": "entity-1",
-                "label": 1,
-                "amount": 10.0,
-            }
-        ])
+            return pd.DataFrame(
+                [
+                    {
+                        "model_key": self.monitor_row["model_key"],
+                        "feature_name": "amount",
+                        "metric_name": "psi",
+                        "severity": "critical",
+                        "metric_value": 0.34,
+                        "window_end": "2026-01-20",
+                        "observed_at": "2026-01-20T12:00:00+00:00",
+                    }
+                ]
+            )
+        return pd.DataFrame(
+            [
+                {
+                    "event_ts": "2026-01-20T00:00:00",
+                    "model_id": "m1",
+                    "prediction": 0.9,
+                    "entity_id": "entity-1",
+                    "label": 1,
+                    "amount": 10.0,
+                }
+            ]
+        )
 
     def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
         self.query_param_calls.append((sql, params))
         if "COUNT(*) AS total_rows" in sql and "FROM catalog.schema.inference_logs s" in sql:
-            return pd.DataFrame([{
-                "total_rows": 21,
-                "min_ts": "2026-01-01T00:00:00",
-                "max_ts": "2026-01-21T00:00:00",
-                "prediction_mean": 0.42,
-                "prediction_std": 0.11,
-                "label_row_count": 15,
-            }])
+            return pd.DataFrame(
+                [
+                    {
+                        "total_rows": 21,
+                        "min_ts": "2026-01-01T00:00:00",
+                        "max_ts": "2026-01-21T00:00:00",
+                        "prediction_mean": 0.42,
+                        "prediction_std": 0.11,
+                        "label_row_count": 15,
+                    }
+                ]
+            )
         if "GROUP BY CAST(s.`event_ts` AS DATE)" in sql:
-            return pd.DataFrame([
-                {"day_key": "2026-01-20", "row_count": 10},
-                {"day_key": "2026-01-21", "row_count": 11},
-            ])
+            return pd.DataFrame(
+                [
+                    {"day_key": "2026-01-20", "row_count": 10},
+                    {"day_key": "2026-01-21", "row_count": 11},
+                ]
+            )
         if "ROUND(AVG(CASE WHEN s.`amount` IS NULL" in sql:
             return pd.DataFrame([{"amount": 1.25, "segment": 0.0}])
-        if "FROM model_observability.control_plane.refresh_runs" in sql and "SELECT generation_id" in sql:
+        if (
+            "FROM model_observability.control_plane.refresh_runs" in sql
+            and "SELECT generation_id" in sql
+        ):
             if not self.latest_published_generation:
                 return pd.DataFrame(columns=["generation_id"])
             return pd.DataFrame([{"generation_id": self.latest_published_generation}])
         if "FROM model_observability.control_plane.comparison_windows" in sql:
             return pd.DataFrame(self.comparison_window_rows)
-        if "SELECT 1 AS found" in sql and "FROM model_observability.control_plane.monitor_configs" in sql:
+        if (
+            "SELECT 1 AS found" in sql
+            and "FROM model_observability.control_plane.monitor_configs" in sql
+        ):
             if params and params[0] == self.monitor_row["model_key"]:
                 return pd.DataFrame([{"found": 1}])
             return pd.DataFrame(columns=["found"])
         if "FROM model_observability.control_plane.incidents" in sql and "status = 'open'" in sql:
-            return pd.DataFrame([{
-                "model_key": params[0],
-                "feature_name": "amount",
-                "metric_name": "psi",
-                "severity": "critical",
-                "status": "open",
-                "metric_value": 0.34,
-                "window_end": "2026-01-20",
-                "observed_at": "2026-01-20T12:00:00+00:00",
-            }])
-        if "FROM model_observability.control_plane.drift_metrics" in sql and "SELECT DISTINCT" in sql:
+            return pd.DataFrame(
+                [
+                    {
+                        "model_key": params[0],
+                        "feature_name": "amount",
+                        "metric_name": "psi",
+                        "severity": "critical",
+                        "status": "open",
+                        "metric_value": 0.34,
+                        "window_end": "2026-01-20",
+                        "observed_at": "2026-01-20T12:00:00+00:00",
+                    }
+                ]
+            )
+        if (
+            "FROM model_observability.control_plane.drift_metrics" in sql
+            and "SELECT DISTINCT" in sql
+        ):
             return pd.DataFrame(self.drift_window_rows)
         if "SELECT * FROM" in sql and "monitor_configs" in sql:
             return pd.DataFrame([self.monitor_row])
-        return pd.DataFrame([
-            {
-                "event_ts": "2026-01-20T00:00:00",
-                "model_id": params[0] if params else "m1",
-                "prediction": 0.9,
-                "entity_id": "entity-1",
-                "label": 1,
-                "amount": 10.0,
-            }
-        ])
+        return pd.DataFrame(
+            [
+                {
+                    "event_ts": "2026-01-20T00:00:00",
+                    "model_id": params[0] if params else "m1",
+                    "prediction": 0.9,
+                    "entity_id": "entity-1",
+                    "label": 1,
+                    "amount": 10.0,
+                }
+            ]
+        )
 
     def describe_table(self, table_name: str, *, cache: bool = True) -> pd.DataFrame:
         del cache
         if table_name in self.table_schemas:
             return pd.DataFrame(self.table_schemas[table_name])
-        return pd.DataFrame([
-            {"col_name": "event_ts", "data_type": "timestamp"},
-            {"col_name": "model_id", "data_type": "string"},
-            {"col_name": "prediction", "data_type": "double"},
-            {"col_name": "entity_id", "data_type": "string"},
-            {"col_name": "amount", "data_type": "double"},
-        ])
+        return pd.DataFrame(
+            [
+                {"col_name": "event_ts", "data_type": "timestamp"},
+                {"col_name": "model_id", "data_type": "string"},
+                {"col_name": "prediction", "data_type": "double"},
+                {"col_name": "entity_id", "data_type": "string"},
+                {"col_name": "amount", "data_type": "double"},
+            ]
+        )
 
     def get_columns(self, table_name: str) -> list[str]:
         if table_name == "catalog.schema.labels":
@@ -362,7 +410,9 @@ def _monitor_config(
 
 def test_upsert_monitor_config_keeps_full_feature_and_categorical_metadata() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     repository.upsert_monitor_config(_monitor_config())
 
@@ -391,7 +441,9 @@ def test_upsert_monitor_config_keeps_full_feature_and_categorical_metadata() -> 
 
 def test_upsert_monitor_config_persists_threshold_overrides() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
     config = replace(
         _monitor_config(),
         threshold_overrides={
@@ -411,11 +463,15 @@ def test_upsert_monitor_config_persists_threshold_overrides() -> None:
 
 def test_list_monitor_configs_parses_threshold_overrides() -> None:
     warehouse = FakeWarehouse()
-    warehouse.monitor_row["threshold_overrides"] = json.dumps({
-        "psi": {"warning": 0.15, "critical": 0.35},
-        "null_rate": {"warning": 2.0, "critical": 8.0},
-    })
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    warehouse.monitor_row["threshold_overrides"] = json.dumps(
+        {
+            "psi": {"warning": 0.15, "critical": 0.35},
+            "null_rate": {"warning": 2.0, "critical": 8.0},
+        }
+    )
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     config = repository.list_monitor_configs(status="active")[0]
 
@@ -427,9 +483,19 @@ def test_list_monitor_configs_parses_threshold_overrides() -> None:
 
 def test_upsert_monitor_config_accepts_hyphenated_feature_names() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
     contract = build_contract(
-        columns=["event_ts", "model_id", "prediction", "entity_id", "label", "amount", "us-central1"],
+        columns=[
+            "event_ts",
+            "model_id",
+            "prediction",
+            "entity_id",
+            "label",
+            "amount",
+            "us-central1",
+        ],
         timestamp_col="event_ts",
         model_id_col="model_id",
         prediction_col="prediction",
@@ -449,9 +515,13 @@ def test_upsert_monitor_config_accepts_hyphenated_feature_names() -> None:
 
 def test_load_monitor_frame_uses_external_labels_join_and_model_filter() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
-    frame = repository.load_monitor_frame(_monitor_config(with_external_labels=True, labels_order_col="label_timestamp"))
+    frame = repository.load_monitor_frame(
+        _monitor_config(with_external_labels=True, labels_order_col="label_timestamp")
+    )
 
     assert not frame.empty
     data_query, params = warehouse.query_param_calls[-1]
@@ -464,7 +534,9 @@ def test_load_monitor_frame_uses_external_labels_join_and_model_filter() -> None
 
 def test_load_monitor_frame_keeps_source_label_when_no_external_labels_table() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     frame = repository.load_monitor_frame(_monitor_config(with_external_labels=False))
 
@@ -478,7 +550,9 @@ def test_load_monitor_frame_keeps_source_label_when_no_external_labels_table() -
 
 def test_load_monitor_frame_sampling_caps_rows_per_day_and_total_rows() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     frame = repository.load_monitor_frame(
         _monitor_config(with_external_labels=False),
@@ -501,7 +575,9 @@ def test_load_monitor_frame_sampling_caps_rows_per_day_and_total_rows() -> None:
 
 def test_get_daily_quality_profile_rows_limits_to_recent_dates() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     repository.get_daily_quality_profile_rows("payments_risk_v1")
 
@@ -513,7 +589,9 @@ def test_get_daily_quality_profile_rows_limits_to_recent_dates() -> None:
 
 def test_get_daily_label_metric_rows_limits_to_recent_dates() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     repository.get_daily_label_metric_rows("payments_risk_v1")
 
@@ -527,13 +605,15 @@ def test_load_monitor_frame_uses_shared_labels_join_when_entity_id_is_absent() -
     class _SharedJoinWarehouse(FakeWarehouse):
         def describe_table(self, table_name: str) -> pd.DataFrame:
             del table_name
-            return pd.DataFrame([
-                {"col_name": "event_ts", "data_type": "timestamp"},
-                {"col_name": "model_id", "data_type": "string"},
-                {"col_name": "prediction", "data_type": "double"},
-                {"col_name": "gc_transaction", "data_type": "string"},
-                {"col_name": "amount", "data_type": "double"},
-            ])
+            return pd.DataFrame(
+                [
+                    {"col_name": "event_ts", "data_type": "timestamp"},
+                    {"col_name": "model_id", "data_type": "string"},
+                    {"col_name": "prediction", "data_type": "double"},
+                    {"col_name": "gc_transaction", "data_type": "string"},
+                    {"col_name": "amount", "data_type": "double"},
+                ]
+            )
 
         def get_columns(self, table_name: str) -> list[str]:
             if table_name == "catalog.schema.labels":
@@ -541,7 +621,9 @@ def test_load_monitor_frame_uses_shared_labels_join_when_entity_id_is_absent() -
             return ["event_ts", "model_id", "prediction", "gc_transaction", "amount"]
 
     warehouse = _SharedJoinWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
     contract = build_contract(
         columns=["event_ts", "model_id", "prediction", "gc_transaction", "label", "amount"],
         timestamp_col="event_ts",
@@ -580,7 +662,9 @@ def test_load_monitor_frame_sampling_keeps_external_label_join_column() -> None:
             return ["event_ts", "model_id", "prediction", "gc_transaction", "amount"]
 
     warehouse = _SharedJoinWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
     contract = build_contract(
         columns=["event_ts", "model_id", "prediction", "gc_transaction", "label", "amount"],
         timestamp_col="event_ts",
@@ -620,7 +704,9 @@ def test_load_monitor_frame_sampling_keeps_external_label_join_column() -> None:
 
 def test_scan_source_table_returns_schema_and_preview() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     columns, preview, schema = repository.scan_source_table("catalog.schema.inference_logs")
 
@@ -634,7 +720,9 @@ def test_scan_source_table_returns_schema_and_preview() -> None:
 
 def test_list_monitor_configs_round_trips_mlflow_lineage() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     config = repository.list_monitor_configs()[0]
 
@@ -650,7 +738,9 @@ def test_list_monitor_configs_round_trips_mlflow_lineage() -> None:
 
 def test_list_monitor_configs_round_trips_fixed_baseline_dates() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     repository.upsert_monitor_config(
         replace(
@@ -670,29 +760,41 @@ def test_list_monitor_configs_round_trips_fixed_baseline_dates() -> None:
 def test_list_monitor_configs_recovers_when_filtered_status_query_returns_empty(caplog) -> None:
     class _FallbackWarehouse(FakeWarehouse):
         def query(self, sql: str, cache: bool = False) -> pd.DataFrame:
-            if "SELECT * FROM model_observability.control_plane.monitor_configs ORDER BY updated_at DESC" in sql:
+            if (
+                "SELECT * FROM model_observability.control_plane.monitor_configs ORDER BY updated_at DESC"
+                in sql
+            ):
                 return pd.DataFrame([self.monitor_row])
             return super().query(sql, cache=cache)
 
         def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
-            if "SELECT * FROM model_observability.control_plane.monitor_configs WHERE status = %s" in sql:
+            if (
+                "SELECT * FROM model_observability.control_plane.monitor_configs WHERE status = %s"
+                in sql
+            ):
                 return pd.DataFrame()
             return super().query_params(sql, params)
 
     warehouse = _FallbackWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     with caplog.at_level("WARNING"):
         configs = repository.list_monitor_configs(status="active")
 
     assert [config.model_key for config in configs] == ["payments_risk_v1"]
-    assert any("recovered 1 configs via unfiltered fallback" in message for message in caplog.messages)
+    assert any(
+        "recovered 1 configs via unfiltered fallback" in message for message in caplog.messages
+    )
 
 
 def test_validate_monitor_source_requires_model_id_value_for_shared_tables() -> None:
     warehouse = FakeWarehouse()
     warehouse.distinct_model_ids = 3
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     try:
         repository.validate_monitor_source(_monitor_config(model_id_value=None))
@@ -706,19 +808,23 @@ def test_validate_monitor_source_allows_table_scoped_monitor_without_model_id_co
     class _TableScopedWarehouse(FakeWarehouse):
         def describe_table(self, table_name: str) -> pd.DataFrame:
             del table_name
-            return pd.DataFrame([
-                {"col_name": "event_ts", "data_type": "timestamp"},
-                {"col_name": "prediction", "data_type": "double"},
-                {"col_name": "label", "data_type": "int"},
-                {"col_name": "amount", "data_type": "double"},
-            ])
+            return pd.DataFrame(
+                [
+                    {"col_name": "event_ts", "data_type": "timestamp"},
+                    {"col_name": "prediction", "data_type": "double"},
+                    {"col_name": "label", "data_type": "int"},
+                    {"col_name": "amount", "data_type": "double"},
+                ]
+            )
 
         def get_columns(self, table_name: str) -> list[str]:
             del table_name
             return ["event_ts", "prediction", "label", "amount"]
 
     warehouse = _TableScopedWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
     contract = build_contract(
         columns=["event_ts", "prediction", "label", "amount"],
         timestamp_col="event_ts",
@@ -745,10 +851,14 @@ def test_validate_monitor_source_allows_table_scoped_monitor_without_model_id_co
 def test_validate_monitor_source_requires_label_order_column_when_join_keys_repeat() -> None:
     warehouse = FakeWarehouse()
     warehouse.duplicate_label_keys = 2
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     try:
-        repository.validate_monitor_source(_monitor_config(with_external_labels=True, labels_order_col=None))
+        repository.validate_monitor_source(
+            _monitor_config(with_external_labels=True, labels_order_col=None)
+        )
     except ValueError as error:
         assert "External Labels Order Column" in str(error)
     else:
@@ -763,7 +873,9 @@ def test_validate_monitor_source_allows_shared_labels_join_without_entity_id_col
             return ["event_ts", "model_id", "prediction", "gc_transaction", "amount"]
 
     warehouse = _SharedJoinWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
     contract = build_contract(
         columns=["event_ts", "model_id", "prediction", "gc_transaction", "label", "amount"],
         timestamp_col="event_ts",
@@ -791,7 +903,9 @@ def test_validate_monitor_source_allows_shared_labels_join_without_entity_id_col
 def test_profile_labels_mapping_reports_match_counts_and_binary_values() -> None:
     warehouse = FakeWarehouse()
     warehouse.duplicate_label_keys = 2
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     result = repository.profile_labels_mapping(
         source_table="catalog.schema.inference_logs",
@@ -811,7 +925,9 @@ def test_profile_labels_mapping_reports_match_counts_and_binary_values() -> None
 
 def test_get_source_profile_uses_sql_aggregates_instead_of_loading_rows() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     profile = repository.get_source_profile(
         _monitor_config(),
@@ -830,13 +946,19 @@ def test_get_source_profile_uses_sql_aggregates_instead_of_loading_rows() -> Non
         "label_row_count": 15,
     }
     assert any("COUNT(*) AS total_rows" in sql for sql, _ in warehouse.query_param_calls)
-    assert any("GROUP BY CAST(s.`event_ts` AS DATE)" in sql for sql, _ in warehouse.query_param_calls)
-    assert any("ROUND(AVG(CASE WHEN s.`amount` IS NULL" in sql for sql, _ in warehouse.query_param_calls)
+    assert any(
+        "GROUP BY CAST(s.`event_ts` AS DATE)" in sql for sql, _ in warehouse.query_param_calls
+    )
+    assert any(
+        "ROUND(AVG(CASE WHEN s.`amount` IS NULL" in sql for sql, _ in warehouse.query_param_calls
+    )
 
 
 def test_get_source_profile_counts_external_labels_with_latest_label_join() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     profile = repository.get_source_profile(
         _monitor_config(with_external_labels=True, labels_order_col="label_timestamp"),
@@ -853,13 +975,17 @@ def test_get_source_profile_counts_external_labels_with_latest_label_join() -> N
     assert "LEFT JOIN" in summary_sql
     assert "ROW_NUMBER() OVER" in summary_sql
     assert "ORDER BY `label_timestamp` DESC" in summary_sql
-    assert "SUM(CASE WHEN l.`label` IS NOT NULL THEN 1 ELSE 0 END) AS label_row_count" in summary_sql
+    assert (
+        "SUM(CASE WHEN l.`label` IS NOT NULL THEN 1 ELSE 0 END) AS label_row_count" in summary_sql
+    )
 
 
 def test_ensure_control_plane_ignores_field_already_exists_during_migration() -> None:
     warehouse = FakeWarehouse()
     warehouse.alter_field_already_exists = True
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     repository.ensure_control_plane()
 
@@ -875,11 +1001,16 @@ def test_ensure_table_columns_skips_alter_when_column_already_exists() -> None:
         {"col_name": "scope", "data_type": "STRING"},
         {"col_name": "generation_id", "data_type": "STRING"},
     ]
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     repository._ensure_table_columns(table_name, {"scope": "STRING", "generation_id": "STRING"})
 
-    assert not any("ALTER TABLE model_observability.control_plane.refresh_runs" in sql for sql in warehouse.executed)
+    assert not any(
+        "ALTER TABLE model_observability.control_plane.refresh_runs" in sql
+        for sql in warehouse.executed
+    )
 
 
 def test_ensure_table_columns_is_idempotent_across_repeated_runs() -> None:
@@ -888,13 +1019,16 @@ def test_ensure_table_columns_is_idempotent_across_repeated_runs() -> None:
     warehouse.table_schemas[table_name] = [
         {"col_name": "run_id", "data_type": "STRING"},
     ]
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     repository._ensure_table_columns(table_name, {"scope": "STRING"})
     repository._ensure_table_columns(table_name, {"scope": "STRING"})
 
     alters = [
-        sql for sql in warehouse.executed
+        sql
+        for sql in warehouse.executed
         if "ALTER TABLE model_observability.control_plane.refresh_runs" in sql
     ]
     assert len(alters) == 1
@@ -924,33 +1058,41 @@ def test_ensure_control_plane_skips_create_when_schema_and_tables_already_exist(
     }
     warehouse.fail_create_schema = True
     warehouse.fail_create_table = True
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     repository.ensure_control_plane()
 
     assert not any("CREATE SCHEMA IF NOT EXISTS" in sql for sql in warehouse.executed)
     assert not any("CREATE TABLE IF NOT EXISTS" in sql for sql in warehouse.executed)
     assert any(
-        "ALTER TABLE model_observability.control_plane.refresh_runs" in sql and "scope" in sql.lower()
+        "ALTER TABLE model_observability.control_plane.refresh_runs" in sql
+        and "scope" in sql.lower()
         for sql in warehouse.executed
     )
 
 
 def test_ensure_control_plane_adds_refresh_run_migration_columns() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     repository.ensure_control_plane()
 
     assert any(
-        "ALTER TABLE model_observability.control_plane.refresh_runs" in sql and "scope" in sql.lower()
+        "ALTER TABLE model_observability.control_plane.refresh_runs" in sql
+        and "scope" in sql.lower()
         for sql in warehouse.executed
     )
 
 
 def test_ensure_control_plane_backfills_legacy_published_refresh_run_metadata() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     repository.ensure_control_plane()
 
@@ -965,7 +1107,9 @@ def test_ensure_control_plane_backfills_legacy_published_refresh_run_metadata() 
 
 def test_ensure_control_plane_adds_daily_performance_profile_migration_columns() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     repository.ensure_control_plane()
 
@@ -978,7 +1122,9 @@ def test_ensure_control_plane_adds_daily_performance_profile_migration_columns()
 
 def test_ensure_control_plane_adds_window_id_to_drift_and_performance_metrics() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     repository.ensure_control_plane()
 
@@ -996,7 +1142,9 @@ def test_ensure_control_plane_adds_window_id_to_drift_and_performance_metrics() 
 
 def test_ensure_control_plane_adds_source_run_id_to_daily_and_window_tables() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     repository.ensure_control_plane()
 
@@ -1017,15 +1165,21 @@ def test_ensure_control_plane_adds_source_run_id_to_daily_and_window_tables() ->
         )
 
 
-def test_get_existing_window_keys_falls_back_to_drift_metrics_when_comparison_windows_are_empty() -> None:
+def test_get_existing_window_keys_falls_back_to_drift_metrics_when_comparison_windows_are_empty() -> (
+    None
+):
     warehouse = FakeWarehouse()
-    warehouse.drift_window_rows = [{
-        "baseline_start": "2026-01-01",
-        "baseline_end": "2026-01-07",
-        "window_start": "2026-01-08",
-        "window_end": "2026-01-14",
-    }]
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    warehouse.drift_window_rows = [
+        {
+            "baseline_start": "2026-01-01",
+            "baseline_end": "2026-01-07",
+            "window_start": "2026-01-08",
+            "window_end": "2026-01-14",
+        }
+    ]
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     keys = repository.get_existing_window_keys("payments_risk_v1")
 
@@ -1034,7 +1188,9 @@ def test_get_existing_window_keys_falls_back_to_drift_metrics_when_comparison_wi
 
 def test_get_current_incident_state_reads_open_incidents_for_model() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     state = repository.get_current_incident_state("payments_risk_v1")
 
@@ -1044,7 +1200,9 @@ def test_get_current_incident_state_reads_open_incidents_for_model() -> None:
 
 def test_append_refresh_result_replaces_window_scoped_incident_history_rows() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     repository.append_refresh_result(
         "payments_risk_v1",
@@ -1076,13 +1234,21 @@ def test_append_refresh_result_replaces_window_scoped_incident_history_rows() ->
         source_run_id="run-1",
     )
 
-    assert any("DELETE FROM model_observability.control_plane.incident_history" in sql for sql, _ in warehouse.executed_params)
-    assert any("INSERT INTO model_observability.control_plane.incident_history" in sql for sql, _ in warehouse.batch_calls)
+    assert any(
+        "DELETE FROM model_observability.control_plane.incident_history" in sql
+        for sql, _ in warehouse.executed_params
+    )
+    assert any(
+        "INSERT INTO model_observability.control_plane.incident_history" in sql
+        for sql, _ in warehouse.batch_calls
+    )
 
 
 def test_append_refresh_result_clears_open_incidents_on_recovery_history() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     repository.append_refresh_result(
         "payments_risk_v1",
@@ -1114,12 +1280,17 @@ def test_append_refresh_result_clears_open_incidents_on_recovery_history() -> No
         source_run_id="run-1",
     )
 
-    assert any("DELETE FROM model_observability.control_plane.incidents" in sql for sql, _ in warehouse.executed_params)
+    assert any(
+        "DELETE FROM model_observability.control_plane.incidents" in sql
+        for sql, _ in warehouse.executed_params
+    )
 
 
 def test_append_refresh_result_replaces_daily_profile_rows_by_profile_date() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     repository.append_refresh_result(
         "payments_risk_v1",
@@ -1229,18 +1400,54 @@ def test_append_refresh_result_replaces_daily_profile_rows_by_profile_date() -> 
         source_run_id="run-2",
     )
 
-    assert any("DELETE FROM model_observability.control_plane.daily_quality_profiles" in sql for sql, _ in warehouse.executed_params)
-    assert any("DELETE FROM model_observability.control_plane.daily_class_quality_profiles" in sql for sql, _ in warehouse.executed_params)
-    assert any("DELETE FROM model_observability.control_plane.daily_feature_profiles" in sql for sql, _ in warehouse.executed_params)
-    assert any("DELETE FROM model_observability.control_plane.daily_class_feature_profiles" in sql for sql, _ in warehouse.executed_params)
-    assert any("DELETE FROM model_observability.control_plane.daily_performance_profiles" in sql for sql, _ in warehouse.executed_params)
-    assert any("DELETE FROM model_observability.control_plane.daily_label_metrics" in sql for sql, _ in warehouse.executed_params)
-    assert any("INSERT INTO model_observability.control_plane.daily_quality_profiles" in sql for sql, _ in warehouse.batch_calls)
-    assert any("INSERT INTO model_observability.control_plane.daily_class_quality_profiles" in sql for sql, _ in warehouse.batch_calls)
-    assert any("INSERT INTO model_observability.control_plane.daily_feature_profiles" in sql for sql, _ in warehouse.batch_calls)
-    assert any("INSERT INTO model_observability.control_plane.daily_class_feature_profiles" in sql for sql, _ in warehouse.batch_calls)
-    assert any("INSERT INTO model_observability.control_plane.daily_performance_profiles" in sql for sql, _ in warehouse.batch_calls)
-    assert any("INSERT INTO model_observability.control_plane.daily_label_metrics" in sql for sql, _ in warehouse.batch_calls)
+    assert any(
+        "DELETE FROM model_observability.control_plane.daily_quality_profiles" in sql
+        for sql, _ in warehouse.executed_params
+    )
+    assert any(
+        "DELETE FROM model_observability.control_plane.daily_class_quality_profiles" in sql
+        for sql, _ in warehouse.executed_params
+    )
+    assert any(
+        "DELETE FROM model_observability.control_plane.daily_feature_profiles" in sql
+        for sql, _ in warehouse.executed_params
+    )
+    assert any(
+        "DELETE FROM model_observability.control_plane.daily_class_feature_profiles" in sql
+        for sql, _ in warehouse.executed_params
+    )
+    assert any(
+        "DELETE FROM model_observability.control_plane.daily_performance_profiles" in sql
+        for sql, _ in warehouse.executed_params
+    )
+    assert any(
+        "DELETE FROM model_observability.control_plane.daily_label_metrics" in sql
+        for sql, _ in warehouse.executed_params
+    )
+    assert any(
+        "INSERT INTO model_observability.control_plane.daily_quality_profiles" in sql
+        for sql, _ in warehouse.batch_calls
+    )
+    assert any(
+        "INSERT INTO model_observability.control_plane.daily_class_quality_profiles" in sql
+        for sql, _ in warehouse.batch_calls
+    )
+    assert any(
+        "INSERT INTO model_observability.control_plane.daily_feature_profiles" in sql
+        for sql, _ in warehouse.batch_calls
+    )
+    assert any(
+        "INSERT INTO model_observability.control_plane.daily_class_feature_profiles" in sql
+        for sql, _ in warehouse.batch_calls
+    )
+    assert any(
+        "INSERT INTO model_observability.control_plane.daily_performance_profiles" in sql
+        for sql, _ in warehouse.batch_calls
+    )
+    assert any(
+        "INSERT INTO model_observability.control_plane.daily_label_metrics" in sql
+        for sql, _ in warehouse.batch_calls
+    )
     performance_insert_rows = next(
         rows
         for sql, rows in warehouse.batch_calls
@@ -1259,32 +1466,36 @@ def test_append_refresh_result_rebuilds_quality_summary_from_persisted_daily_pro
     class _QualitySummaryWarehouse(FakeWarehouse):
         def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
             if "FROM model_observability.control_plane.daily_quality_profiles" in sql:
-                return pd.DataFrame([
-                    {
-                        "model_key": params[0],
-                        "profile_date": "2026-01-19",
-                        "row_count": 100,
-                        "prediction_mean": 0.2,
-                        "prediction_std": 0.1,
-                        "null_rates": '{"amount": 0.0}',
-                        "label_row_count": 90,
-                        "computed_at": "2026-01-19T00:00:00+00:00",
-                    },
-                    {
-                        "model_key": params[0],
-                        "profile_date": "2026-01-20",
-                        "row_count": 50,
-                        "prediction_mean": 0.6,
-                        "prediction_std": 0.2,
-                        "null_rates": '{"amount": 20.0}',
-                        "label_row_count": 40,
-                        "computed_at": "2026-01-20T00:00:00+00:00",
-                    },
-                ])
+                return pd.DataFrame(
+                    [
+                        {
+                            "model_key": params[0],
+                            "profile_date": "2026-01-19",
+                            "row_count": 100,
+                            "prediction_mean": 0.2,
+                            "prediction_std": 0.1,
+                            "null_rates": '{"amount": 0.0}',
+                            "label_row_count": 90,
+                            "computed_at": "2026-01-19T00:00:00+00:00",
+                        },
+                        {
+                            "model_key": params[0],
+                            "profile_date": "2026-01-20",
+                            "row_count": 50,
+                            "prediction_mean": 0.6,
+                            "prediction_std": 0.2,
+                            "null_rates": '{"amount": 20.0}',
+                            "label_row_count": 40,
+                            "computed_at": "2026-01-20T00:00:00+00:00",
+                        },
+                    ]
+                )
             return super().query_params(sql, params)
 
     warehouse = _QualitySummaryWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     repository.append_refresh_result(
         "payments_risk_v1",
@@ -1328,7 +1539,9 @@ def test_append_refresh_result_rebuilds_quality_summary_from_persisted_daily_pro
 
 def test_append_refresh_result_persists_window_id_for_drift_and_performance_metrics() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     repository.append_refresh_result(
         "payments_risk_v1",
@@ -1397,7 +1610,9 @@ def test_append_refresh_result_persists_window_id_for_drift_and_performance_metr
 
 def test_replace_performance_bin_specs_persists_canonical_edges() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     repository.replace_performance_bin_specs("payments_risk_v1", {"amount": (0.0, 1.5, 3.0)})
 
@@ -1417,21 +1632,29 @@ def test_get_performance_bin_specs_parses_persisted_edges() -> None:
     class _BinSpecWarehouse(FakeWarehouse):
         def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
             if "FROM model_observability.control_plane.performance_bin_specs" in sql:
-                return pd.DataFrame([{
-                    "feature_name": "amount",
-                    "edges_json": "[0.0, 1.5, 3.0]",
-                }])
+                return pd.DataFrame(
+                    [
+                        {
+                            "feature_name": "amount",
+                            "edges_json": "[0.0, 1.5, 3.0]",
+                        }
+                    ]
+                )
             return super().query_params(sql, params)
 
     warehouse = _BinSpecWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     assert repository.get_performance_bin_specs("payments_risk_v1") == {"amount": (0.0, 1.5, 3.0)}
 
 
 def test_update_refresh_run_metadata_updates_range_and_row_counts() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     repository.update_refresh_run_metadata(
         "run-1",
@@ -1450,7 +1673,9 @@ def test_update_refresh_run_metadata_updates_range_and_row_counts() -> None:
 
 def test_complete_refresh_run_can_publish_generation_metadata() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     repository.complete_refresh_run(
         "run-1",
@@ -1474,7 +1699,9 @@ def test_complete_refresh_run_can_publish_generation_metadata() -> None:
 
 def test_replace_all_refresh_results_stages_generation_without_deleting_existing_rows() -> None:
     warehouse = FakeWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     repository.replace_all_refresh_results(
         "payments_risk_v1",
@@ -1550,7 +1777,9 @@ def test_replace_all_refresh_results_stages_generation_without_deleting_existing
     assert label_metric_insert_rows[0][-1] == "generation-1"
 
 
-def test_ensure_control_plane_queues_performance_repair_when_daily_label_metrics_are_missing() -> None:
+def test_ensure_control_plane_queues_performance_repair_when_daily_label_metrics_are_missing() -> (
+    None
+):
     class _BackfillWarehouse(FakeWarehouse):
         def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
             if "has_performance_rows" in sql and "has_daily_label_rows" in sql:
@@ -1561,7 +1790,9 @@ def test_ensure_control_plane_queues_performance_repair_when_daily_label_metrics
 
     warehouse = _BackfillWarehouse()
     warehouse.monitor_row["performance_cadence_preset"] = "daily_7d_repair"
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     repository.ensure_control_plane()
 
@@ -1592,7 +1823,9 @@ def test_get_label_watermark_uses_label_signature_for_in_source_labels() -> None
             return super().query_params(sql, params)
 
     warehouse = _LabelWatermarkWarehouse()
-    repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
+    repository = ControlPlaneRepository(
+        warehouse=warehouse, table_names=TableNames("model_observability", "control_plane")
+    )
 
     watermark = repository.get_label_watermark(
         _monitor_config(with_external_labels=False),
@@ -1615,7 +1848,8 @@ def test_archive_monitor_marks_monitor_inactive_without_purging_history() -> Non
     repository.archive_monitor("payments_risk_v1")
 
     assert any(
-        "UPDATE model_observability.control_plane.monitor_configs" in sql and "status = 'inactive'" in sql
+        "UPDATE model_observability.control_plane.monitor_configs" in sql
+        and "status = 'inactive'" in sql
         for sql, _ in warehouse.executed_params
     )
     assert len(read_model.synced) == 1
@@ -1634,7 +1868,11 @@ def test_delete_monitor_purges_all_monitor_scoped_tables() -> None:
 
     assert len(warehouse.executed_atomic_params) == 1
     atomic_sql, atomic_params = warehouse.executed_atomic_params[0]
-    deleted_tables = {statement.split("DELETE FROM ", 1)[1].split(" WHERE", 1)[0] for statement in atomic_sql.splitlines() if statement.strip()}
+    deleted_tables = {
+        statement.split("DELETE FROM ", 1)[1].split(" WHERE", 1)[0]
+        for statement in atomic_sql.splitlines()
+        if statement.strip()
+    }
     assert {
         "model_observability.control_plane.monitor_runtime_state",
         "model_observability.control_plane.refresh_runs",
@@ -1711,22 +1949,25 @@ def test_ensure_monitor_runtime_state_bootstraps_missing_state_from_published_ge
 
 
 def test_ensure_monitor_runtime_state_upgrades_stale_pending_when_bootstrap_completed() -> None:
-    warehouse = FakeWarehouse()
-    runtime_row = pd.DataFrame([{
-        "model_key": "payments_risk_v1",
-        "bootstrap_status": "pending",
-        "last_drift_refresh_at": None,
-        "last_performance_refresh_at": None,
-        "next_drift_due_at": None,
-        "next_performance_due_at": None,
-        "last_label_watermark": "",
-        "last_run_status": "",
-        "last_run_error": "",
-        "last_run_started_at": None,
-        "last_run_completed_at": None,
-        "backoff_until": None,
-        "consecutive_failures": 0,
-    }])
+    runtime_row = pd.DataFrame(
+        [
+            {
+                "model_key": "payments_risk_v1",
+                "bootstrap_status": "pending",
+                "last_drift_refresh_at": None,
+                "last_performance_refresh_at": None,
+                "next_drift_due_at": None,
+                "next_performance_due_at": None,
+                "last_label_watermark": "",
+                "last_run_status": "",
+                "last_run_error": "",
+                "last_run_started_at": None,
+                "last_run_completed_at": None,
+                "backoff_until": None,
+                "consecutive_failures": 0,
+            }
+        ]
+    )
 
     class _RuntimeWarehouse(FakeWarehouse):
         def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
@@ -1760,7 +2001,11 @@ def test_ensure_control_plane_show_probes_do_not_use_escape_clause() -> None:
 
     repository.ensure_control_plane()
 
-    show_queries = [sql for sql in warehouse.queries if sql.startswith("SHOW SCHEMAS") or sql.startswith("SHOW TABLES")]
+    show_queries = [
+        sql
+        for sql in warehouse.queries
+        if sql.startswith("SHOW SCHEMAS") or sql.startswith("SHOW TABLES")
+    ]
     assert show_queries
     assert all("ESCAPE" not in sql for sql in show_queries)
 
@@ -1783,21 +2028,25 @@ class StubRepository:
     def load_monitor_frame(self, config: MonitorConfig) -> pd.DataFrame:
         assert config.model_key == self.config.model_key
         start = datetime(2026, 1, 1)
-        return pd.DataFrame({
-            "event_ts": [start + timedelta(days=index) for index in range(5)],
-            "model_id": ["m1"] * 5,
-            "prediction": [0.1 * index for index in range(5)],
-            "label": [0, 1, 0, 1, 0],
-            "entity_id": [f"entity-{index}" for index in range(5)],
-            "amount": [10.0 + index for index in range(5)],
-            "segment": [float(index % 2) for index in range(5)],
-        })
+        return pd.DataFrame(
+            {
+                "event_ts": [start + timedelta(days=index) for index in range(5)],
+                "model_id": ["m1"] * 5,
+                "prediction": [0.1 * index for index in range(5)],
+                "label": [0, 1, 0, 1, 0],
+                "entity_id": [f"entity-{index}" for index in range(5)],
+                "amount": [10.0 + index for index in range(5)],
+                "segment": [float(index % 2) for index in range(5)],
+            }
+        )
 
     def get_existing_window_keys(self, model_key: str) -> set[tuple[str, str, str, str]]:
         assert model_key == self.config.model_key
         return set()
 
-    def get_current_incident_state(self, model_key: str) -> dict[tuple[str, str, str], dict[str, object]]:
+    def get_current_incident_state(
+        self, model_key: str
+    ) -> dict[tuple[str, str, str], dict[str, object]]:
         assert model_key == self.config.model_key
         return {}
 
@@ -1810,13 +2059,15 @@ class StubRepository:
         data_min_date: str | None = None,
         data_max_date: str | None = None,
     ) -> str:
-        self.started_runs.append({
-            "model_key": model_key,
-            "requested_mode": requested_mode,
-            "run_kind": run_kind,
-            "data_min_date": data_min_date,
-            "data_max_date": data_max_date,
-        })
+        self.started_runs.append(
+            {
+                "model_key": model_key,
+                "requested_mode": requested_mode,
+                "run_kind": run_kind,
+                "data_min_date": data_min_date,
+                "data_max_date": data_max_date,
+            }
+        )
         return f"run-{len(self.started_runs)}"
 
     def complete_refresh_run(self, run_id: str, **kwargs) -> None:
@@ -1824,12 +2075,16 @@ class StubRepository:
         payload.update(kwargs)
         self.completed_runs.append(payload)
 
-    def replace_all_refresh_results(self, model_key: str, result, source_run_id: str | None = None) -> None:
+    def replace_all_refresh_results(
+        self, model_key: str, result, source_run_id: str | None = None
+    ) -> None:
         del result
         del source_run_id
         self.replaced.append(model_key)
 
-    def append_refresh_result(self, model_key: str, result, source_run_id: str | None = None) -> None:
+    def append_refresh_result(
+        self, model_key: str, result, source_run_id: str | None = None
+    ) -> None:
         del result
         del source_run_id
         self.appended.append(model_key)
@@ -1864,8 +2119,14 @@ class BootstrapSelectionSkipRepository(StubRepository):
     def get_monitor_runtime_state(self, model_key: str):
         return self.runtime_states.get(model_key)
 
-    def get_latest_refresh_run(self, model_key: str, scope: str, statuses: tuple[str, ...] | None = None):
-        if scope == "bootstrap" and statuses == ("running",) and model_key in self.running_bootstraps:
+    def get_latest_refresh_run(
+        self, model_key: str, scope: str, statuses: tuple[str, ...] | None = None
+    ):
+        if (
+            scope == "bootstrap"
+            and statuses == ("running",)
+            and model_key in self.running_bootstraps
+        ):
             return {"run_id": f"running-{model_key}"}
         return None
 
@@ -1918,15 +2179,19 @@ class MultiWindowRepository(StubRepository):
         for day in range(21):
             regime = 0 if day < 7 else 1 if day < 14 else 2
             for offset in range(2):
-                rows.append({
-                    "event_ts": start + timedelta(days=day, hours=offset),
-                    "model_id": "m1",
-                    "prediction": [0.15, 0.35, 0.55, 0.85][regime + offset if regime < 2 else 2 + offset],
-                    "label": 0 if regime < 2 else 1,
-                    "entity_id": f"entity-{day}-{offset}",
-                    "amount": float((day * 2) + offset + (regime * 4)),
-                    "segment": float(offset),
-                })
+                rows.append(
+                    {
+                        "event_ts": start + timedelta(days=day, hours=offset),
+                        "model_id": "m1",
+                        "prediction": [0.15, 0.35, 0.55, 0.85][
+                            regime + offset if regime < 2 else 2 + offset
+                        ],
+                        "label": 0 if regime < 2 else 1,
+                        "entity_id": f"entity-{day}-{offset}",
+                        "amount": float((day * 2) + offset + (regime * 4)),
+                        "segment": float(offset),
+                    }
+                )
         return pd.DataFrame(rows)
 
     def get_existing_window_keys(self, model_key: str) -> set[tuple[str, str, str, str]]:
@@ -1972,18 +2237,24 @@ class BoundedWindowRepository(MultiWindowRepository):
         sample_rows_per_day: int | None = None,
         max_total_rows: int | None = None,
     ) -> pd.DataFrame:
-        self.window_load_calls.append({
-            "start_date": start_date,
-            "end_date": end_date,
-            "feature_columns": feature_columns,
-            "sample_rows_per_day": sample_rows_per_day,
-            "max_total_rows": max_total_rows,
-        })
+        self.window_load_calls.append(
+            {
+                "start_date": start_date,
+                "end_date": end_date,
+                "feature_columns": feature_columns,
+                "sample_rows_per_day": sample_rows_per_day,
+                "max_total_rows": max_total_rows,
+            }
+        )
         frame = super().load_monitor_frame(config)
         if start_date:
-            frame = frame[pd.to_datetime(frame["event_ts"]).dt.date >= pd.Timestamp(start_date).date()]
+            frame = frame[
+                pd.to_datetime(frame["event_ts"]).dt.date >= pd.Timestamp(start_date).date()
+            ]
         if end_date:
-            frame = frame[pd.to_datetime(frame["event_ts"]).dt.date <= pd.Timestamp(end_date).date()]
+            frame = frame[
+                pd.to_datetime(frame["event_ts"]).dt.date <= pd.Timestamp(end_date).date()
+            ]
         selected = ["event_ts", "model_id", "prediction", "label", "entity_id"]
         selected.extend(list(feature_columns or ()))
         deduped = list(dict.fromkeys(selected))
@@ -2040,7 +2311,10 @@ def test_run_refresh_cycle_uses_bounded_window_loads_with_sampling_caps() -> Non
     assert len(repository.window_load_calls) == 1
     assert all(call["start_date"] for call in repository.window_load_calls)
     assert all(call["end_date"] for call in repository.window_load_calls)
-    assert all(call["feature_columns"] == repository.config.contract.feature_columns for call in repository.window_load_calls)
+    assert all(
+        call["feature_columns"] == repository.config.contract.feature_columns
+        for call in repository.window_load_calls
+    )
     assert all(call["sample_rows_per_day"] is not None for call in repository.window_load_calls)
     assert all(call["max_total_rows"] is not None for call in repository.window_load_calls)
 
@@ -2052,21 +2326,25 @@ class PerformanceRepairRepository(BoundedWindowRepository):
 
     def get_monitor_runtime_state(self, model_key: str):
         assert model_key == self.config.model_key
-        return type("State", (), {
-            "model_key": model_key,
-            "bootstrap_status": "completed",
-            "last_drift_refresh_at": "2026-01-20T00:00:00+00:00",
-            "last_performance_refresh_at": "2026-01-20T00:00:00+00:00",
-            "next_drift_due_at": "2026-01-20T00:00:00+00:00",
-            "next_performance_due_at": "2026-01-20T00:00:00+00:00",
-            "last_label_watermark": None,
-            "last_run_status": "completed",
-            "last_run_error": None,
-            "last_run_started_at": "2026-01-20T00:00:00+00:00",
-            "last_run_completed_at": "2026-01-20T00:00:00+00:00",
-            "backoff_until": None,
-            "consecutive_failures": 0,
-        })()
+        return type(
+            "State",
+            (),
+            {
+                "model_key": model_key,
+                "bootstrap_status": "completed",
+                "last_drift_refresh_at": "2026-01-20T00:00:00+00:00",
+                "last_performance_refresh_at": "2026-01-20T00:00:00+00:00",
+                "next_drift_due_at": "2026-01-20T00:00:00+00:00",
+                "next_performance_due_at": "2026-01-20T00:00:00+00:00",
+                "last_label_watermark": None,
+                "last_run_status": "completed",
+                "last_run_error": None,
+                "last_run_started_at": "2026-01-20T00:00:00+00:00",
+                "last_run_completed_at": "2026-01-20T00:00:00+00:00",
+                "backoff_until": None,
+                "consecutive_failures": 0,
+            },
+        )()
 
 
 def test_run_refresh_cycle_performance_repair_extends_range_for_baseline_lookback() -> None:
@@ -2097,15 +2375,17 @@ class SparkProfileRepository(BoundedWindowRepository):
         include_performance: bool,
         existing_bin_specs: dict[str, tuple[float, ...]] | None = None,
     ) -> SparkDailyProfiles:
-        self.spark_profile_calls.append({
-            "model_key": config.model_key,
-            "start_date": start_date,
-            "end_date": end_date,
-            "computed_at": computed_at,
-            "include_drift_quality": include_drift_quality,
-            "include_performance": include_performance,
-            "existing_bin_specs": existing_bin_specs or {},
-        })
+        self.spark_profile_calls.append(
+            {
+                "model_key": config.model_key,
+                "start_date": start_date,
+                "end_date": end_date,
+                "computed_at": computed_at,
+                "include_drift_quality": include_drift_quality,
+                "include_performance": include_performance,
+                "existing_bin_specs": existing_bin_specs or {},
+            }
+        )
         range_frame = super().load_monitor_frame(
             config,
             start_date=start_date,
@@ -2151,87 +2431,107 @@ class SparkProfileRepository(BoundedWindowRepository):
         include_performance: bool = True,
     ) -> RefreshResult:
         del prior_open_incidents
-        self.spark_derivation_calls.append({
-            "model_key": config.model_key,
-            "window_count": len(metadata_list),
-            "quality_rows": len(current_daily_quality_profile_rows),
-            "class_quality_rows": len(current_daily_class_quality_profile_rows),
-            "feature_rows": len(current_daily_feature_profile_rows),
-            "class_feature_rows": len(current_daily_class_feature_profile_rows),
-            "performance_rows": len(current_daily_performance_profile_rows),
-            "label_metric_rows": len(current_daily_label_metric_rows),
-            "derivation_start": derivation_start,
-            "derivation_end": derivation_end,
-            "computed_at": computed_at,
-            "include_drift_quality": include_drift_quality,
-            "include_performance": include_performance,
-        })
+        self.spark_derivation_calls.append(
+            {
+                "model_key": config.model_key,
+                "window_count": len(metadata_list),
+                "quality_rows": len(current_daily_quality_profile_rows),
+                "class_quality_rows": len(current_daily_class_quality_profile_rows),
+                "feature_rows": len(current_daily_feature_profile_rows),
+                "class_feature_rows": len(current_daily_class_feature_profile_rows),
+                "performance_rows": len(current_daily_performance_profile_rows),
+                "label_metric_rows": len(current_daily_label_metric_rows),
+                "derivation_start": derivation_start,
+                "derivation_end": derivation_end,
+                "computed_at": computed_at,
+                "include_drift_quality": include_drift_quality,
+                "include_performance": include_performance,
+            }
+        )
         metadata = metadata_list[-1]
         return RefreshResult(
-            drift_rows=[{
-                "model_key": config.model_key,
-                "feature_name": "amount",
-                "metric_name": "psi",
-                "metric_value": 0.2,
-                "window_id": metadata["window_id"],
-                "window_start": metadata["window_start"],
-                "window_end": metadata["window_end"],
-                "baseline_start": metadata["baseline_start"],
-                "baseline_end": metadata["baseline_end"],
-                "ref_mean": 10.0,
-                "cur_mean": 12.0,
-                "ref_std": 1.0,
-                "cur_std": 1.5,
-                "ref_null_pct": 0.0,
-                "cur_null_pct": 0.0,
-                "ref_count": 10,
-                "cur_count": 10,
-                "computed_at": computed_at,
-            }],
+            drift_rows=[
+                {
+                    "model_key": config.model_key,
+                    "feature_name": "amount",
+                    "metric_name": "psi",
+                    "metric_value": 0.2,
+                    "window_id": metadata["window_id"],
+                    "window_start": metadata["window_start"],
+                    "window_end": metadata["window_end"],
+                    "baseline_start": metadata["baseline_start"],
+                    "baseline_end": metadata["baseline_end"],
+                    "ref_mean": 10.0,
+                    "cur_mean": 12.0,
+                    "ref_std": 1.0,
+                    "cur_std": 1.5,
+                    "ref_null_pct": 0.0,
+                    "cur_null_pct": 0.0,
+                    "ref_count": 10,
+                    "cur_count": 10,
+                    "computed_at": computed_at,
+                }
+            ],
             quality_rows=[],
             performance_rows=[],
             incident_rows=[],
             incident_history_rows=[],
-            quality_history_rows=[{
-                "model_key": config.model_key,
-                "window_id": metadata["window_id"],
-                "window_start": metadata["window_start"],
-                "window_end": metadata["window_end"],
-                "baseline_start": metadata["baseline_start"],
-                "baseline_end": metadata["baseline_end"],
-                "row_count": 20,
-                "prediction_mean": 0.4,
-                "prediction_std": 0.1,
-                "null_rates": json.dumps({"amount": 0.0, "segment": 0.0}),
-                "computed_at": computed_at,
-            }],
-            window_rows=[{
-                "window_id": metadata["window_id"],
-                "model_key": config.model_key,
-                "window_grain": metadata["window_grain"],
-                "window_start": metadata["window_start"],
-                "window_end": metadata["window_end"],
-                "baseline_start": metadata["baseline_start"],
-                "baseline_end": metadata["baseline_end"],
-                "baseline_kind": metadata["baseline_kind"],
-                "created_at": computed_at,
-            }],
+            quality_history_rows=[
+                {
+                    "model_key": config.model_key,
+                    "window_id": metadata["window_id"],
+                    "window_start": metadata["window_start"],
+                    "window_end": metadata["window_end"],
+                    "baseline_start": metadata["baseline_start"],
+                    "baseline_end": metadata["baseline_end"],
+                    "row_count": 20,
+                    "prediction_mean": 0.4,
+                    "prediction_std": 0.1,
+                    "null_rates": json.dumps({"amount": 0.0, "segment": 0.0}),
+                    "computed_at": computed_at,
+                }
+            ],
+            window_rows=[
+                {
+                    "window_id": metadata["window_id"],
+                    "model_key": config.model_key,
+                    "window_grain": metadata["window_grain"],
+                    "window_start": metadata["window_start"],
+                    "window_end": metadata["window_end"],
+                    "baseline_start": metadata["baseline_start"],
+                    "baseline_end": metadata["baseline_end"],
+                    "baseline_kind": metadata["baseline_kind"],
+                    "created_at": computed_at,
+                }
+            ],
             daily_quality_profile_rows=[dict(row) for row in current_daily_quality_profile_rows],
-            daily_class_quality_profile_rows=[dict(row) for row in current_daily_class_quality_profile_rows],
+            daily_class_quality_profile_rows=[
+                dict(row) for row in current_daily_class_quality_profile_rows
+            ],
             daily_feature_profile_rows=[dict(row) for row in current_daily_feature_profile_rows],
-            daily_class_feature_profile_rows=[dict(row) for row in current_daily_class_feature_profile_rows],
-            daily_performance_profile_rows=[dict(row) for row in current_daily_performance_profile_rows],
+            daily_class_feature_profile_rows=[
+                dict(row) for row in current_daily_class_feature_profile_rows
+            ],
+            daily_performance_profile_rows=[
+                dict(row) for row in current_daily_performance_profile_rows
+            ],
             daily_label_metric_rows=[dict(row) for row in current_daily_label_metric_rows],
         )
 
     def get_daily_quality_profile_rows(self, *args, **kwargs):
-        raise AssertionError("Spark derivation path should not load persisted daily quality rows through pandas")
+        raise AssertionError(
+            "Spark derivation path should not load persisted daily quality rows through pandas"
+        )
 
     def get_daily_feature_profile_rows(self, *args, **kwargs):
-        raise AssertionError("Spark derivation path should not load persisted daily feature rows through pandas")
+        raise AssertionError(
+            "Spark derivation path should not load persisted daily feature rows through pandas"
+        )
 
     def get_daily_performance_profile_rows(self, *args, **kwargs):
-        raise AssertionError("Spark derivation path should not load persisted daily performance rows through pandas")
+        raise AssertionError(
+            "Spark derivation path should not load persisted daily performance rows through pandas"
+        )
 
     def load_monitor_frame(
         self,
@@ -2263,21 +2563,25 @@ def test_run_refresh_cycle_prefers_repository_spark_profiles_over_pandas_window_
 class LabelSignaturePerformanceRepairRepository(PerformanceRepairRepository):
     def __init__(self) -> None:
         super().__init__()
-        self._runtime_state = type("State", (), {
-            "model_key": self.config.model_key,
-            "bootstrap_status": "completed",
-            "last_drift_refresh_at": "2026-01-20T00:00:00+00:00",
-            "last_performance_refresh_at": "2026-01-20T00:00:00+00:00",
-            "next_drift_due_at": "2026-01-20T00:00:00+00:00",
-            "next_performance_due_at": "2026-01-20T00:00:00+00:00",
-            "last_label_watermark": "2026-01-21T00:00:00|4",
-            "last_run_status": "completed",
-            "last_run_error": None,
-            "last_run_started_at": "2026-01-20T00:00:00+00:00",
-            "last_run_completed_at": "2026-01-20T00:00:00+00:00",
-            "backoff_until": None,
-            "consecutive_failures": 0,
-        })()
+        self._runtime_state = type(
+            "State",
+            (),
+            {
+                "model_key": self.config.model_key,
+                "bootstrap_status": "completed",
+                "last_drift_refresh_at": "2026-01-20T00:00:00+00:00",
+                "last_performance_refresh_at": "2026-01-20T00:00:00+00:00",
+                "next_drift_due_at": "2026-01-20T00:00:00+00:00",
+                "next_performance_due_at": "2026-01-20T00:00:00+00:00",
+                "last_label_watermark": "2026-01-21T00:00:00|4",
+                "last_run_status": "completed",
+                "last_run_error": None,
+                "last_run_started_at": "2026-01-20T00:00:00+00:00",
+                "last_run_completed_at": "2026-01-20T00:00:00+00:00",
+                "backoff_until": None,
+                "consecutive_failures": 0,
+            },
+        )()
 
     def get_monitor_runtime_state(self, model_key: str):
         assert model_key == self.config.model_key
@@ -2309,21 +2613,25 @@ class StableWatermarkMissingFactsRepository(PerformanceRepairRepository):
     def __init__(self, *, has_daily_label_rows: bool) -> None:
         super().__init__()
         self._has_daily_label_rows = has_daily_label_rows
-        self._runtime_state = type("State", (), {
-            "model_key": self.config.model_key,
-            "bootstrap_status": "completed",
-            "last_drift_refresh_at": "2026-01-20T00:00:00+00:00",
-            "last_performance_refresh_at": "2026-01-20T00:00:00+00:00",
-            "next_drift_due_at": "2026-01-20T00:00:00+00:00",
-            "next_performance_due_at": "2026-01-20T00:00:00+00:00",
-            "last_label_watermark": "2026-01-21T00:00:00|4",
-            "last_run_status": "completed",
-            "last_run_error": None,
-            "last_run_started_at": "2026-01-20T00:00:00+00:00",
-            "last_run_completed_at": "2026-01-20T00:00:00+00:00",
-            "backoff_until": None,
-            "consecutive_failures": 0,
-        })()
+        self._runtime_state = type(
+            "State",
+            (),
+            {
+                "model_key": self.config.model_key,
+                "bootstrap_status": "completed",
+                "last_drift_refresh_at": "2026-01-20T00:00:00+00:00",
+                "last_performance_refresh_at": "2026-01-20T00:00:00+00:00",
+                "next_drift_due_at": "2026-01-20T00:00:00+00:00",
+                "next_performance_due_at": "2026-01-20T00:00:00+00:00",
+                "last_label_watermark": "2026-01-21T00:00:00|4",
+                "last_run_status": "completed",
+                "last_run_error": None,
+                "last_run_started_at": "2026-01-20T00:00:00+00:00",
+                "last_run_completed_at": "2026-01-20T00:00:00+00:00",
+                "backoff_until": None,
+                "consecutive_failures": 0,
+            },
+        )()
 
     def get_monitor_runtime_state(self, model_key: str):
         assert model_key == self.config.model_key
@@ -2350,7 +2658,9 @@ class StableWatermarkMissingFactsRepository(PerformanceRepairRepository):
         return not self._has_daily_label_rows
 
 
-def test_run_refresh_cycle_performance_repair_forces_recompute_when_daily_label_metrics_are_missing() -> None:
+def test_run_refresh_cycle_performance_repair_forces_recompute_when_daily_label_metrics_are_missing() -> (
+    None
+):
     repository = StableWatermarkMissingFactsRepository(has_daily_label_rows=False)
 
     counts = run_refresh_cycle(repository, mode="auto", scope="performance_repair")
@@ -2360,7 +2670,9 @@ def test_run_refresh_cycle_performance_repair_forces_recompute_when_daily_label_
     assert repository.window_load_calls
 
 
-def test_run_refresh_cycle_performance_repair_still_skips_when_watermark_is_stable_and_daily_label_metrics_exist() -> None:
+def test_run_refresh_cycle_performance_repair_still_skips_when_watermark_is_stable_and_daily_label_metrics_exist() -> (
+    None
+):
     repository = StableWatermarkMissingFactsRepository(has_daily_label_rows=True)
 
     counts = run_refresh_cycle(repository, mode="auto", scope="performance_repair")
@@ -2379,7 +2691,9 @@ class StableWatermarkBrokenFactsProbeRepository(StableWatermarkMissingFactsRepos
         raise RuntimeError("published daily label metric probe failed")
 
 
-def test_run_refresh_cycle_performance_repair_recomputes_when_daily_label_metric_probe_errors() -> None:
+def test_run_refresh_cycle_performance_repair_recomputes_when_daily_label_metric_probe_errors() -> (
+    None
+):
     repository = StableWatermarkBrokenFactsProbeRepository()
 
     counts = run_refresh_cycle(repository, mode="auto", scope="performance_repair")
@@ -2429,15 +2743,17 @@ class PersistedDailyFactRepository(BoundedWindowRepository):
         for day in range(14):
             target = baseline_rows if day < 7 else current_rows
             for offset in range(2):
-                target.append({
-                    "event_ts": start + timedelta(days=day, hours=offset),
-                    "model_id": "m1",
-                    "prediction": [0.2, 0.3, 0.7, 0.8][(0 if day < 7 else 2) + offset],
-                    "label": 0 if day < 7 else 1,
-                    "entity_id": f"entity-{day}-{offset}",
-                    "amount": float((day * 3) + offset),
-                    "segment": float(offset),
-                })
+                target.append(
+                    {
+                        "event_ts": start + timedelta(days=day, hours=offset),
+                        "model_id": "m1",
+                        "prediction": [0.2, 0.3, 0.7, 0.8][(0 if day < 7 else 2) + offset],
+                        "label": 0 if day < 7 else 1,
+                        "entity_id": f"entity-{day}-{offset}",
+                        "amount": float((day * 3) + offset),
+                        "segment": float(offset),
+                    }
+                )
         self._baseline_frame = pd.DataFrame(baseline_rows)
         self._current_frame = pd.DataFrame(current_rows)
         computed_at = "2026-01-22T00:00:00Z"
@@ -2459,21 +2775,25 @@ class PersistedDailyFactRepository(BoundedWindowRepository):
 
     def get_monitor_runtime_state(self, model_key: str):
         assert model_key == self.config.model_key
-        return type("State", (), {
-            "model_key": model_key,
-            "bootstrap_status": "completed",
-            "last_drift_refresh_at": "2026-01-15T00:00:00+00:00",
-            "last_performance_refresh_at": "2026-01-15T00:00:00+00:00",
-            "next_drift_due_at": "2026-01-20T00:00:00+00:00",
-            "next_performance_due_at": "2026-01-20T00:00:00+00:00",
-            "last_label_watermark": None,
-            "last_run_status": "completed",
-            "last_run_error": None,
-            "last_run_started_at": "2026-01-15T00:00:00+00:00",
-            "last_run_completed_at": "2026-01-15T00:00:00+00:00",
-            "backoff_until": None,
-            "consecutive_failures": 0,
-        })()
+        return type(
+            "State",
+            (),
+            {
+                "model_key": model_key,
+                "bootstrap_status": "completed",
+                "last_drift_refresh_at": "2026-01-15T00:00:00+00:00",
+                "last_performance_refresh_at": "2026-01-15T00:00:00+00:00",
+                "next_drift_due_at": "2026-01-20T00:00:00+00:00",
+                "next_performance_due_at": "2026-01-20T00:00:00+00:00",
+                "last_label_watermark": None,
+                "last_run_status": "completed",
+                "last_run_error": None,
+                "last_run_started_at": "2026-01-15T00:00:00+00:00",
+                "last_run_completed_at": "2026-01-15T00:00:00+00:00",
+                "backoff_until": None,
+                "consecutive_failures": 0,
+            },
+        )()
 
     def get_source_profile(
         self,
@@ -2504,13 +2824,15 @@ class PersistedDailyFactRepository(BoundedWindowRepository):
         sample_rows_per_day: int | None = None,
         max_total_rows: int | None = None,
     ) -> pd.DataFrame:
-        self.window_load_calls.append({
-            "start_date": start_date,
-            "end_date": end_date,
-            "feature_columns": feature_columns,
-            "sample_rows_per_day": sample_rows_per_day,
-            "max_total_rows": max_total_rows,
-        })
+        self.window_load_calls.append(
+            {
+                "start_date": start_date,
+                "end_date": end_date,
+                "feature_columns": feature_columns,
+                "sample_rows_per_day": sample_rows_per_day,
+                "max_total_rows": max_total_rows,
+            }
+        )
         frame = self._current_frame.copy()
         selected = ["event_ts", "model_id", "prediction", "label", "entity_id"]
         selected.extend(list(feature_columns or ()))
@@ -2635,55 +2957,71 @@ class ParallelSchedulerRepository(BoundedWindowRepository):
         sample_rows_per_day: int | None = None,
         max_total_rows: int | None = None,
     ) -> pd.DataFrame:
-        self.window_load_calls.append({
-            "start_date": start_date,
-            "end_date": end_date,
-            "feature_columns": feature_columns,
-            "sample_rows_per_day": sample_rows_per_day,
-            "max_total_rows": max_total_rows,
-        })
+        self.window_load_calls.append(
+            {
+                "start_date": start_date,
+                "end_date": end_date,
+                "feature_columns": feature_columns,
+                "sample_rows_per_day": sample_rows_per_day,
+                "max_total_rows": max_total_rows,
+            }
+        )
         start = datetime(2026, 1, 1)
         rows: list[dict[str, object]] = []
         for day in range(21):
             regime = 0 if day < 7 else 1 if day < 14 else 2
             for offset in range(2):
-                rows.append({
-                    "event_ts": start + timedelta(days=day, hours=offset),
-                    "model_id": config.model_id_value or config.model_key,
-                    "prediction": [0.15, 0.35, 0.55, 0.85][regime + offset if regime < 2 else 2 + offset],
-                    "label": 0 if regime < 2 else 1,
-                    "entity_id": f"{config.model_key}-entity-{day}-{offset}",
-                    "amount": float((day * 2) + offset + (regime * 4)),
-                    "segment": float(offset),
-                })
+                rows.append(
+                    {
+                        "event_ts": start + timedelta(days=day, hours=offset),
+                        "model_id": config.model_id_value or config.model_key,
+                        "prediction": [0.15, 0.35, 0.55, 0.85][
+                            regime + offset if regime < 2 else 2 + offset
+                        ],
+                        "label": 0 if regime < 2 else 1,
+                        "entity_id": f"{config.model_key}-entity-{day}-{offset}",
+                        "amount": float((day * 2) + offset + (regime * 4)),
+                        "segment": float(offset),
+                    }
+                )
         frame = pd.DataFrame(rows)
         if start_date:
-            frame = frame[pd.to_datetime(frame["event_ts"]).dt.date >= pd.Timestamp(start_date).date()]
+            frame = frame[
+                pd.to_datetime(frame["event_ts"]).dt.date >= pd.Timestamp(start_date).date()
+            ]
         if end_date:
-            frame = frame[pd.to_datetime(frame["event_ts"]).dt.date <= pd.Timestamp(end_date).date()]
+            frame = frame[
+                pd.to_datetime(frame["event_ts"]).dt.date <= pd.Timestamp(end_date).date()
+            ]
         selected = ["event_ts", "model_id", "prediction", "label", "entity_id"]
         selected.extend(list(feature_columns or ()))
         deduped = list(dict.fromkeys(selected))
         return frame[deduped].reset_index(drop=True)
 
     def get_monitor_runtime_state(self, model_key: str):
-        return type("State", (), {
-            "model_key": model_key,
-            "bootstrap_status": "completed",
-            "last_drift_refresh_at": "2026-01-20T00:00:00+00:00",
-            "last_performance_refresh_at": "2026-01-20T00:00:00+00:00",
-            "next_drift_due_at": "2026-01-20T00:00:00+00:00",
-            "next_performance_due_at": "2026-01-20T00:00:00+00:00",
-            "last_label_watermark": None,
-            "last_run_status": "completed",
-            "last_run_error": None,
-        })()
+        return type(
+            "State",
+            (),
+            {
+                "model_key": model_key,
+                "bootstrap_status": "completed",
+                "last_drift_refresh_at": "2026-01-20T00:00:00+00:00",
+                "last_performance_refresh_at": "2026-01-20T00:00:00+00:00",
+                "next_drift_due_at": "2026-01-20T00:00:00+00:00",
+                "next_performance_due_at": "2026-01-20T00:00:00+00:00",
+                "last_label_watermark": None,
+                "last_run_status": "completed",
+                "last_run_error": None,
+            },
+        )()
 
     def get_existing_window_keys(self, model_key: str) -> set[tuple[str, str, str, str]]:
         del model_key
         return set()
 
-    def get_current_incident_state(self, model_key: str) -> dict[tuple[str, str, str], dict[str, object]]:
+    def get_current_incident_state(
+        self, model_key: str
+    ) -> dict[tuple[str, str, str], dict[str, object]]:
         assert any(candidate.model_key == model_key for candidate in self.configs)
         return {}
 
@@ -2700,18 +3038,22 @@ class ParallelSchedulerRepository(BoundedWindowRepository):
     ) -> str:
         with self._start_lock:
             self._active_start_calls += 1
-            self.max_parallel_start_calls = max(self.max_parallel_start_calls, self._active_start_calls)
+            self.max_parallel_start_calls = max(
+                self.max_parallel_start_calls, self._active_start_calls
+            )
         time.sleep(0.05)
         with self._start_lock:
             self._active_start_calls -= 1
-        self.started_runs.append({
-            "model_key": model_key,
-            "requested_mode": requested_mode,
-            "run_kind": run_kind,
-            "scope": scope,
-            "data_min_date": data_min_date,
-            "data_max_date": data_max_date,
-        })
+        self.started_runs.append(
+            {
+                "model_key": model_key,
+                "requested_mode": requested_mode,
+                "run_kind": run_kind,
+                "scope": scope,
+                "data_min_date": data_min_date,
+                "data_max_date": data_max_date,
+            }
+        )
         return f"run-{len(self.started_runs)}"
 
     def fork_for_worker(self):
@@ -2731,7 +3073,9 @@ class ParallelBootstrapSelectionRepository(ParallelSchedulerRepository):
     def get_monitor_runtime_state(self, model_key: str):
         return _runtime_state(model_key)
 
-    def get_latest_refresh_run(self, model_key: str, scope: str, statuses: tuple[str, ...] | None = None):
+    def get_latest_refresh_run(
+        self, model_key: str, scope: str, statuses: tuple[str, ...] | None = None
+    ):
         del model_key, scope, statuses
         return None
 
@@ -2775,7 +3119,9 @@ def test_run_refresh_cycle_bootstrap_clamps_non_positive_bootstrap_limit(capsys)
     assert "reason=max_bootstraps_per_run_reached" in captured.out
 
 
-def test_run_refresh_cycle_scheduler_isolates_unexpected_worker_failure_in_parallel(monkeypatch) -> None:
+def test_run_refresh_cycle_scheduler_isolates_unexpected_worker_failure_in_parallel(
+    monkeypatch,
+) -> None:
     repository = ParallelSchedulerRepository()
     original_worker_cap = settings.max_parallel_refresh_workers
     original_execute_target = refresh_runner_module._execute_target
@@ -2789,7 +3135,9 @@ def test_run_refresh_cycle_scheduler_isolates_unexpected_worker_failure_in_paral
             model_key=target.config.model_key,
             scope=target.scope,
             status="completed",
-            counts=RefreshCounts(models=1, drift_rows=1, quality_rows=0, performance_rows=0, incident_rows=0),
+            counts=RefreshCounts(
+                models=1, drift_rows=1, quality_rows=0, performance_rows=0, incident_rows=0
+            ),
         )
 
     monkeypatch.setattr(refresh_runner_module, "_execute_target", _patched_execute_target)
@@ -2807,7 +3155,9 @@ def test_run_refresh_cycle_scheduler_isolates_unexpected_worker_failure_in_paral
     assert failure.error == "boom"
 
 
-def test_run_refresh_cycle_scheduler_isolates_unexpected_worker_failure_in_serial(monkeypatch) -> None:
+def test_run_refresh_cycle_scheduler_isolates_unexpected_worker_failure_in_serial(
+    monkeypatch,
+) -> None:
     repository = ParallelSchedulerRepository()
     original_worker_cap = settings.max_parallel_refresh_workers
     original_execute_target = refresh_runner_module._execute_target
@@ -2821,7 +3171,9 @@ def test_run_refresh_cycle_scheduler_isolates_unexpected_worker_failure_in_seria
             model_key=target.config.model_key,
             scope=target.scope,
             status="completed",
-            counts=RefreshCounts(models=1, drift_rows=1, quality_rows=0, performance_rows=0, incident_rows=0),
+            counts=RefreshCounts(
+                models=1, drift_rows=1, quality_rows=0, performance_rows=0, incident_rows=0
+            ),
         )
 
     monkeypatch.setattr(refresh_runner_module, "_execute_target", _patched_execute_target)
@@ -2872,21 +3224,25 @@ def test_run_refresh_cycle_records_failed_run_when_source_range_lookup_errors() 
 class StaleRunningRepository(StubRepository):
     def __init__(self) -> None:
         super().__init__()
-        self.runtime_state = type("State", (), {
-            "model_key": self.config.model_key,
-            "bootstrap_status": "completed",
-            "last_drift_refresh_at": "2026-01-20T00:00:00+00:00",
-            "last_performance_refresh_at": None,
-            "next_drift_due_at": "2026-01-20T00:00:00+00:00",
-            "next_performance_due_at": None,
-            "last_label_watermark": None,
-            "last_run_status": "running",
-            "last_run_error": None,
-            "last_run_started_at": "2026-01-20T00:00:00+00:00",
-            "last_run_completed_at": None,
-            "backoff_until": None,
-            "consecutive_failures": 0,
-        })()
+        self.runtime_state = type(
+            "State",
+            (),
+            {
+                "model_key": self.config.model_key,
+                "bootstrap_status": "completed",
+                "last_drift_refresh_at": "2026-01-20T00:00:00+00:00",
+                "last_performance_refresh_at": None,
+                "next_drift_due_at": "2026-01-20T00:00:00+00:00",
+                "next_performance_due_at": None,
+                "last_label_watermark": None,
+                "last_run_status": "running",
+                "last_run_error": None,
+                "last_run_started_at": "2026-01-20T00:00:00+00:00",
+                "last_run_completed_at": None,
+                "backoff_until": None,
+                "consecutive_failures": 0,
+            },
+        )()
         self.stale_runs = [{"run_id": "stale-run-1", "model_key": self.config.model_key}]
         self.upserted_states: list[object] = []
 
@@ -2902,7 +3258,9 @@ class StaleRunningRepository(StubRepository):
         assert started_before
         return list(self.stale_runs)
 
-    def get_latest_refresh_run(self, model_key: str, scope: str, statuses: tuple[str, ...] | None = None):
+    def get_latest_refresh_run(
+        self, model_key: str, scope: str, statuses: tuple[str, ...] | None = None
+    ):
         del model_key, scope, statuses
         return None
 
@@ -2931,35 +3289,45 @@ class FakeReadModel:
 
     def replace_dashboard_projection(self, *, configs, summary, incidents) -> None:
         self.ensure_schema()
-        self.synced.append({
-            "configs": configs,
-            "summary": summary,
-            "incidents": incidents,
-        })
+        self.synced.append(
+            {
+                "configs": configs,
+                "summary": summary,
+                "incidents": incidents,
+            }
+        )
 
     def get_monitor_summary(self) -> pd.DataFrame:
-        return pd.DataFrame([{
-            "model_key": "payments_risk_v1",
-            "display_name": "Payments Risk",
-            "max_psi": 0.51,
-            "feature_count": 2,
-            "latest_window_end": "2026-01-21",
-            "total_rows": 140,
-            "latest_data_date": "2026-01-21",
-            "last_refresh_at": "2026-01-21T12:00:00+00:00",
-            "open_incident_count": 2,
-        }])
+        return pd.DataFrame(
+            [
+                {
+                    "model_key": "payments_risk_v1",
+                    "display_name": "Payments Risk",
+                    "max_psi": 0.51,
+                    "feature_count": 2,
+                    "latest_window_end": "2026-01-21",
+                    "total_rows": 140,
+                    "latest_data_date": "2026-01-21",
+                    "last_refresh_at": "2026-01-21T12:00:00+00:00",
+                    "open_incident_count": 2,
+                }
+            ]
+        )
 
     def get_open_incidents(self) -> pd.DataFrame:
-        return pd.DataFrame([{
-            "model_key": "payments_risk_v1",
-            "feature_name": "amount",
-            "metric_name": "psi",
-            "severity": "critical",
-            "metric_value": 0.51,
-            "window_end": "2026-01-21",
-            "observed_at": "2026-01-21T12:00:00+00:00",
-        }])
+        return pd.DataFrame(
+            [
+                {
+                    "model_key": "payments_risk_v1",
+                    "feature_name": "amount",
+                    "metric_name": "psi",
+                    "severity": "critical",
+                    "metric_value": 0.51,
+                    "window_end": "2026-01-21",
+                    "observed_at": "2026-01-21T12:00:00+00:00",
+                }
+            ]
+        )
 
 
 class EmptyReadModel(FakeReadModel):

@@ -3,7 +3,10 @@ from __future__ import annotations
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
-from model_landscape.domain.performance_metrics import default_primary_performance_metric, performance_metric_options
+from model_landscape.domain.performance_metrics import (
+    default_primary_performance_metric,
+    performance_metric_options,
+)
 from model_landscape.ui.styles import DROPDOWN_STYLE
 
 
@@ -111,7 +114,14 @@ def layout():
                     dbc.Col(
                         [
                             dbc.Label("Bin Count", className="text-muted"),
-                            dbc.Input(id="perf-bin-count-input", type="number", min=2, max=200, step=1, value=40),
+                            dbc.Input(
+                                id="perf-bin-count-input",
+                                type="number",
+                                min=2,
+                                max=200,
+                                step=1,
+                                value=40,
+                            ),
                         ],
                         md=2,
                     ),
@@ -149,8 +159,19 @@ def layout():
                 [
                     dbc.Col(
                         [
-                            dbc.Label("Outlier Parameter", id="perf-outlier-value-label", className="text-muted"),
-                            dbc.Input(id="perf-outlier-value-input", type="number", min=0, step=0.1, value=1.0, disabled=True),
+                            dbc.Label(
+                                "Outlier Parameter",
+                                id="perf-outlier-value-label",
+                                className="text-muted",
+                            ),
+                            dbc.Input(
+                                id="perf-outlier-value-input",
+                                type="number",
+                                min=0,
+                                step=0.1,
+                                value=1.0,
+                                disabled=True,
+                            ),
                             html.Small(
                                 "Percentile Clip uses P / 100-P clipping. IQR Fence uses Q1 - K*IQR to Q3 + K*IQR.",
                                 id="perf-outlier-value-help",

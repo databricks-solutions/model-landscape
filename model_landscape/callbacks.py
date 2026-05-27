@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import logging
 import os
 import re
+from dataclasses import replace
 from datetime import datetime, timezone
 from threading import Lock
 from time import monotonic
@@ -11,15 +11,15 @@ from urllib.parse import parse_qs, urlencode
 
 import dash_bootstrap_components as dbc
 import pandas as pd
-from dash import Input, Output, State, dcc, html, ctx, no_update
+from dash import Input, Output, State, ctx, dcc, html, no_update
 
 from model_landscape.backend import DashboardBackend, build_dashboard_backend
 from model_landscape.config import settings
 from model_landscape.domain.models import (
     DRIFT_CADENCE_PRESETS,
+    PERFORMANCE_CADENCE_PRESETS,
     MLflowLineage,
     MonitorConfig,
-    PERFORMANCE_CADENCE_PRESETS,
 )
 from model_landscape.domain.performance_metrics import (
     default_performance_metric_names,
@@ -28,10 +28,17 @@ from model_landscape.domain.performance_metrics import (
     performance_metric_options,
 )
 from model_landscape.pages import onboarding
-from model_landscape.services.class_filters import normalize_class_filter, supports_binary_class_filters
+from model_landscape.services.class_filters import (
+    normalize_class_filter,
+    supports_binary_class_filters,
+)
 from model_landscape.services.control_plane import PermanentDeleteUnsupportedError
 from model_landscape.services.inference_contracts import build_inference_contract
-from model_landscape.services.onboarding import baseline_label, build_default_baseline, build_fixed_baseline
+from model_landscape.services.onboarding import (
+    baseline_label,
+    build_default_baseline,
+    build_fixed_baseline,
+)
 from model_landscape.services.refresh_jobs import (
     SCHEDULE_INTERVAL_OPTIONS,
     is_refresh_job_configuration_error,
@@ -51,8 +58,17 @@ from model_landscape.ui.components import (
     make_wizard_step,
 )
 
-
-_NUMERIC_TYPE_TOKENS = ("tinyint", "smallint", "int", "bigint", "float", "double", "decimal", "numeric", "real")
+_NUMERIC_TYPE_TOKENS = (
+    "tinyint",
+    "smallint",
+    "int",
+    "bigint",
+    "float",
+    "double",
+    "decimal",
+    "numeric",
+    "real",
+)
 _THRESHOLD_LABELS = {
     "psi": "PSI",
     "js_divergence": "Jensen-Shannon Divergence",
@@ -71,6 +87,7 @@ logger = logging.getLogger(__name__)
 _LAKEBASE_INSTANCE_CACHE_TTL_SECONDS = 60.0
 _lakebase_instances_cache: tuple[float, tuple[str, ...]] | None = None
 _lakebase_instances_cache_lock = Lock()
+
 
 def _workspace_lakebase_instances() -> tuple[str, ...]:
     global _lakebase_instances_cache
@@ -135,7 +152,9 @@ def _callback_error_panel(
     )
 
 
-def _normalize_top_n(value: object, *, default: int = 10, minimum: int = 1, maximum: int = 50) -> int:
+def _normalize_top_n(
+    value: object, *, default: int = 10, minimum: int = 1, maximum: int = 50
+) -> int:
     try:
         numeric = int(value or default)
     except (TypeError, ValueError):
@@ -181,18 +200,24 @@ def _coerce_threshold_input(metric: str, level: str, value: object) -> float:
         raise ValueError(f"{_THRESHOLD_LABELS.get(metric, metric)} {level.title()} is required.")
     numeric_value = float(numeric)
     if numeric_value < 0:
-        raise ValueError(f"{_THRESHOLD_LABELS.get(metric, metric)} {level.title()} must be non-negative.")
+        raise ValueError(
+            f"{_THRESHOLD_LABELS.get(metric, metric)} {level.title()} must be non-negative."
+        )
     return numeric_value
 
 
-def _collect_threshold_overrides_from_inputs(values: dict[str, tuple[object, object]]) -> dict[str, dict[str, float]]:
+def _collect_threshold_overrides_from_inputs(
+    values: dict[str, tuple[object, object]],
+) -> dict[str, dict[str, float]]:
     overrides: dict[str, dict[str, float]] = {}
     for metric in THRESHOLD_METRICS:
         warning_raw, critical_raw = values[metric]
         warning_value = _coerce_threshold_input(metric, "warning", warning_raw)
         critical_value = _coerce_threshold_input(metric, "critical", critical_raw)
         if critical_value <= warning_value:
-            raise ValueError(f"{_THRESHOLD_LABELS.get(metric, metric)} Critical must be greater than Warning.")
+            raise ValueError(
+                f"{_THRESHOLD_LABELS.get(metric, metric)} Critical must be greater than Warning."
+            )
         default_warning, default_critical = get_thresholds(metric)
         if warning_value != default_warning or critical_value != default_critical:
             overrides[metric] = {"warning": warning_value, "critical": critical_value}
@@ -200,7 +225,10 @@ def _collect_threshold_overrides_from_inputs(values: dict[str, tuple[object, obj
 
 
 def _schedule_interval_options() -> list[dict[str, object]]:
-    return [{"label": _SCHEDULE_INTERVAL_LABELS[value], "value": value} for value in SCHEDULE_INTERVAL_OPTIONS]
+    return [
+        {"label": _SCHEDULE_INTERVAL_LABELS[value], "value": value}
+        for value in SCHEDULE_INTERVAL_OPTIONS
+    ]
 
 
 def _compute_guidance_block(
@@ -212,7 +240,11 @@ def _compute_guidance_block(
     payload = diagnostics or {}
     summary = payload.get("summary") or {}
     shared = shared_schedule or {}
-    interval_hours = int(shared.get("current_interval_hours") or 1) if str(shared.get("current_interval_hours") or "").strip() else None
+    interval_hours = (
+        int(shared.get("current_interval_hours") or 1)
+        if str(shared.get("current_interval_hours") or "").strip()
+        else None
+    )
     footprint = str(summary.get("compute_footprint") or "No compute footprint data yet")
     footprint_category = str(summary.get("compute_footprint_category") or "no_data")
     median_duration = _format_duration_ms(summary.get("median_duration_ms"))
@@ -340,10 +372,9 @@ def _breakdown_has_degradation(feature_frame: pd.DataFrame, contributors: pd.Dat
 def _breakdown_state_matches(state: object, *, model_id: str, metric_name: str) -> bool:
     if not isinstance(state, dict):
         return False
-    return (
-        str(state.get("model_id") or "") == str(model_id or "")
-        and str(state.get("metric_name") or "") == str(metric_name or "")
-    )
+    return str(state.get("model_id") or "") == str(model_id or "") and str(
+        state.get("metric_name") or ""
+    ) == str(metric_name or "")
 
 
 def _breakdown_state_payload(
@@ -359,7 +390,9 @@ def _breakdown_state_payload(
         "metric_name": metric_name,
         "source": source,
         "degradation_detected": bool(degradation_detected),
-        "worst_weighted_delta": 0.0 if worst_weighted_delta is None else float(worst_weighted_delta),
+        "worst_weighted_delta": 0.0
+        if worst_weighted_delta is None
+        else float(worst_weighted_delta),
     }
 
 
@@ -437,10 +470,7 @@ def _manual_refresh_unavailable_message(model_key: str, error: Exception) -> str
         "If no shared refresh workflow exists yet, deploy or create it first, then set REFRESH_JOB_ID (preferred) or REFRESH_JOB_NAME in the app environment and redeploy the app."
     )
     if is_refresh_job_configuration_error(error):
-        return (
-            f"Could not trigger the initial refresh for {model_key}. "
-            f"{detail}"
-        )
+        return f"Could not trigger the initial refresh for {model_key}. {detail}"
     return (
         f"Could not trigger the initial refresh for {model_key}. "
         "The shared workflow can still pick it up on its next hourly run once job permissions are fixed."
@@ -456,7 +486,9 @@ def _comparison_history_message(window_count: int, granularity: str = "daily") -
     if window_count >= 2:
         return None
     if granularity == "daily":
-        return "Only one comparison window is available. Run more refreshes to see trends over time."
+        return (
+            "Only one comparison window is available. Run more refreshes to see trends over time."
+        )
     return (
         f"Only one {granularity} comparison window is available. "
         "Run more refreshes to make granularity trends meaningful."
@@ -474,10 +506,7 @@ def _configured_performance_metric_names(config: object | None) -> list[str]:
     if config is None:
         return list(default_performance_metric_names("classification"))
     problem_type = getattr(config, "problem_type", "classification")
-    allowed_values = {
-        option["value"]
-        for option in performance_metric_options(problem_type)
-    }
+    allowed_values = {option["value"] for option in performance_metric_options(problem_type)}
     metric_names = [
         str(metric_name).strip().lower()
         for metric_name in (getattr(config, "performance_metric_names", ()) or ())
@@ -489,7 +518,11 @@ def _configured_performance_metric_names(config: object | None) -> list[str]:
 
 
 def _configured_default_performance_metric(config: object | None) -> str:
-    problem_type = getattr(config, "problem_type", "classification") if config is not None else "classification"
+    problem_type = (
+        getattr(config, "problem_type", "classification")
+        if config is not None
+        else "classification"
+    )
     metric_names = _configured_performance_metric_names(config)
     requested_default = str(getattr(config, "default_performance_metric", "") or "").strip().lower()
     if requested_default in metric_names:
@@ -617,9 +650,13 @@ def _render_refresh_diagnostics(diagnostics: dict | None) -> html.Div:
     state = str(payload.get("state") or "no_runs").strip() or "no_runs"
     recent_runs = payload.get("recent_runs") or []
     if state == "no_runs":
-        return html.Div("No refresh runs yet. No compute footprint data yet.", className="text-muted")
+        return html.Div(
+            "No refresh runs yet. No compute footprint data yet.", className="text-muted"
+        )
 
-    recommendations = [str(item).strip() for item in summary.get("recommendations") or [] if str(item).strip()]
+    recommendations = [
+        str(item).strip() for item in summary.get("recommendations") or [] if str(item).strip()
+    ]
     recommendation_block = (
         html.Ul([html.Li(text) for text in recommendations], className="text-muted mb-3")
         if recommendations
@@ -671,7 +708,9 @@ def _render_refresh_diagnostics(diagnostics: dict | None) -> html.Div:
                     "Success Rate",
                     f"{float(summary.get('success_rate_pct') or 0.0):.1f}%",
                     f"{int(summary.get('successful_run_count') or 0)}/{int(summary.get('recent_run_count') or 0)} recent runs",
-                    "success" if float(summary.get("success_rate_pct") or 0.0) >= 80.0 else "warning",
+                    "success"
+                    if float(summary.get("success_rate_pct") or 0.0) >= 80.0
+                    else "warning",
                 ),
                 md=3,
             ),
@@ -680,7 +719,9 @@ def _render_refresh_diagnostics(diagnostics: dict | None) -> html.Div:
                     "Compute Footprint",
                     str(summary.get("compute_footprint") or "No compute footprint data yet"),
                     "Advisory from median duration and scanned rows",
-                    "warning" if str(summary.get("compute_footprint_category") or "") in {"elevated", "high"} else "secondary",
+                    "warning"
+                    if str(summary.get("compute_footprint_category") or "") in {"elevated", "high"}
+                    else "secondary",
                 ),
                 md=3,
             ),
@@ -712,13 +753,17 @@ def _render_refresh_diagnostics(diagnostics: dict | None) -> html.Div:
                 "recommendation": "Recommendation",
             }
         )
-        recent_runs_frame["Total Duration"] = recent_runs_frame["Total Duration"].apply(_format_duration_ms)
+        recent_runs_frame["Total Duration"] = recent_runs_frame["Total Duration"].apply(
+            _format_duration_ms
+        )
     return html.Div(
         [
             state_alert if state_alert is not None else html.Div(),
             summary_cards,
             html.H6("Recommendations", className="text-light mb-2"),
-            recommendation_block if recommendations else html.Div("No diagnostics recommendations yet.", className="text-muted mb-3"),
+            recommendation_block
+            if recommendations
+            else html.Div("No diagnostics recommendations yet.", className="text-muted mb-3"),
             html.H6("Recent Diagnosed Runs", className="text-light mb-2"),
             _render_frame(recent_runs_frame, "No diagnosed runs yet.", max_rows=8),
         ]
@@ -754,11 +799,7 @@ def _render_incidents_page(
         return make_empty_state("No incidents recorded yet.", icon="fas fa-triangle-exclamation")
 
     critical_open = (
-        int(
-            (
-                open_filtered["severity"].astype(str).str.lower() == "critical"
-            ).sum()
-        )
+        int((open_filtered["severity"].astype(str).str.lower() == "critical").sum())
         if not open_filtered.empty and "severity" in open_filtered.columns
         else 0
     )
@@ -769,10 +810,31 @@ def _render_incidents_page(
     )
     summary_row = dbc.Row(
         [
-            dbc.Col(make_metric_card("Open Incidents", str(len(open_filtered)), "Current open rows"), md=3),
-            dbc.Col(make_metric_card("Critical", str(critical_open), "Open critical incidents", "danger" if critical_open else "secondary"), md=3),
-            dbc.Col(make_metric_card("Affected Monitors", str(affected_monitors), "With open incidents"), md=3),
-            dbc.Col(make_metric_card("Recent Events", str(len(history_filtered)), "Lifecycle rows in view"), md=3),
+            dbc.Col(
+                make_metric_card("Open Incidents", str(len(open_filtered)), "Current open rows"),
+                md=3,
+            ),
+            dbc.Col(
+                make_metric_card(
+                    "Critical",
+                    str(critical_open),
+                    "Open critical incidents",
+                    "danger" if critical_open else "secondary",
+                ),
+                md=3,
+            ),
+            dbc.Col(
+                make_metric_card(
+                    "Affected Monitors", str(affected_monitors), "With open incidents"
+                ),
+                md=3,
+            ),
+            dbc.Col(
+                make_metric_card(
+                    "Recent Events", str(len(history_filtered)), "Lifecycle rows in view"
+                ),
+                md=3,
+            ),
         ],
         className="g-3 mb-4",
     )
@@ -793,8 +855,7 @@ def _render_incidents_page(
                 )
                 if column in open_filtered.columns
             ]
-        ]
-        .rename(
+        ].rename(
             columns={
                 "display_name": "Monitor",
                 "model_key": "Model Key",
@@ -827,8 +888,7 @@ def _render_incidents_page(
                 )
                 if column in history_filtered.columns
             ]
-        ]
-        .rename(
+        ].rename(
             columns={
                 "display_name": "Monitor",
                 "model_key": "Model Key",
@@ -852,7 +912,9 @@ def _render_incidents_page(
             _render_frame(open_frame, "No open incidents for the current filters.", max_rows=20),
             html.Hr(),
             html.H6("Recent Incident History", className="text-light mb-2"),
-            _render_frame(history_frame, "No incident history for the current filters.", max_rows=20),
+            _render_frame(
+                history_frame, "No incident history for the current filters.", max_rows=20
+            ),
         ]
     )
 
@@ -864,7 +926,9 @@ def _option_list(columns: list[str], include_blank: bool = False) -> list[dict]:
     return options
 
 
-def _guess_column(columns: list[str], patterns: tuple[str, ...], *, fallback_first: bool = True) -> str:
+def _guess_column(
+    columns: list[str], patterns: tuple[str, ...], *, fallback_first: bool = True
+) -> str:
     lowered = {column.lower(): column for column in columns}
     for pattern in patterns:
         for lower, original in lowered.items():
@@ -876,18 +940,37 @@ def _guess_column(columns: list[str], patterns: tuple[str, ...], *, fallback_fir
 
 
 def _guess_defaults(table_name: str, columns: list[str]) -> dict:
-    timestamp_col = _guess_column(columns, ("event_ts", "timestamp", "datetime", "date", "time", "_ts"))
+    timestamp_col = _guess_column(
+        columns, ("event_ts", "timestamp", "datetime", "date", "time", "_ts")
+    )
     model_id_col = _guess_column(columns, ("model_id", "model", "model_name"), fallback_first=False)
     prediction_col = _guess_column(columns, ("prediction", "score", "probability", "prob"))
     model_version_col = _guess_column(columns, ("model_version", "version"), fallback_first=False)
-    prediction_score_col = _guess_column(columns, ("prediction_proba", "prediction_score", "probability", "score"), fallback_first=False)
-    entity_id_col = _guess_column(columns, ("entity_id", "request_id", "user_id", "account_id", "id"), fallback_first=False)
+    prediction_score_col = _guess_column(
+        columns,
+        ("prediction_proba", "prediction_score", "probability", "score"),
+        fallback_first=False,
+    )
+    entity_id_col = _guess_column(
+        columns, ("entity_id", "request_id", "user_id", "account_id", "id"), fallback_first=False
+    )
     source_label_col = _guess_column(columns, ("label", "target", "actual"), fallback_first=False)
-    reserved = {timestamp_col, model_id_col, prediction_col, model_version_col, prediction_score_col, source_label_col}
+    reserved = {
+        timestamp_col,
+        model_id_col,
+        prediction_col,
+        model_version_col,
+        prediction_score_col,
+        source_label_col,
+    }
     features = [column for column in columns if column not in reserved and column != entity_id_col]
     categorical = [
-        column for column in features
-        if any(token in column.lower() for token in ("country", "segment", "region", "category", "type"))
+        column
+        for column in features
+        if any(
+            token in column.lower()
+            for token in ("country", "segment", "region", "category", "type")
+        )
     ]
     table_leaf = table_name.split(".")[-1] if table_name else "monitor"
     return {
@@ -897,9 +980,13 @@ def _guess_defaults(table_name: str, columns: list[str]) -> dict:
         "model_id_col": model_id_col,
         "prediction_col": prediction_col,
         "model_version_col": model_version_col,
-        "prediction_score_col": prediction_score_col if prediction_score_col != prediction_col else "",
+        "prediction_score_col": prediction_score_col
+        if prediction_score_col != prediction_col
+        else "",
         "entity_id_col": entity_id_col,
-        "source_label_col": source_label_col if source_label_col not in {timestamp_col, model_id_col, prediction_col} else "",
+        "source_label_col": source_label_col
+        if source_label_col not in {timestamp_col, model_id_col, prediction_col}
+        else "",
         "features": features,
         "categorical": [column for column in categorical if column in features],
         "slices": [column for column in categorical if column in features],
@@ -948,10 +1035,18 @@ def _feature_candidates(scan_data: dict | None, reserved_columns: list[str | Non
 def _session_config(data: dict | None) -> dict:
     payload = data or {}
     return {
-        "control_plane_catalog": (payload.get("control_plane_catalog") or settings.control_plane_catalog).strip(),
-        "control_plane_schema": (payload.get("control_plane_schema") or settings.control_plane_schema).strip(),
-        "lakebase_instance_name": (payload.get("lakebase_instance_name") or settings.lakebase_instance_name).strip(),
-        "lakebase_database_name": (payload.get("lakebase_database_name") or settings.lakebase_database_name).strip(),
+        "control_plane_catalog": (
+            payload.get("control_plane_catalog") or settings.control_plane_catalog
+        ).strip(),
+        "control_plane_schema": (
+            payload.get("control_plane_schema") or settings.control_plane_schema
+        ).strip(),
+        "lakebase_instance_name": (
+            payload.get("lakebase_instance_name") or settings.lakebase_instance_name
+        ).strip(),
+        "lakebase_database_name": (
+            payload.get("lakebase_database_name") or settings.lakebase_database_name
+        ).strip(),
         "lakebase_schema": (payload.get("lakebase_schema") or settings.lakebase_schema).strip(),
     }
 
@@ -967,7 +1062,9 @@ def _control_plane_ready(
 ) -> bool:
     if not ready_state:
         return False
-    requested_lakebase = bool((lakebase_instance_name or "").strip() or (lakebase_database_name or "").strip())
+    requested_lakebase = bool(
+        (lakebase_instance_name or "").strip() or (lakebase_database_name or "").strip()
+    )
     recorded_catalog = str(ready_state.get("control_plane_catalog") or "").strip()
     recorded_schema = str(ready_state.get("control_plane_schema") or "").strip()
     recorded_lakebase_instance = str(ready_state.get("lakebase_instance_name") or "").strip()
@@ -990,14 +1087,21 @@ def _control_plane_ready(
 
 
 def _workspace_readiness_mode(readiness_state: dict | None) -> str:
-    return str((readiness_state or {}).get("overall_mode") or "not_ready").strip().lower() or "not_ready"
+    return (
+        str((readiness_state or {}).get("overall_mode") or "not_ready").strip().lower()
+        or "not_ready"
+    )
 
 
-def _workspace_readiness_for_session(ready_state: dict | None, session_data: dict | None) -> dict[str, object]:
+def _workspace_readiness_for_session(
+    ready_state: dict | None, session_data: dict | None
+) -> dict[str, object]:
     session = _session_config(session_data)
     readiness = validate_workspace_readiness(
         control_plane_ready=_ready_for_session(ready_state, session),
-        lakebase_requested=bool(session["lakebase_instance_name"] or session["lakebase_database_name"]),
+        lakebase_requested=bool(
+            session["lakebase_instance_name"] or session["lakebase_database_name"]
+        ),
     )
     payload = workspace_readiness_payload(readiness)
     payload.update(
@@ -1019,14 +1123,19 @@ def _render_workspace_readiness(readiness_state: dict | None) -> html.Div:
         "fully_ready": "Workspace readiness is green. The app can save a monitor and trigger bootstrap immediately.",
         "scheduler_only": "Workspace readiness is good enough for onboarding. The app will save monitors and the scheduled shared workflow will pick them up.",
         "not_ready": "Workspace readiness is blocked. Fix the missing wiring below before onboarding a monitor.",
-    }.get(mode, "Workspace readiness is blocked. Fix the missing wiring below before onboarding a monitor.")
+    }.get(
+        mode,
+        "Workspace readiness is blocked. Fix the missing wiring below before onboarding a monitor.",
+    )
     mode_color = {
         "fully_ready": "success",
         "scheduler_only": "secondary",
         "not_ready": "danger",
     }.get(mode, "danger")
 
-    configured_via = str(readiness.get("refresh_workflow_configured_via") or "none").strip() or "none"
+    configured_via = (
+        str(readiness.get("refresh_workflow_configured_via") or "none").strip() or "none"
+    )
     configured_value = str(readiness.get("refresh_workflow_configured_value") or "").strip()
     if configured_via == "id":
         wiring_text = f"REFRESH_JOB_ID={configured_value or '(unset)'}"
@@ -1043,7 +1152,10 @@ def _render_workspace_readiness(readiness_state: dict | None) -> html.Div:
         else "Not resolved"
     )
 
-    bootstrap_mode = str(readiness.get("bootstrap_workflow_mode") or "shared_default").strip() or "shared_default"
+    bootstrap_mode = (
+        str(readiness.get("bootstrap_workflow_mode") or "shared_default").strip()
+        or "shared_default"
+    )
     bootstrap_resolved = bool(readiness.get("bootstrap_workflow_resolved"))
     bootstrap_name = str(readiness.get("bootstrap_workflow_name") or "").strip()
     bootstrap_id = readiness.get("bootstrap_workflow_id")
@@ -1054,8 +1166,12 @@ def _render_workspace_readiness(readiness_state: dict | None) -> html.Div:
     elif bootstrap_resolved:
         bootstrap_text = bootstrap_name or "Ready"
     else:
-        bootstrap_configured_via = str(readiness.get("bootstrap_workflow_configured_via") or "none").strip() or "none"
-        bootstrap_configured_value = str(readiness.get("bootstrap_workflow_configured_value") or "").strip()
+        bootstrap_configured_via = (
+            str(readiness.get("bootstrap_workflow_configured_via") or "none").strip() or "none"
+        )
+        bootstrap_configured_value = str(
+            readiness.get("bootstrap_workflow_configured_value") or ""
+        ).strip()
         if bootstrap_configured_via == "id":
             bootstrap_text = f"Configured via BOOTSTRAP_REFRESH_JOB_ID={bootstrap_configured_value or '(unset)'} but not resolved"
         elif bootstrap_configured_via == "name":
@@ -1101,8 +1217,14 @@ def _render_workspace_readiness(readiness_state: dict | None) -> html.Div:
 
     checks = pd.DataFrame(
         [
-            {"check": "Control Plane", "status": "Ready" if readiness.get("control_plane_ready") else "Blocked"},
-            {"check": "SQL Warehouse", "status": "Ready" if readiness.get("warehouse_ready") else "Missing"},
+            {
+                "check": "Control Plane",
+                "status": "Ready" if readiness.get("control_plane_ready") else "Blocked",
+            },
+            {
+                "check": "SQL Warehouse",
+                "status": "Ready" if readiness.get("warehouse_ready") else "Missing",
+            },
             {
                 "check": "Shared Refresh Workflow",
                 "status": "Ready" if readiness.get("refresh_workflow_resolved") else "Missing",
@@ -1117,7 +1239,9 @@ def _render_workspace_readiness(readiness_state: dict | None) -> html.Div:
         ]
     )
 
-    blocking_issues = [str(item) for item in readiness.get("blocking_issues", []) if str(item).strip()]
+    blocking_issues = [
+        str(item) for item in readiness.get("blocking_issues", []) if str(item).strip()
+    ]
     warnings = [str(item) for item in readiness.get("warnings", []) if str(item).strip()]
     issue_block = html.Div(
         [
@@ -1125,10 +1249,7 @@ def _render_workspace_readiness(readiness_state: dict | None) -> html.Div:
                 dbc.Alert(message, color="danger", className="py-2 mb-2")
                 for message in blocking_issues
             ],
-            *[
-                dbc.Alert(message, color="warning", className="py-2 mb-2")
-                for message in warnings
-            ],
+            *[dbc.Alert(message, color="warning", className="py-2 mb-2") for message in warnings],
         ]
     )
 
@@ -1171,7 +1292,9 @@ def _monitor_status_text(status: str | None) -> str:
     return "Archived" if str(status or "").strip().lower() == "inactive" else "Active"
 
 
-def _monitor_option_label(display_name: str | None, model_key: str | None, *, status: str | None = None) -> str:
+def _monitor_option_label(
+    display_name: str | None, model_key: str | None, *, status: str | None = None
+) -> str:
     name_text = str(display_name or model_key or "Unnamed Monitor").strip()
     key_text = str(model_key or "").strip()
     if not key_text:
@@ -1224,7 +1347,9 @@ def _suggest_unique_model_key(base_key: str | None, existing_keys: set[str]) -> 
     return f"{candidate}_{suffix}"
 
 
-def _resolve_reference_model_id(global_model_id: str | None, reference_model_id: str | None) -> str | None:
+def _resolve_reference_model_id(
+    global_model_id: str | None, reference_model_id: str | None
+) -> str | None:
     selected = str(reference_model_id or "").strip()
     if selected:
         return selected
@@ -1232,7 +1357,9 @@ def _resolve_reference_model_id(global_model_id: str | None, reference_model_id:
     return selected or None
 
 
-def _get_monitor_config_for_reference(backend: DashboardBackend, model_id: str) -> MonitorConfig | None:
+def _get_monitor_config_for_reference(
+    backend: DashboardBackend, model_id: str
+) -> MonitorConfig | None:
     try:
         return backend.get_monitor_config(model_id, status=None)
     except TypeError:
@@ -1261,7 +1388,10 @@ def _resolve_monitor_config_by_key(
             return matches[0], None
         if len(matches) > 1:
             if fail_if_ambiguous:
-                return None, f"Multiple monitors currently share model key {normalized_key}. Resolve that collision before using lifecycle actions."
+                return (
+                    None,
+                    f"Multiple monitors currently share model key {normalized_key}. Resolve that collision before using lifecycle actions.",
+                )
             return matches[0], None
         return None, f"Selected monitor {normalized_key} no longer exists."
     config = _get_monitor_config_for_reference(backend, normalized_key)
@@ -1290,7 +1420,9 @@ def _ready_for_session(ready_state: dict | None, session_data: dict | None) -> b
     recorded_lakebase_instance = str(ready_state.get("lakebase_instance_name") or "").strip()
     recorded_lakebase_database = str(ready_state.get("lakebase_database_name") or "").strip()
     recorded_lakebase_schema = str(ready_state.get("lakebase_schema") or "").strip()
-    requested_lakebase = bool(session["lakebase_instance_name"] or session["lakebase_database_name"])
+    requested_lakebase = bool(
+        session["lakebase_instance_name"] or session["lakebase_database_name"]
+    )
     return bool(
         recorded_catalog
         and recorded_schema
@@ -1311,10 +1443,14 @@ def _step_style(is_active: bool) -> dict:
     return {} if is_active else {"display": "none"}
 
 
-def _source_labels_join_col(scan_data: dict | None, entity_id_col: str | None, labels_join_col: str | None) -> str | None:
+def _source_labels_join_col(
+    scan_data: dict | None, entity_id_col: str | None, labels_join_col: str | None
+) -> str | None:
     if not isinstance(scan_data, dict):
         return None
-    columns = {str(column).strip() for column in scan_data.get("columns", []) if str(column).strip()}
+    columns = {
+        str(column).strip() for column in scan_data.get("columns", []) if str(column).strip()
+    }
     shared_join_col = (labels_join_col or "").strip()
     if shared_join_col and shared_join_col in columns:
         return shared_join_col
@@ -1409,19 +1545,36 @@ def _review_summary(
     mlflow_experiment_name: str | None,
     mlflow_registered_model_name: str | None,
 ) -> html.Div:
-    label_source = str(labels_table or "").strip() if str(labels_table or "").strip() else (str(source_label_col or "").strip() or "none")
+    label_source = (
+        str(labels_table or "").strip()
+        if str(labels_table or "").strip()
+        else (str(source_label_col or "").strip() or "none")
+    )
     problem_type_text = str(problem_type or "classification").strip() or "classification"
-    performance_metric_text = ", ".join(performance_metric_label(metric_name) for metric_name in (performance_metric_names or ())) or "Default"
-    default_performance_metric_text = performance_metric_label(default_performance_metric or default_primary_performance_metric(problem_type_text))
+    performance_metric_text = (
+        ", ".join(
+            performance_metric_label(metric_name)
+            for metric_name in (performance_metric_names or ())
+        )
+        or "Default"
+    )
+    default_performance_metric_text = performance_metric_label(
+        default_performance_metric or default_primary_performance_metric(problem_type_text)
+    )
     drift_cadence_text = str(drift_cadence_preset or "6h").strip() or "6h"
     performance_cadence_text = str(performance_cadence_preset or "disabled").strip() or "disabled"
     baseline_policy = (
         build_fixed_baseline(str(baseline_start or "").strip(), str(baseline_end or "").strip())
-        if str(baseline_kind or "rolling").strip() == "fixed" and str(baseline_start or "").strip() and str(baseline_end or "").strip()
+        if str(baseline_kind or "rolling").strip() == "fixed"
+        and str(baseline_start or "").strip()
+        and str(baseline_end or "").strip()
         else build_default_baseline(int(baseline_days or 7))
     )
     rows = [
-        ("Control Plane", f"{(control_plane_catalog or '').strip()}.{(control_plane_schema or '').strip()}"),
+        (
+            "Control Plane",
+            f"{(control_plane_catalog or '').strip()}.{(control_plane_schema or '').strip()}",
+        ),
         ("Source Table", (source_table or "").strip() or "Not scanned yet"),
         ("Display Name", (display_name or "").strip() or "Not set"),
         ("Model Key", (model_key or "").strip() or "Not set"),
@@ -1438,7 +1591,11 @@ def _review_summary(
         (
             "Model Scope",
             (model_id_value or "").strip()
-            or ("Table-scoped monitor" if not str(model_id_col or "").strip() else "All model_id values"),
+            or (
+                "Table-scoped monitor"
+                if not str(model_id_col or "").strip()
+                else "All model_id values"
+            ),
         ),
         ("Version Scope", (model_version_value or "").strip() or "All versions"),
         ("Labels", label_source),
@@ -1510,8 +1667,14 @@ def _render_labels_discovery(
         [
             {"check": "matched_rows", "value": int(validation.get("matched_rows", 0) or 0)},
             {"check": "unmatched_rows", "value": int(validation.get("unmatched_rows", 0) or 0)},
-            {"check": "match_rate_pct", "value": float(validation.get("match_rate_pct", 0.0) or 0.0)},
-            {"check": "duplicate_join_keys", "value": int(validation.get("duplicate_join_keys", 0) or 0)},
+            {
+                "check": "match_rate_pct",
+                "value": float(validation.get("match_rate_pct", 0.0) or 0.0),
+            },
+            {
+                "check": "duplicate_join_keys",
+                "value": int(validation.get("duplicate_join_keys", 0) or 0),
+            },
             {
                 "check": "distinct_label_values",
                 "value": ", ".join(validation.get("distinct_label_values", ())) or "(none)",
@@ -1573,7 +1736,9 @@ def _model_banner(model_id: str | None, backend: DashboardBackend):
         [
             html.I(className="fas fa-robot me-2"),
             html.Strong(model["name"]),
-            html.Span(f" — {model.get('description', '')[:120]}", className="ms-1 text-muted") if model.get("description") else None,
+            html.Span(f" — {model.get('description', '')[:120]}", className="ms-1 text-muted")
+            if model.get("description")
+            else None,
         ],
         color="dark",
         className="py-2 mb-3 border",
@@ -1700,7 +1865,10 @@ def register_callbacks(app) -> None:
                 lakebase_schema=lakebase_schema,
             )
             readiness_mode = _workspace_readiness_mode(workspace_readiness_state)
-            workspace_ready = control_plane_ready and readiness_mode in {"scheduler_only", "fully_ready"}
+            workspace_ready = control_plane_ready and readiness_mode in {
+                "scheduler_only",
+                "fully_ready",
+            }
             source_ready = bool(scan_data and scan_data.get("columns"))
             contract_ready = _monitor_contract_ready(
                 scan_data=scan_data,
@@ -1728,7 +1896,11 @@ def register_callbacks(app) -> None:
                 2: not source_ready,
                 3: not contract_ready,
             }.get(step, False)
-            readiness_issues = [str(item) for item in (workspace_readiness_state or {}).get("blocking_issues", []) if str(item).strip()]
+            readiness_issues = [
+                str(item)
+                for item in (workspace_readiness_state or {}).get("blocking_issues", [])
+                if str(item).strip()
+            ]
             primary_readiness_issue = readiness_issues[0] if readiness_issues else ""
             guidance = {
                 1: (
@@ -1744,7 +1916,9 @@ def register_callbacks(app) -> None:
                             )
                         )
                     ),
-                    "success" if readiness_mode == "fully_ready" else ("info" if readiness_mode == "scheduler_only" else "secondary"),
+                    "success"
+                    if readiness_mode == "fully_ready"
+                    else ("info" if readiness_mode == "scheduler_only" else "secondary"),
                 ),
                 2: (
                     "Enter the inference table and click Discover. Optional labels and MLflow inputs help Model Landscape infer a better draft.",
@@ -1764,7 +1938,9 @@ def register_callbacks(app) -> None:
                             else "Activation is blocked until the workspace readiness checks pass."
                         )
                     ),
-                    "primary" if readiness_mode == "fully_ready" else ("secondary" if readiness_mode == "scheduler_only" else "warning"),
+                    "primary"
+                    if readiness_mode == "fully_ready"
+                    else ("secondary" if readiness_mode == "scheduler_only" else "warning"),
                 ),
             }
             next_labels = {
@@ -1803,7 +1979,10 @@ def register_callbacks(app) -> None:
                 mlflow_registered_model_name=mlflow_registered_model_name,
             )
             return (
-                [make_wizard_step(index + 1, label, step) for index, label in enumerate(onboarding.STEP_LABELS)],
+                [
+                    make_wizard_step(index + 1, label, step)
+                    for index, label in enumerate(onboarding.STEP_LABELS)
+                ],
                 _status_alert(*guidance[step]),
                 _step_style(step == 1),
                 _step_style(step == 2),
@@ -1823,7 +2002,10 @@ def register_callbacks(app) -> None:
             except (TypeError, ValueError):
                 fallback_step = 1
             return (
-                [make_wizard_step(index + 1, label, fallback_step) for index, label in enumerate(onboarding.STEP_LABELS)],
+                [
+                    make_wizard_step(index + 1, label, fallback_step)
+                    for index, label in enumerate(onboarding.STEP_LABELS)
+                ],
                 _status_alert(_callback_error_message("onboarding wizard", error), "danger"),
                 _step_style(fallback_step == 1),
                 _step_style(fallback_step == 2),
@@ -1905,7 +2087,9 @@ def register_callbacks(app) -> None:
         Input("session-config-store", "data"),
         State("reference-monitor-select", "value"),
     )
-    def populate_reference_model_selector(pathname, status_filter, global_model_id, _, session_data, current_value):
+    def populate_reference_model_selector(
+        pathname, status_filter, global_model_id, _, session_data, current_value
+    ):
         if pathname != "/reference":
             return no_update, no_update
         try:
@@ -1913,7 +2097,9 @@ def register_callbacks(app) -> None:
             models = backend.list_reference_models(status=status_filter or "active")
             options = [
                 {
-                    "label": _monitor_option_label(model.get("name"), model.get("id"), status=model.get("status")),
+                    "label": _monitor_option_label(
+                        model.get("name"), model.get("id"), status=model.get("status")
+                    ),
                     "value": model["id"],
                 }
                 for model in models
@@ -1955,12 +2141,23 @@ def register_callbacks(app) -> None:
         try:
             backend = _make_backend(session_data)
             if not model_id:
-                return "No active monitor selected.", html.Div(), _deployment_mode_prompt(session_data)
+                return (
+                    "No active monitor selected.",
+                    html.Div(),
+                    _deployment_mode_prompt(session_data),
+                )
             model = backend.get_model_map().get(model_id)
             if not model:
-                return "Selected monitor no longer exists.", html.Div(), _deployment_mode_prompt(session_data)
+                return (
+                    "Selected monitor no longer exists.",
+                    html.Div(),
+                    _deployment_mode_prompt(session_data),
+                )
             badge = dbc.Badge(
-                [html.I(className="fas fa-exclamation-triangle me-1"), f"{model['open_incident_count']} open incidents"],
+                [
+                    html.I(className="fas fa-exclamation-triangle me-1"),
+                    f"{model['open_incident_count']} open incidents",
+                ],
                 color="danger" if model["open_incident_count"] else "secondary",
                 className="mb-2",
             )
@@ -1975,13 +2172,21 @@ def register_callbacks(app) -> None:
                         f"Features: {model['feature_count']} | Baseline: {model['baseline_label']}",
                         className="text-muted d-block",
                     ),
-                    html.Small(f"Monitoring rows: {model['total_rows']}", className="text-muted d-block"),
+                    html.Small(
+                        f"Monitoring rows: {model['total_rows']}", className="text-muted d-block"
+                    ),
                 ]
             )
             return status, badge, _deployment_mode_prompt(session_data)
         except Exception as error:
             logger.exception("Failed to update sidebar", exc_info=error)
-            return html.Div([_status_alert(_callback_error_message("sidebar status", error), "danger")]), html.Div(), _deployment_mode_prompt(session_data)
+            return (
+                html.Div(
+                    [_status_alert(_callback_error_message("sidebar status", error), "danger")]
+                ),
+                html.Div(),
+                _deployment_mode_prompt(session_data),
+            )
 
     @app.callback(
         Output("drift-model-banner", "children"),
@@ -2013,9 +2218,20 @@ def register_callbacks(app) -> None:
         State("session-config-store", "data"),
         prevent_initial_call=True,
     )
-    def scan_source_table(_, source_table, labels_table, mlflow_experiment_name, mlflow_registered_model_name, session_data):
+    def scan_source_table(
+        _,
+        source_table,
+        labels_table,
+        mlflow_experiment_name,
+        mlflow_registered_model_name,
+        session_data,
+    ):
         if not source_table:
-            return no_update, _status_alert("Enter a fully qualified source table name.", "warning"), no_update
+            return (
+                no_update,
+                _status_alert("Enter a fully qualified source table name.", "warning"),
+                no_update,
+            )
         try:
             backend = _make_backend(session_data)
             discovery = backend.discover_monitor(
@@ -2058,8 +2274,12 @@ def register_callbacks(app) -> None:
                 "model_version_value": discovery.config.model_version_value or "",
                 "prediction_score_col": discovery.config.contract.prediction_score_col or "",
                 "entity_id_col": discovery.config.contract.entity_id_col or "",
-                "source_label_col": "" if discovery.config.labels_table else (discovery.config.contract.label_col or ""),
-                "external_label_col": (discovery.config.contract.label_col or "") if discovery.config.labels_table else "",
+                "source_label_col": ""
+                if discovery.config.labels_table
+                else (discovery.config.contract.label_col or ""),
+                "external_label_col": (discovery.config.contract.label_col or "")
+                if discovery.config.labels_table
+                else "",
                 "labels_join_col": discovery.config.labels_join_col or "",
                 "labels_order_col": discovery.config.labels_order_col or "",
                 "labels_validation": label_validation,
@@ -2075,10 +2295,12 @@ def register_callbacks(app) -> None:
                 "requires_review": discovery.requires_review,
                 "warnings": list(discovery.warnings),
                 "mlflow": {
-                    "experiment_name": discovery.config.mlflow.experiment_name or (mlflow_experiment_name or "").strip(),
+                    "experiment_name": discovery.config.mlflow.experiment_name
+                    or (mlflow_experiment_name or "").strip(),
                     "experiment_id": discovery.config.mlflow.experiment_id or "",
                     "run_id": discovery.config.mlflow.run_id or "",
-                    "registered_model_name": discovery.config.mlflow.registered_model_name or (mlflow_registered_model_name or "").strip(),
+                    "registered_model_name": discovery.config.mlflow.registered_model_name
+                    or (mlflow_registered_model_name or "").strip(),
                     "model_version": discovery.config.mlflow.model_version or "",
                 },
             },
@@ -2122,7 +2344,8 @@ def register_callbacks(app) -> None:
             status_items.append(
                 (
                     "Linked MLflow lineage for this draft."
-                    if discovery.config.mlflow.registered_model_name or discovery.config.mlflow.experiment_name
+                    if discovery.config.mlflow.registered_model_name
+                    or discovery.config.mlflow.experiment_name
                     else "MLflow metadata is available for this draft.",
                     "info",
                 )
@@ -2132,13 +2355,24 @@ def register_callbacks(app) -> None:
         preview_div = html.Div(
             [
                 html.H6("Column Types", className="mb-2"),
-                _render_frame(schema[[column for column in ("col_name", "data_type") if column in schema.columns]], "No schema metadata returned."),
+                _render_frame(
+                    schema[
+                        [column for column in ("col_name", "data_type") if column in schema.columns]
+                    ],
+                    "No schema metadata returned.",
+                ),
                 html.Hr(),
                 html.H6("Sample Rows", className="mb-2"),
                 _render_frame(preview, "No preview rows returned.", max_rows=5),
                 _render_labels_discovery(
                     labels_table=discovery.config.labels_table or "",
-                    label_schema=label_schema[[column for column in ("col_name", "data_type") if column in label_schema.columns]]
+                    label_schema=label_schema[
+                        [
+                            column
+                            for column in ("col_name", "data_type")
+                            if column in label_schema.columns
+                        ]
+                    ]
                     if not label_schema.empty
                     else label_schema,
                     label_preview=label_preview,
@@ -2225,16 +2459,22 @@ def register_callbacks(app) -> None:
                 None,
             )
         columns = scan_data.get("columns", [])
-        defaults = _discovery_defaults(scan_data) or _guess_defaults(scan_data.get("table_name", ""), columns)
+        defaults = _discovery_defaults(scan_data) or _guess_defaults(
+            scan_data.get("table_name", ""), columns
+        )
         try:
             backend = _make_backend(session_data)
-            defaults["model_key"] = _suggest_unique_model_key(defaults.get("model_key"), _existing_monitor_keys(backend))
+            defaults["model_key"] = _suggest_unique_model_key(
+                defaults.get("model_key"), _existing_monitor_keys(backend)
+            )
         except Exception:
             defaults["model_key"] = str(defaults.get("model_key") or "").strip()
         required_options = _option_list(columns)
         optional_options = _option_list(columns, include_blank=True)
         feature_values = defaults.get("feature_columns") or defaults.get("features") or []
-        categorical_values = defaults.get("categorical_columns") or defaults.get("categorical") or []
+        categorical_values = (
+            defaults.get("categorical_columns") or defaults.get("categorical") or []
+        )
         slice_values = defaults.get("slice_columns") or defaults.get("slices") or []
         feature_options = _option_list(feature_values)
         slice_options = _option_list(
@@ -2411,9 +2651,18 @@ def register_callbacks(app) -> None:
         }
         backend = _make_backend(session)
         try:
-            backend.repository.ensure_control_plane(create_catalog="create_catalog" in (create_catalog_value or []))
+            backend.repository.ensure_control_plane(
+                create_catalog="create_catalog" in (create_catalog_value or [])
+            )
         except Exception as error:
-            return _status_alert(_setup_retry_message(error), "danger"), no_update, no_update, no_update, no_update, no_update
+            return (
+                _status_alert(_setup_retry_message(error), "danger"),
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+            )
         readiness_state = _workspace_readiness_for_session(session, session)
         return (
             _status_alert(
@@ -2542,9 +2791,17 @@ def register_callbacks(app) -> None:
         workspace_readiness_state,
     ):
         if not scan_data:
-            return _status_alert("Scan a source table before saving a monitor.", "warning"), no_update, no_update
+            return (
+                _status_alert("Scan a source table before saving a monitor.", "warning"),
+                no_update,
+                no_update,
+            )
         if not feature_columns:
-            return _status_alert("Select at least one feature column.", "warning"), no_update, no_update
+            return (
+                _status_alert("Select at least one feature column.", "warning"),
+                no_update,
+                no_update,
+            )
         discovery = (scan_data or {}).get("discovery", {}) if isinstance(scan_data, dict) else {}
         labels_table = (labels_table or "").strip()
         external_label_col = (external_label_col or "").strip()
@@ -2560,24 +2817,51 @@ def register_callbacks(app) -> None:
             "lakebase_schema": (lakebase_schema or "").strip(),
         }
         if not _ready_for_session(ready_state, session):
-            return _status_alert("Run Setup Control Plane successfully before saving a monitor.", "warning"), no_update, no_update
-        if _workspace_readiness_mode(workspace_readiness_state) not in {"scheduler_only", "fully_ready"}:
-            issues = [str(item) for item in (workspace_readiness_state or {}).get("blocking_issues", []) if str(item).strip()]
+            return (
+                _status_alert(
+                    "Run Setup Control Plane successfully before saving a monitor.", "warning"
+                ),
+                no_update,
+                no_update,
+            )
+        if _workspace_readiness_mode(workspace_readiness_state) not in {
+            "scheduler_only",
+            "fully_ready",
+        }:
+            issues = [
+                str(item)
+                for item in (workspace_readiness_state or {}).get("blocking_issues", [])
+                if str(item).strip()
+            ]
             detail = f" {issues[0]}" if issues else ""
-            return _status_alert(
-                "Validate Workspace Wiring successfully before saving a monitor."
-                f"{detail}",
-                "warning",
-            ), no_update, no_update
+            return (
+                _status_alert(
+                    f"Validate Workspace Wiring successfully before saving a monitor.{detail}",
+                    "warning",
+                ),
+                no_update,
+                no_update,
+            )
         label_col = external_label_col or source_label_col or None
         source_join_col = _source_labels_join_col(scan_data, entity_id_col, labels_join_col)
         if labels_table and (not source_join_col or not labels_join_col or not label_col):
-            return _status_alert(
-                "External labels require External Labels Join Column, External Label Column, and either Entity ID Column or the same join column name in the inference table.",
-                "warning",
-            ), no_update, no_update
+            return (
+                _status_alert(
+                    "External labels require External Labels Join Column, External Label Column, and either Entity ID Column or the same join column name in the inference table.",
+                    "warning",
+                ),
+                no_update,
+                no_update,
+            )
         if model_version_value and not model_version_col:
-            return _status_alert("Monitored Model Version Value requires a mapped Model Version Column.", "warning"), no_update, no_update
+            return (
+                _status_alert(
+                    "Monitored Model Version Value requires a mapped Model Version Column.",
+                    "warning",
+                ),
+                no_update,
+                no_update,
+            )
         try:
             contract = build_inference_contract(
                 columns=scan_data["columns"],
@@ -2598,7 +2882,9 @@ def register_callbacks(app) -> None:
                 source_table=scan_data["table_name"],
                 contract=contract,
                 baseline=(
-                    build_fixed_baseline((baseline_start or "").strip(), (baseline_end or "").strip())
+                    build_fixed_baseline(
+                        (baseline_start or "").strip(), (baseline_end or "").strip()
+                    )
                     if (baseline_kind or "rolling") == "fixed"
                     else build_default_baseline(int(baseline_days or 7))
                 ),
@@ -2612,22 +2898,34 @@ def register_callbacks(app) -> None:
                 default_performance_metric=review_default_performance_metric or None,
                 drift_cadence_preset=review_drift_cadence or "6h",
                 performance_cadence_preset=(
-                    review_performance_cadence
-                    if label_col
-                    else "disabled"
+                    review_performance_cadence if label_col else "disabled"
                 ),
                 schedule_enabled="enabled" in (review_schedule_enabled or []),
                 mlflow=MLflowLineage(
-                    experiment_name=str(((discovery.get("mlflow") or {}).get("experiment_name") or "")).strip() or None,
-                    experiment_id=str(((discovery.get("mlflow") or {}).get("experiment_id") or "")).strip() or None,
-                    run_id=str(((discovery.get("mlflow") or {}).get("run_id") or "")).strip() or None,
-                    registered_model_name=str(((discovery.get("mlflow") or {}).get("registered_model_name") or "")).strip() or None,
-                    model_version=str(((discovery.get("mlflow") or {}).get("model_version") or "")).strip() or None,
+                    experiment_name=str(
+                        (discovery.get("mlflow") or {}).get("experiment_name") or ""
+                    ).strip()
+                    or None,
+                    experiment_id=str(
+                        (discovery.get("mlflow") or {}).get("experiment_id") or ""
+                    ).strip()
+                    or None,
+                    run_id=str((discovery.get("mlflow") or {}).get("run_id") or "").strip() or None,
+                    registered_model_name=str(
+                        (discovery.get("mlflow") or {}).get("registered_model_name") or ""
+                    ).strip()
+                    or None,
+                    model_version=str(
+                        (discovery.get("mlflow") or {}).get("model_version") or ""
+                    ).strip()
+                    or None,
                 ),
                 created_by="app",
             )
             backend = _make_backend(session)
-            existing_config, conflict_error = _resolve_monitor_config_by_key(backend, config.model_key)
+            existing_config, conflict_error = _resolve_monitor_config_by_key(
+                backend, config.model_key
+            )
             if conflict_error and "no longer exists" not in conflict_error.lower():
                 return _status_alert(conflict_error, "danger"), no_update, no_update
             if existing_config:
@@ -2659,20 +2957,28 @@ def register_callbacks(app) -> None:
                 scope="bootstrap",
             )
             run_id_text = f", run_id={trigger.run_id}" if trigger.run_id is not None else ""
-            messages.append((
-                f"Saved monitor {config.model_key}. Refresh job triggered asynchronously (job_id={trigger.job_id}{run_id_text}). Check Overview in a minute.",
-                "success",
-            ))
+            messages.append(
+                (
+                    f"Saved monitor {config.model_key}. Refresh job triggered asynchronously (job_id={trigger.job_id}{run_id_text}). Check Overview in a minute.",
+                    "success",
+                )
+            )
         except Exception as error:
             messages.append((_refresh_job_unavailable_message(config.model_key, error), "warning"))
         non_numeric = _non_numeric_features(feature_columns or [], scan_data)
         if non_numeric:
-            messages.append((
-                "These selected feature columns are not numeric and will be stored in the contract but skipped by the current drift engine: "
-                f"{', '.join(non_numeric)}.",
-                "warning",
-            ))
-        return _status_block(messages), datetime.now(timezone.utc).isoformat(timespec="seconds"), session
+            messages.append(
+                (
+                    "These selected feature columns are not numeric and will be stored in the contract but skipped by the current drift engine: "
+                    f"{', '.join(non_numeric)}.",
+                    "warning",
+                )
+            )
+        return (
+            _status_block(messages),
+            datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            session,
+        )
 
     @app.callback(
         Output("overview-page-body", "children"),
@@ -2687,44 +2993,105 @@ def register_callbacks(app) -> None:
             backend = _make_backend(session_data)
             overview_data = backend.get_overview_rows(metric="psi")
             if not overview_data:
-                return make_empty_state("No monitors onboarded yet. Go to Onboarding to add your first model.", icon="fas fa-plus-circle")
+                return make_empty_state(
+                    "No monitors onboarded yet. Go to Onboarding to add your first model.",
+                    icon="fas fa-plus-circle",
+                )
             normalized_overview: list[dict[str, object]] = []
             for row in overview_data:
                 normalized_row = dict(row)
-                normalized_row["max_metric"] = float(normalized_row.get("max_metric", normalized_row.get("max_psi", 0.0)) or 0.0)
-                normalized_row["avg_metric"] = float(normalized_row.get("avg_metric", normalized_row.get("avg_psi", 0.0)) or 0.0)
+                normalized_row["max_metric"] = float(
+                    normalized_row.get("max_metric", normalized_row.get("max_psi", 0.0)) or 0.0
+                )
+                normalized_row["avg_metric"] = float(
+                    normalized_row.get("avg_metric", normalized_row.get("avg_psi", 0.0)) or 0.0
+                )
                 normalized_overview.append(normalized_row)
 
             computing = sum(1 for row in normalized_overview if row["computing"])
             healthy = sum(
                 1
                 for row in normalized_overview
-                if not row["computing"] and row["max_metric"] < float(row.get("threshold_warning") or 0.0)
+                if not row["computing"]
+                and row["max_metric"] < float(row.get("threshold_warning") or 0.0)
             )
             warning = sum(
                 1
                 for row in normalized_overview
                 if (
                     not row["computing"]
-                    and float(row.get("threshold_warning") or 0.0) <= row["max_metric"] < float(row.get("threshold_critical") or 0.0)
+                    and float(row.get("threshold_warning") or 0.0)
+                    <= row["max_metric"]
+                    < float(row.get("threshold_critical") or 0.0)
                 )
             )
             critical = sum(
                 1
                 for row in normalized_overview
-                if not row["computing"] and row["max_metric"] >= float(row.get("threshold_critical") or 0.0)
+                if not row["computing"]
+                and row["max_metric"] >= float(row.get("threshold_critical") or 0.0)
             )
             summary_row = dbc.Row(
                 [
-                    dbc.Col(make_metric_card("Models Monitored", str(len(normalized_overview)), "Active in production"), md=6, lg=4, xl=2),
-                    dbc.Col(make_metric_card("Healthy", str(healthy), "Below each monitor's warning threshold", "success"), md=6, lg=4, xl=2),
-                    dbc.Col(make_metric_card("Warning", str(warning), "Between each monitor's warning and critical thresholds", "warning"), md=6, lg=4, xl=2),
-                    dbc.Col(make_metric_card("Critical", str(critical), "At or above each monitor's critical threshold", "danger"), md=6, lg=4, xl=2),
-                    dbc.Col(make_metric_card("Computing/Pending", str(computing), "No drift history yet", "info"), md=6, lg=4, xl=2),
+                    dbc.Col(
+                        make_metric_card(
+                            "Models Monitored",
+                            str(len(normalized_overview)),
+                            "Active in production",
+                        ),
+                        md=6,
+                        lg=4,
+                        xl=2,
+                    ),
+                    dbc.Col(
+                        make_metric_card(
+                            "Healthy",
+                            str(healthy),
+                            "Below each monitor's warning threshold",
+                            "success",
+                        ),
+                        md=6,
+                        lg=4,
+                        xl=2,
+                    ),
+                    dbc.Col(
+                        make_metric_card(
+                            "Warning",
+                            str(warning),
+                            "Between each monitor's warning and critical thresholds",
+                            "warning",
+                        ),
+                        md=6,
+                        lg=4,
+                        xl=2,
+                    ),
+                    dbc.Col(
+                        make_metric_card(
+                            "Critical",
+                            str(critical),
+                            "At or above each monitor's critical threshold",
+                            "danger",
+                        ),
+                        md=6,
+                        lg=4,
+                        xl=2,
+                    ),
+                    dbc.Col(
+                        make_metric_card(
+                            "Computing/Pending", str(computing), "No drift history yet", "info"
+                        ),
+                        md=6,
+                        lg=4,
+                        xl=2,
+                    ),
                 ],
                 className="mb-4 g-3",
             )
-            sorted_data = sorted(normalized_overview, key=lambda item: (not item["computing"], item["max_metric"]), reverse=True)
+            sorted_data = sorted(
+                normalized_overview,
+                key=lambda item: (not item["computing"], item["max_metric"]),
+                reverse=True,
+            )
             model_cards = [
                 dbc.Col(
                     dcc.Link(
@@ -2781,7 +3148,8 @@ def register_callbacks(app) -> None:
                                 if row["max_metric"] >= float(row.get("threshold_critical") or 0.0)
                                 else (
                                     "Warning"
-                                    if row["max_metric"] >= float(row.get("threshold_warning") or 0.0)
+                                    if row["max_metric"]
+                                    >= float(row.get("threshold_warning") or 0.0)
                                     else "Healthy"
                                 )
                             )
@@ -2789,14 +3157,25 @@ def register_callbacks(app) -> None:
                         "max_psi": "—" if row["computing"] else round(row["max_metric"], 4),
                         "avg_psi": "—" if row["computing"] else round(row["avg_metric"], 4),
                         "avg_js": "—" if row["computing"] else round(row["avg_js"], 4),
-                        "drifting_features": "Computing/Pending" if row["computing"] else f"{row['drifting_features']} / {row['total_features']}",
+                        "drifting_features": "Computing/Pending"
+                        if row["computing"]
+                        else f"{row['drifting_features']} / {row['total_features']}",
                         "top_drifter": row["top_drifter"],
-                        "max_null_rate": "—" if row["computing"] else round(row["max_null_rate"], 2),
+                        "max_null_rate": "—"
+                        if row["computing"]
+                        else round(row["max_null_rate"], 2),
                     }
                     for row in sorted_data
                 ]
             )
-            return html.Div([summary_row, dbc.Row(model_cards, className="mb-4"), make_chart_card(summary_chart), _render_frame(details, "No overview detail available.")])
+            return html.Div(
+                [
+                    summary_row,
+                    dbc.Row(model_cards, className="mb-4"),
+                    make_chart_card(summary_chart),
+                    _render_frame(details, "No overview detail available."),
+                ]
+            )
         except Exception as error:
             return _callback_error_panel("overview", error, icon="fas fa-plus-circle")
 
@@ -2916,7 +3295,9 @@ def register_callbacks(app) -> None:
         session_data,
     ):
         if not model_id:
-            return _status_alert("Select a monitor before updating drift thresholds.", "warning"), no_update
+            return _status_alert(
+                "Select a monitor before updating drift thresholds.", "warning"
+            ), no_update
         backend = _make_backend(session_data)
         config = backend.get_monitor_config(model_id)
         if not config:
@@ -2941,9 +3322,17 @@ def register_callbacks(app) -> None:
             return _status_alert(str(error), "warning"), no_update
         except Exception as error:
             logger.exception("Failed to update drift thresholds for %s", model_id, exc_info=error)
-            return _status_alert(_user_action_error_message("Updating drift thresholds"), "danger"), no_update
-        action_text = "Reset drift thresholds to defaults." if ctx.triggered_id == "drift-reset-thresholds-btn" else "Saved drift thresholds."
-        return _status_alert(action_text, "success"), datetime.now(timezone.utc).isoformat(timespec="seconds")
+            return _status_alert(
+                _user_action_error_message("Updating drift thresholds"), "danger"
+            ), no_update
+        action_text = (
+            "Reset drift thresholds to defaults."
+            if ctx.triggered_id == "drift-reset-thresholds-btn"
+            else "Saved drift thresholds."
+        )
+        return _status_alert(action_text, "success"), datetime.now(timezone.utc).isoformat(
+            timespec="seconds"
+        )
 
     @app.callback(
         Output("drift-heatmap-container", "children"),
@@ -2983,7 +3372,9 @@ def register_callbacks(app) -> None:
             return no_update, no_update, no_update, no_update
         try:
             if not model_id:
-                empty = make_empty_state("Select a model to inspect drift.", icon="fas fa-wave-square")
+                empty = make_empty_state(
+                    "Select a model to inspect drift.", icon="fas fa-wave-square"
+                )
                 return empty, html.Div(), html.Div(), html.Div()
             backend = _make_backend(session_data)
             config = backend.get_monitor_config(model_id)
@@ -2995,7 +3386,19 @@ def register_callbacks(app) -> None:
                     "Class filters are available only for binary classification monitors with labels.",
                     icon="fas fa-wave-square",
                 )
-                return empty, html.Div([_status_alert("Class filters are available only for binary classification monitors with labels.", "warning")]), html.Div(), html.Div()
+                return (
+                    empty,
+                    html.Div(
+                        [
+                            _status_alert(
+                                "Class filters are available only for binary classification monitors with labels.",
+                                "warning",
+                            )
+                        ]
+                    ),
+                    html.Div(),
+                    html.Div(),
+                )
             drift = backend.get_drift_results(
                 model_id,
                 granularity=granularity or "daily",
@@ -3008,7 +3411,9 @@ def register_callbacks(app) -> None:
                 empty_reason = str(drift.attrs.get("_empty_reason") or "").strip().lower()
                 if class_filter_active:
                     if empty_reason == "no_filtered_rows":
-                        empty_message = "No rows matched the selected class filter in this date range."
+                        empty_message = (
+                            "No rows matched the selected class filter in this date range."
+                        )
                     elif empty_reason == "filtered_source_bounds_unavailable":
                         empty_message = (
                             "Filtered drift history is not available for the full range yet. "
@@ -3023,7 +3428,10 @@ def register_callbacks(app) -> None:
                         empty_message = "Filtered drift history is unavailable until the next refresh populates class-aware daily facts."
                     empty = make_empty_state(empty_message, icon="fas fa-wave-square")
                 else:
-                    empty = make_empty_state("No drift history available yet. Run a refresh to populate this page.", icon="fas fa-wave-square")
+                    empty = make_empty_state(
+                        "No drift history available yet. Run a refresh to populate this page.",
+                        icon="fas fa-wave-square",
+                    )
                 return empty, html.Div(), html.Div(), html.Div()
             normalized_top_n = _normalize_top_n(top_n, default=10, minimum=1, maximum=50)
             ranked_features = _historical_drift_feature_ranking(
@@ -3056,10 +3464,18 @@ def register_callbacks(app) -> None:
                         "secondary",
                     )
                 )
-            timeline_features = ranked_features["feature"].tolist() if "feature" in ranked_features.columns else []
+            timeline_features = (
+                ranked_features["feature"].tolist() if "feature" in ranked_features.columns else []
+            )
             if not timeline_features and "feature" in drift.columns:
-                timeline_features = drift["feature"].dropna().astype(str).drop_duplicates().tolist()[:8]
-            filtered_drift = drift[drift["feature"].isin(timeline_features)].copy() if timeline_features else drift
+                timeline_features = (
+                    drift["feature"].dropna().astype(str).drop_duplicates().tolist()[:8]
+                )
+            filtered_drift = (
+                drift[drift["feature"].isin(timeline_features)].copy()
+                if timeline_features
+                else drift
+            )
             heatmap_scale = charts.describe_drift_heatmap_scale(
                 filtered_drift,
                 metric=metric or "psi",
@@ -3070,7 +3486,9 @@ def register_callbacks(app) -> None:
             if clip_note:
                 notes.append(_status_alert(clip_note, "secondary"))
             title_suffix = f" ({filter_summary})" if filter_summary else ""
-            heatmap_title = f"{(granularity or 'daily').title()} Feature Drift Heatmap{title_suffix}"
+            heatmap_title = (
+                f"{(granularity or 'daily').title()} Feature Drift Heatmap{title_suffix}"
+            )
             return (
                 make_chart_card(
                     charts.build_drift_heatmap(
@@ -3105,8 +3523,17 @@ def register_callbacks(app) -> None:
             )
         except Exception as error:
             logger.exception("Failed to render drift analysis", exc_info=error)
-            empty = make_empty_state("Drift analysis is unavailable right now.", icon="fas fa-wave-square")
-            return empty, html.Div([_status_alert(_callback_error_message("drift analysis", error), "danger")]), html.Div(), html.Div()
+            empty = make_empty_state(
+                "Drift analysis is unavailable right now.", icon="fas fa-wave-square"
+            )
+            return (
+                empty,
+                html.Div(
+                    [_status_alert(_callback_error_message("drift analysis", error), "danger")]
+                ),
+                html.Div(),
+                html.Div(),
+            )
 
     @app.callback(
         Output("deepdive-feature-select", "options"),
@@ -3121,26 +3548,38 @@ def register_callbacks(app) -> None:
         State("deepdive-feature-select", "value"),
         State("deepdive-dimension-select", "value"),
     )
-    def populate_feature_deep_dive(pathname, search, model_id, _, session_data, feature_value, dimension_value):
+    def populate_feature_deep_dive(
+        pathname, search, model_id, _, session_data, feature_value, dimension_value
+    ):
         if pathname != "/features":
             return no_update, no_update, no_update, no_update
         try:
             backend = _make_backend(session_data)
             feature_options = _option_list(backend.get_feature_options(model_id or ""))
-            dimension_options = _option_list(backend.get_dimension_options(model_id or ""), include_blank=True)
+            dimension_options = _option_list(
+                backend.get_dimension_options(model_id or ""), include_blank=True
+            )
         except Exception:
             return [], None, [], ""
         feature_values = {option["value"] for option in feature_options}
         dimension_values = {option["value"] for option in dimension_options}
         requested_feature = _selected_feature_from_search(search)
-        selected_feature = requested_feature if requested_feature in feature_values else (feature_value if feature_value in feature_values else None)
+        selected_feature = (
+            requested_feature
+            if requested_feature in feature_values
+            else (feature_value if feature_value in feature_values else None)
+        )
         if selected_feature is None and model_id:
             try:
                 drift = backend.get_drift_results(model_id)
-                ranked_features = _historical_drift_feature_ranking(drift, metric="psi", top_n=max(len(feature_options), 1))
+                ranked_features = _historical_drift_feature_ranking(
+                    drift, metric="psi", top_n=max(len(feature_options), 1)
+                )
                 ranked_values = [
                     str(value)
-                    for value in ranked_features.get("feature", pd.Series(dtype=str)).dropna().tolist()
+                    for value in ranked_features.get("feature", pd.Series(dtype=str))
+                    .dropna()
+                    .tolist()
                     if str(value) in feature_values
                 ]
                 if ranked_values:
@@ -3228,18 +3667,25 @@ def register_callbacks(app) -> None:
         try:
             backend = _make_backend(session_data)
             normalized_mode = str(binning_mode or "auto").strip().lower()
-            custom_edges = _parse_custom_edges(custom_edges_text) if normalized_mode == "custom" else None
+            custom_edges = (
+                _parse_custom_edges(custom_edges_text) if normalized_mode == "custom" else None
+            )
             normalized_outlier_mode = _normalize_outlier_mode(outlier_mode)
             outlier_value = _outlier_control_value(normalized_outlier_mode, outlier_value_raw)
             details = backend.get_feature_distribution_details(
                 model_id,
                 feature,
-                require_exact_samples=(normalized_mode == "custom" or normalized_outlier_mode != "off"),
+                require_exact_samples=(
+                    normalized_mode == "custom" or normalized_outlier_mode != "off"
+                ),
             )
             baseline = details["baseline"]
             current = details["current"]
             distribution_source = str(details.get("distribution_source") or "")
-            if distribution_source in {"unavailable_requested_raw", "unavailable_unsafe_bounded_read"}:
+            if distribution_source in {
+                "unavailable_requested_raw",
+                "unavailable_unsafe_bounded_read",
+            }:
                 distribution = make_empty_state(
                     _feature_distribution_source_message(distribution_source),
                     icon="fas fa-chart-area",
@@ -3266,7 +3712,9 @@ def register_callbacks(app) -> None:
                             "This chart compares average vs median and the middle 50% spread (P25 to P75) for each slice.",
                             className="text-muted d-block mb-2",
                         ),
-                        make_chart_card(charts.build_dimension_breakdown(breakdown, feature, dimension)),
+                        make_chart_card(
+                            charts.build_dimension_breakdown(breakdown, feature, dimension)
+                        ),
                     ]
                 )
             outlier_text = "Off"
@@ -3276,15 +3724,18 @@ def register_callbacks(app) -> None:
                 outlier_text = f"IQR Fence (K={outlier_value:.2f})"
             context_children = html.Div(
                 [
-                    html.Div(str(details.get("window_label") or "Latest comparison window unavailable."), className="mb-1"),
+                    html.Div(
+                        str(details.get("window_label") or "Latest comparison window unavailable."),
+                        className="mb-1",
+                    ),
                     html.Div(
                         _feature_distribution_source_message(
                             str(details.get("distribution_source") or "unavailable"),
-            )
-                ),
-                html.Div(
-                    f"Binning: {normalized_mode.title()}"
-                    + (
+                        )
+                    ),
+                    html.Div(
+                        f"Binning: {normalized_mode.title()}"
+                        + (
                             f" | Bin Count: {_normalize_top_n(bin_count, default=40, minimum=2, maximum=200)}"
                             if normalized_mode == "fixed"
                             else ""
@@ -3299,7 +3750,14 @@ def register_callbacks(app) -> None:
             return _status_alert(str(error), "warning"), html.Div(), str(error)
         except Exception as error:
             logger.exception("Failed to render feature deep dive", exc_info=error)
-            return make_empty_state("Could not load feature detail. Check logs and try again.", icon="fas fa-triangle-exclamation"), html.Div(), "Feature detail is unavailable right now."
+            return (
+                make_empty_state(
+                    "Could not load feature detail. Check logs and try again.",
+                    icon="fas fa-triangle-exclamation",
+                ),
+                html.Div(),
+                "Feature detail is unavailable right now.",
+            )
 
     @app.callback(
         Output("quality-kpi-cards", "children"),
@@ -3333,7 +3791,9 @@ def register_callbacks(app) -> None:
             return no_update, no_update, no_update, no_update
         try:
             if not model_id:
-                empty = make_empty_state("Select a model to inspect quality.", icon="fas fa-database")
+                empty = make_empty_state(
+                    "Select a model to inspect quality.", icon="fas fa-database"
+                )
                 return empty, html.Div(), html.Div(), html.Div()
             backend = _make_backend(session_data)
             config = backend.get_monitor_config(model_id)
@@ -3403,16 +3863,34 @@ def register_callbacks(app) -> None:
                     ),
                     md=3,
                 ),
-                dbc.Col(make_metric_card("From", quality["min_date"] or "—", "Earliest data"), md=3),
+                dbc.Col(
+                    make_metric_card("From", quality["min_date"] or "—", "Earliest data"), md=3
+                ),
                 dbc.Col(make_metric_card("To", quality["max_date"] or "—", "Latest data"), md=3),
-                dbc.Col(make_metric_card("Prediction Average", _format_metric_value(quality["prediction_mean"]), "Latest snapshot"), md=3),
-                dbc.Col(make_metric_card("Prediction Std", _format_metric_value(quality["prediction_std"]), "Latest snapshot"), md=3),
+                dbc.Col(
+                    make_metric_card(
+                        "Prediction Average",
+                        _format_metric_value(quality["prediction_mean"]),
+                        "Latest snapshot",
+                    ),
+                    md=3,
+                ),
+                dbc.Col(
+                    make_metric_card(
+                        "Prediction Std",
+                        _format_metric_value(quality["prediction_std"]),
+                        "Latest snapshot",
+                    ),
+                    md=3,
+                ),
             ]
             volume_children_items: list[object] = []
             if history_note:
                 volume_children_items.append(_status_alert(history_note, "info"))
             if filter_summary:
-                volume_children_items.append(_status_alert(f"Active filters: {filter_summary}", "secondary"))
+                volume_children_items.append(
+                    _status_alert(f"Active filters: {filter_summary}", "secondary")
+                )
             volume_children_items.append(
                 html.Small(
                     "Daily Monitoring Rows shows daily row volume in persisted monitoring history. Rows Per Comparison Window shows the row volume in each baseline/current comparison window.",
@@ -3428,8 +3906,14 @@ def register_callbacks(app) -> None:
             volume_children_items.append(
                 dbc.Row(
                     [
-                        dbc.Col(make_chart_card(charts.build_volume_timeline(quality["daily_volume"])), md=6),
-                        dbc.Col(make_chart_card(charts.build_quality_window_timeline(quality_history)), md=6),
+                        dbc.Col(
+                            make_chart_card(charts.build_volume_timeline(quality["daily_volume"])),
+                            md=6,
+                        ),
+                        dbc.Col(
+                            make_chart_card(charts.build_quality_window_timeline(quality_history)),
+                            md=6,
+                        ),
                     ],
                     className="g-3",
                 )
@@ -3444,7 +3928,9 @@ def register_callbacks(app) -> None:
                             thresholds=resolved_thresholds,
                         )
                     ),
-                    make_chart_card(charts.build_null_rate_timeline(null_rate_history), class_name="mb-0"),
+                    make_chart_card(
+                        charts.build_null_rate_timeline(null_rate_history), class_name="mb-0"
+                    ),
                 ]
             )
             latest_window_metrics = backend.get_latest_window_metrics(model_id)
@@ -3465,7 +3951,12 @@ def register_callbacks(app) -> None:
             )
         except Exception as error:
             logger.exception("Failed to render data quality", exc_info=error)
-            return _callback_error_panel("data quality", error, icon="fas fa-database"), html.Div(), html.Div(), html.Div()
+            return (
+                _callback_error_panel("data quality", error, icon="fas fa-database"),
+                html.Div(),
+                html.Div(),
+                html.Div(),
+            )
 
     @app.callback(
         Output("perf-metric-select", "options"),
@@ -3495,7 +3986,9 @@ def register_callbacks(app) -> None:
         except Exception as error:
             logger.exception("Failed to sync performance metric options", exc_info=error)
             options = performance_metric_options("classification")
-            return options, current_metric if current_metric in {option["value"] for option in options} else "f1"
+            return options, current_metric if current_metric in {
+                option["value"] for option in options
+            } else "f1"
 
     @app.callback(
         Output("perf-drift-feature-select", "options"),
@@ -3526,10 +4019,16 @@ def register_callbacks(app) -> None:
                 ordered_features = drift["feature"].dropna().astype(str).drop_duplicates().tolist()
             options = _option_list(ordered_features)
             valid_values = {option["value"] for option in options}
-            requested_values = current_values if isinstance(current_values, list) else ([current_values] if current_values else [])
+            requested_values = (
+                current_values
+                if isinstance(current_values, list)
+                else ([current_values] if current_values else [])
+            )
             selected = [str(value) for value in requested_values if str(value) in valid_values]
             if not selected:
-                selected = ordered_features if len(ordered_features) <= 12 else ordered_features[:12]
+                selected = (
+                    ordered_features if len(ordered_features) <= 12 else ordered_features[:12]
+                )
             return options, selected
         except Exception as error:
             logger.exception("Failed to sync performance drift features", exc_info=error)
@@ -3606,14 +4105,19 @@ def register_callbacks(app) -> None:
             return (no_update,) * 7
         try:
             if not model_id:
-                empty = make_empty_state("Select a model to inspect performance.", icon="fas fa-tachometer-alt")
+                empty = make_empty_state(
+                    "Select a model to inspect performance.", icon="fas fa-tachometer-alt"
+                )
                 return empty, html.Div(), html.Div(), html.Div(), [], None, html.Div()
             backend = _make_backend(session_data)
             config = backend.get_monitor_config(model_id)
             resolved_thresholds = _resolved_monitor_thresholds(config)
             if not config or not config.contract.label_col:
                 return (
-                    _status_alert("This monitor does not have labels configured, so performance degradation analysis is unavailable.", "warning"),
+                    _status_alert(
+                        "This monitor does not have labels configured, so performance degradation analysis is unavailable.",
+                        "warning",
+                    ),
                     html.Div(),
                     html.Div(),
                     html.Div(),
@@ -3627,7 +4131,10 @@ def register_callbacks(app) -> None:
             all_bins = performance.get("all_bins", pd.DataFrame())
             if all_bins.empty:
                 return (
-                    _status_alert("No performance metrics available yet. Run a refresh after labels arrive.", "warning"),
+                    _status_alert(
+                        "No performance metrics available yet. Run a refresh after labels arrive.",
+                        "warning",
+                    ),
                     html.Div(),
                     html.Div(),
                     html.Div(),
@@ -3641,7 +4148,13 @@ def register_callbacks(app) -> None:
                 for current_metric in timeline_metric_names
                 if current_metric in {"precision", "recall", "f1"}
             ]
-            if classification_timeline_metrics and str(getattr(config, "problem_type", "classification") or "classification").strip().lower() == "classification":
+            if (
+                classification_timeline_metrics
+                and str(getattr(config, "problem_type", "classification") or "classification")
+                .strip()
+                .lower()
+                == "classification"
+            ):
                 timeline_metric_names = classification_timeline_metrics
             else:
                 timeline_metric_names = [resolved_metric]
@@ -3649,7 +4162,9 @@ def register_callbacks(app) -> None:
             for current_metric in timeline_metric_names:
                 if current_metric == resolved_metric:
                     continue
-                timeline_summaries[current_metric] = backend.get_performance_summary(model_id, metric_name=current_metric)
+                timeline_summaries[current_metric] = backend.get_performance_summary(
+                    model_id, metric_name=current_metric
+                )
             timeline_map: dict[str, dict[str, object]] = {}
             for current_metric, summary in timeline_summaries.items():
                 for row in summary.get("timeline", []):
@@ -3661,7 +4176,9 @@ def register_callbacks(app) -> None:
                     if pd.isna(parsed_period):
                         continue
                     normalized_period = str(pd.Timestamp(parsed_period).date())
-                    entry = timeline_map.setdefault(normalized_period, {"period": normalized_period})
+                    entry = timeline_map.setdefault(
+                        normalized_period, {"period": normalized_period}
+                    )
                     entry[current_metric] = row.get(current_metric)
             combined_timeline = [
                 timeline_map[period]
@@ -3670,21 +4187,34 @@ def register_callbacks(app) -> None:
                     key=lambda value: pd.to_datetime(value, errors="coerce"),
                 )
             ]
-            contributors = performance["contributors"]
             feature_frame = latest_bins if not latest_bins.empty else all_bins
-            features = sorted({str(value) for value in (config.contract.feature_columns or []) if str(value).strip()})
+            features = sorted(
+                {
+                    str(value)
+                    for value in (config.contract.feature_columns or [])
+                    if str(value).strip()
+                }
+            )
             if not features:
                 features = sorted(
                     {
                         str(value)
-                        for value in feature_frame.get("feature", pd.Series(dtype=str)).dropna().tolist()
+                        for value in feature_frame.get("feature", pd.Series(dtype=str))
+                        .dropna()
+                        .tolist()
                         if str(value).strip()
                     }
                 )
             feature_options = _option_list(features)
             feature_values = {option["value"] for option in feature_options}
-            selected_feature = current_feature if current_feature in feature_values else (feature_options[0]["value"] if feature_options else None)
-            if _breakdown_state_matches(breakdown_state, model_id=model_id, metric_name=resolved_metric):
+            selected_feature = (
+                current_feature
+                if current_feature in feature_values
+                else (feature_options[0]["value"] if feature_options else None)
+            )
+            if _breakdown_state_matches(
+                breakdown_state, model_id=model_id, metric_name=resolved_metric
+            ):
                 degradation_detected = bool(breakdown_state.get("degradation_detected"))
                 worst_weighted_delta = float(breakdown_state.get("worst_weighted_delta") or 0.0)
             else:
@@ -3698,7 +4228,10 @@ def register_callbacks(app) -> None:
             ]
             timeline_reasons: list[str] = []
             for current_metric in timeline_metric_names:
-                current_reason = str(timeline_summaries.get(current_metric, {}).get("timeline_unavailable_reason") or "").strip()
+                current_reason = str(
+                    timeline_summaries.get(current_metric, {}).get("timeline_unavailable_reason")
+                    or ""
+                ).strip()
                 if current_reason and current_reason not in timeline_reasons:
                     timeline_reasons.append(current_reason)
             for current_reason in timeline_reasons:
@@ -3712,7 +4245,14 @@ def register_callbacks(app) -> None:
                 )
             alert = html.Div(alert_children)
             kpi_cards = [
-                dbc.Col(make_metric_card("Tracked Features", str(len(feature_options)), "With labeled performance bins"), md=4),
+                dbc.Col(
+                    make_metric_card(
+                        "Tracked Features",
+                        str(len(feature_options)),
+                        "With labeled performance bins",
+                    ),
+                    md=4,
+                ),
                 dbc.Col(
                     make_metric_card(
                         "Worst Weighted Delta",
@@ -3721,32 +4261,71 @@ def register_callbacks(app) -> None:
                     ),
                     md=4,
                 ),
-                dbc.Col(make_metric_card("Windows", str(len(combined_timeline)), "Historical performance snapshots"), md=4),
+                dbc.Col(
+                    make_metric_card(
+                        "Windows", str(len(combined_timeline)), "Historical performance snapshots"
+                    ),
+                    md=4,
+                ),
             ]
             selected_drift_metric = str(drift_metric or "psi").strip().lower() or "psi"
-            drift = backend.get_drift_results(model_id, granularity="daily") if hasattr(backend, "get_drift_results") else pd.DataFrame()
+            drift = (
+                backend.get_drift_results(model_id, granularity="daily")
+                if hasattr(backend, "get_drift_results")
+                else pd.DataFrame()
+            )
             drift_ranking = (
-                drift.assign(_metric_rank=pd.to_numeric(drift.get(selected_drift_metric, pd.Series(dtype=float)), errors="coerce").fillna(0.0))
+                drift.assign(
+                    _metric_rank=pd.to_numeric(
+                        drift.get(selected_drift_metric, pd.Series(dtype=float)), errors="coerce"
+                    ).fillna(0.0)
+                )
                 .groupby("feature", as_index=False)["_metric_rank"]
                 .max()
                 .sort_values("_metric_rank", ascending=False)
                 if isinstance(drift, pd.DataFrame) and not drift.empty
                 else pd.DataFrame(columns=["feature", "_metric_rank"])
             )
-            drift_feature_order = drift_ranking["feature"].astype(str).tolist() if not drift_ranking.empty else []
+            drift_feature_order = (
+                drift_ranking["feature"].astype(str).tolist() if not drift_ranking.empty else []
+            )
             drift_feature_values = set(drift_feature_order)
-            requested_drift_features = current_drift_features if isinstance(current_drift_features, list) else ([current_drift_features] if current_drift_features else [])
-            drift_features = [str(value) for value in requested_drift_features if str(value) in drift_feature_values]
+            requested_drift_features = (
+                current_drift_features
+                if isinstance(current_drift_features, list)
+                else ([current_drift_features] if current_drift_features else [])
+            )
+            drift_features = [
+                str(value)
+                for value in requested_drift_features
+                if str(value) in drift_feature_values
+            ]
             if not drift_features:
-                drift_features = drift_feature_order if len(drift_feature_order) <= 12 else drift_feature_order[:12]
-            drift_metric_label = _THRESHOLD_LABELS.get(selected_drift_metric, str(selected_drift_metric or "psi").upper())
+                drift_features = (
+                    drift_feature_order
+                    if len(drift_feature_order) <= 12
+                    else drift_feature_order[:12]
+                )
+            drift_metric_label = _THRESHOLD_LABELS.get(
+                selected_drift_metric, str(selected_drift_metric or "psi").upper()
+            )
             drift_scope_label = (
                 "All Tracked Features"
                 if drift_feature_order and len(drift_features) == len(drift_feature_order)
                 else "Selected Drift Features"
             )
             note_source = latest_bins if not latest_bins.empty else all_bins
-            note = note_source[[column for column in ("window_start", "window_end") if column in note_source.columns]].drop_duplicates().astype(str)
+            note = (
+                note_source[
+                    [
+                        column
+                        for column in ("window_start", "window_end")
+                        if column in note_source.columns
+                    ]
+                ]
+                .drop_duplicates()
+                .astype(str)
+            )
             note_row = note.to_dict("records")[0] if not note.empty else {}
             note_parts: list[object] = []
             note_text = ""
@@ -3810,7 +4389,15 @@ def register_callbacks(app) -> None:
             )
         except Exception as error:
             logger.exception("Failed to render performance analysis", exc_info=error)
-            return _status_alert(_callback_error_message("performance analysis", error), "danger"), html.Div(), html.Div(), html.Div(), [], None, html.Div()
+            return (
+                _status_alert(_callback_error_message("performance analysis", error), "danger"),
+                html.Div(),
+                html.Div(),
+                html.Div(),
+                [],
+                None,
+                html.Div(),
+            )
 
     @app.callback(
         Output("perf-breakdown-state", "data"),
@@ -3876,18 +4463,34 @@ def register_callbacks(app) -> None:
 
             feature_frame = latest_bins if not latest_bins.empty else all_bins
             contributors = performance["contributors"]
-            features = sorted({str(value) for value in (config.contract.feature_columns or []) if str(value).strip()})
+            features = sorted(
+                {
+                    str(value)
+                    for value in (config.contract.feature_columns or [])
+                    if str(value).strip()
+                }
+            )
             if not features:
                 features = sorted(
                     {
                         str(value)
-                        for value in feature_frame.get("feature", pd.Series(dtype=str)).dropna().tolist()
+                        for value in feature_frame.get("feature", pd.Series(dtype=str))
+                        .dropna()
+                        .tolist()
                         if str(value).strip()
                     }
                 )
-            selected_feature = current_feature if current_feature in set(features) else (features[0] if features else None)
+            selected_feature = (
+                current_feature
+                if current_feature in set(features)
+                else (features[0] if features else None)
+            )
             normalized_binning_mode = str(binning_mode or "auto").strip().lower()
-            custom_edges = _parse_custom_edges(custom_edges_text) if normalized_binning_mode == "custom" else None
+            custom_edges = (
+                _parse_custom_edges(custom_edges_text)
+                if normalized_binning_mode == "custom"
+                else None
+            )
             normalized_outlier_mode = _normalize_outlier_mode(outlier_mode)
             outlier_value = _outlier_control_value(normalized_outlier_mode, outlier_value_raw)
             exact_feature_columns = (
@@ -3911,7 +4514,11 @@ def register_callbacks(app) -> None:
             source = "stored"
             if isinstance(breakdown_rows, pd.DataFrame) and not breakdown_rows.empty:
                 feature_frame = breakdown_rows
-                contributors = breakdown_contributors if isinstance(breakdown_contributors, pd.DataFrame) else pd.DataFrame()
+                contributors = (
+                    breakdown_contributors
+                    if isinstance(breakdown_contributors, pd.DataFrame)
+                    else pd.DataFrame()
+                )
                 source = "exact"
 
             if source == "exact":
@@ -3969,21 +4576,46 @@ def register_callbacks(app) -> None:
                         [
                             html.Div(
                                 [
-                                    html.Div(style={"width": "38px", "height": "10px", "backgroundColor": "#e74c3c", "display": "inline-block", "marginRight": "8px"}),
+                                    html.Div(
+                                        style={
+                                            "width": "38px",
+                                            "height": "10px",
+                                            "backgroundColor": "#e74c3c",
+                                            "display": "inline-block",
+                                            "marginRight": "8px",
+                                        }
+                                    ),
                                     html.Span("Long red bars hurt the selected metric most."),
                                 ],
                                 className="mb-2",
                             ),
                             html.Div(
                                 [
-                                    html.Div(style={"width": "38px", "height": "10px", "backgroundColor": "#2ecc71", "display": "inline-block", "marginRight": "8px"}),
+                                    html.Div(
+                                        style={
+                                            "width": "38px",
+                                            "height": "10px",
+                                            "backgroundColor": "#2ecc71",
+                                            "display": "inline-block",
+                                            "marginRight": "8px",
+                                        }
+                                    ),
                                     html.Span("Long green bars help the selected metric most."),
                                 ],
                                 className="mb-2",
                             ),
-                            html.P("Baseline and Current are the slice-level metric values. Delta is their change. Current Window Share shows how much of the latest traffic sits in that slice. Weighted Contribution is the slice's share-weighted pull on the overall metric.", className="mb-2"),
-                            html.P("The color bands come from raw slice delta thresholds. The x-axis is weighted contribution, so use the vertical zero line as the absolute visual guide.", className="mb-2"),
-                            html.P("The center line at 0 means no net contribution. Right side is worse. Left side is better.", className="mb-0"),
+                            html.P(
+                                "Baseline and Current are the slice-level metric values. Delta is their change. Current Window Share shows how much of the latest traffic sits in that slice. Weighted Contribution is the slice's share-weighted pull on the overall metric.",
+                                className="mb-2",
+                            ),
+                            html.P(
+                                "The color bands come from raw slice delta thresholds. The x-axis is weighted contribution, so use the vertical zero line as the absolute visual guide.",
+                                className="mb-2",
+                            ),
+                            html.P(
+                                "The center line at 0 means no net contribution. Right side is worse. Left side is better.",
+                                className="mb-0",
+                            ),
                         ]
                     ),
                 ],
@@ -4015,13 +4647,18 @@ def register_callbacks(app) -> None:
                             [
                                 html.Div(
                                     [
-                                        html.H6("Feature Impact on Performance", className="text-light mb-0"),
+                                        html.H6(
+                                            "Feature Impact on Performance",
+                                            className="text-light mb-0",
+                                        ),
                                         impact_help_button,
                                     ],
                                     className="d-flex align-items-center gap-2 mb-2",
                                 ),
                                 impact_help,
-                                make_chart_card(charts.build_feature_bin_impact(feature_frame, contributors)),
+                                make_chart_card(
+                                    charts.build_feature_bin_impact(feature_frame, contributors)
+                                ),
                             ],
                             className="mb-3",
                         ),
@@ -4051,7 +4688,9 @@ def register_callbacks(app) -> None:
                                     trigger="click",
                                     placement="auto",
                                 ),
-                                _render_frame(latest_bin_table, "No bin-level performance data available."),
+                                _render_frame(
+                                    latest_bin_table, "No bin-level performance data available."
+                                ),
                             ]
                         ),
                     ]
@@ -4061,7 +4700,9 @@ def register_callbacks(app) -> None:
             return no_update, _status_alert(str(error), "warning")
         except Exception as error:
             logger.exception("Failed to render performance breakdown", exc_info=error)
-            return no_update, _status_alert(_callback_error_message("performance breakdown", error), "danger")
+            return no_update, _status_alert(
+                _callback_error_message("performance breakdown", error), "danger"
+            )
 
     @app.callback(
         Output("perf-bin-detail-container", "children"),
@@ -4076,7 +4717,9 @@ def register_callbacks(app) -> None:
         if pathname != "/performance":
             return no_update
         if not model_id or not feature:
-            return html.Div("Select a feature to open it in Feature Deep Dive.", className="text-muted")
+            return html.Div(
+                "Select a feature to open it in Feature Deep Dive.", className="text-muted"
+            )
         try:
             href = f"/features?{urlencode({'model': model_id, 'feature': feature})}"
             return html.Div(
@@ -4110,11 +4753,15 @@ def register_callbacks(app) -> None:
             backend = _make_backend(session_data)
             model_id = _resolve_reference_model_id(global_model_id, reference_model_id)
             if not model_id:
-                return make_empty_state("Select a model to inspect the contract and runtime state.", icon="fas fa-book")
+                return make_empty_state(
+                    "Select a model to inspect the contract and runtime state.", icon="fas fa-book"
+                )
             data = backend.get_reference_data(model_id)
             config = data["config"]
             if not config:
-                return make_empty_state("Selected model is no longer available.", icon="fas fa-book")
+                return make_empty_state(
+                    "Selected model is no longer available.", icon="fas fa-book"
+                )
         except Exception as error:
             return _callback_error_panel("monitor settings", error, icon="fas fa-book")
         config_status = getattr(config, "status", "active")
@@ -4143,10 +4790,16 @@ def register_callbacks(app) -> None:
                 {"field": "mlflow_experiment_name", "value": config.mlflow.experiment_name or ""},
                 {"field": "mlflow_experiment_id", "value": config.mlflow.experiment_id or ""},
                 {"field": "mlflow_run_id", "value": config.mlflow.run_id or ""},
-                {"field": "mlflow_registered_model_name", "value": config.mlflow.registered_model_name or ""},
+                {
+                    "field": "mlflow_registered_model_name",
+                    "value": config.mlflow.registered_model_name or "",
+                },
                 {"field": "mlflow_model_version", "value": config.mlflow.model_version or ""},
                 {"field": "feature_columns", "value": ", ".join(config.contract.feature_columns)},
-                {"field": "categorical_columns", "value": ", ".join(config.contract.categorical_columns)},
+                {
+                    "field": "categorical_columns",
+                    "value": ", ".join(config.contract.categorical_columns),
+                },
                 {"field": "slice_columns", "value": ", ".join(config.contract.slice_columns)},
                 {"field": "baseline_kind", "value": config.baseline.kind},
                 {"field": "baseline_days", "value": config.baseline.n_days},
@@ -4162,7 +4815,9 @@ def register_callbacks(app) -> None:
                 },
                 {
                     "field": "default_performance_metric",
-                    "value": performance_metric_label(_configured_default_performance_metric(config)),
+                    "value": performance_metric_label(
+                        _configured_default_performance_metric(config)
+                    ),
                 },
                 {"field": "drift_cadence_preset", "value": config.drift_cadence_preset},
                 {"field": "performance_cadence_preset", "value": config.performance_cadence_preset},
@@ -4217,7 +4872,13 @@ def register_callbacks(app) -> None:
                     "label_rows_scanned": "Label Rows",
                 }
             )
-            for column in ("Total Duration", "Source Metadata", "Daily Profiles", "Derivation", "Persistence"):
+            for column in (
+                "Total Duration",
+                "Source Metadata",
+                "Daily Profiles",
+                "Derivation",
+                "Persistence",
+            ):
                 if column in recent_runs_frame.columns:
                     recent_runs_frame[column] = recent_runs_frame[column].apply(_format_duration_ms)
         recent_incident_history = data.get("recent_incident_history") or []
@@ -4252,8 +4913,12 @@ def register_callbacks(app) -> None:
         resolved_thresholds = _resolved_monitor_thresholds(config)
         configured_refresh_job_id = str(data["settings"].get("refresh_job_id") or "").strip()
         configured_refresh_job_name = str(data["settings"].get("refresh_job_name") or "").strip()
-        configured_bootstrap_job_id = str(data["settings"].get("bootstrap_refresh_job_id") or "").strip()
-        configured_bootstrap_job_name = str(data["settings"].get("bootstrap_refresh_job_name") or "").strip()
+        configured_bootstrap_job_id = str(
+            data["settings"].get("bootstrap_refresh_job_id") or ""
+        ).strip()
+        configured_bootstrap_job_name = str(
+            data["settings"].get("bootstrap_refresh_job_name") or ""
+        ).strip()
         if configured_refresh_job_id:
             refresh_job_wiring_text = (
                 f"This app is configured to trigger shared refresh job ID {configured_refresh_job_id}. "
@@ -4268,16 +4933,17 @@ def register_callbacks(app) -> None:
                 "To change either value, update app.yaml or the generated manual existing-app app.yaml and redeploy the app."
             )
         if configured_bootstrap_job_id:
-            refresh_job_wiring_text += (
-                f" Bootstrap and backfill triggers are routed to BOOTSTRAP_REFRESH_JOB_ID={configured_bootstrap_job_id} when that optional override is configured."
-            )
+            refresh_job_wiring_text += f" Bootstrap and backfill triggers are routed to BOOTSTRAP_REFRESH_JOB_ID={configured_bootstrap_job_id} when that optional override is configured."
         elif configured_bootstrap_job_name:
-            refresh_job_wiring_text += (
-                f" Bootstrap and backfill triggers are routed to BOOTSTRAP_REFRESH_JOB_NAME={configured_bootstrap_job_name!r} when that optional override is configured."
-            )
+            refresh_job_wiring_text += f" Bootstrap and backfill triggers are routed to BOOTSTRAP_REFRESH_JOB_NAME={configured_bootstrap_job_name!r} when that optional override is configured."
         else:
-            refresh_job_wiring_text += " Bootstrap and backfill triggers use the shared refresh workflow by default."
-        show_bootstrap_retry = config_status == "active" and str(runtime_state.get("bootstrap_status") or "pending") != "completed"
+            refresh_job_wiring_text += (
+                " Bootstrap and backfill triggers use the shared refresh workflow by default."
+            )
+        show_bootstrap_retry = (
+            config_status == "active"
+            and str(runtime_state.get("bootstrap_status") or "pending") != "completed"
+        )
         lifecycle_buttons: list[dbc.Col] = []
         if config_status == "active":
             lifecycle_buttons.append(
@@ -4334,8 +5000,15 @@ def register_callbacks(app) -> None:
                     ),
                     dbc.ModalFooter(
                         [
-                            dbc.Button("Cancel", id="reference-archive-cancel-btn", color="secondary", outline=True),
-                            dbc.Button("Archive", id="reference-archive-confirm-btn", color="warning"),
+                            dbc.Button(
+                                "Cancel",
+                                id="reference-archive-cancel-btn",
+                                color="secondary",
+                                outline=True,
+                            ),
+                            dbc.Button(
+                                "Archive", id="reference-archive-confirm-btn", color="warning"
+                            ),
                         ]
                     ),
                 ],
@@ -4362,7 +5035,9 @@ def register_callbacks(app) -> None:
                                                     type="number",
                                                     min=0,
                                                     step=0.01 if metric == "null_rate" else 0.001,
-                                                    value=get_thresholds(metric, resolved_thresholds)[0],
+                                                    value=get_thresholds(
+                                                        metric, resolved_thresholds
+                                                    )[0],
                                                 ),
                                             ],
                                             md=6,
@@ -4375,7 +5050,9 @@ def register_callbacks(app) -> None:
                                                     type="number",
                                                     min=0,
                                                     step=0.01 if metric == "null_rate" else 0.001,
-                                                    value=get_thresholds(metric, resolved_thresholds)[1],
+                                                    value=get_thresholds(
+                                                        metric, resolved_thresholds
+                                                    )[1],
                                                 ),
                                             ],
                                             md=6,
@@ -4475,7 +5152,9 @@ def register_callbacks(app) -> None:
                                                 "label": performance_metric_label(metric_name),
                                                 "value": metric_name,
                                             }
-                                            for metric_name in _configured_performance_metric_names(config)
+                                            for metric_name in _configured_performance_metric_names(
+                                                config
+                                            )
                                         ],
                                         value=_configured_default_performance_metric(config),
                                     ),
@@ -4493,10 +5172,15 @@ def register_callbacks(app) -> None:
                                     dbc.Select(
                                         id="reference-performance-binning-mode-select",
                                         options=[
-                                            {"label": "Quantile (Recommended)", "value": "quantile"},
+                                            {
+                                                "label": "Quantile (Recommended)",
+                                                "value": "quantile",
+                                            },
                                             {"label": "Fixed Width", "value": "fixed_width"},
                                         ],
-                                        value=getattr(config, "performance_binning_mode", "quantile"),
+                                        value=getattr(
+                                            config, "performance_binning_mode", "quantile"
+                                        ),
                                     ),
                                 ],
                                 md=6,
@@ -4511,7 +5195,9 @@ def register_callbacks(app) -> None:
                                         max=49.9,
                                         step=0.1,
                                         placeholder="Off",
-                                        value=getattr(config, "performance_binning_clip_percentile", None),
+                                        value=getattr(
+                                            config, "performance_binning_clip_percentile", None
+                                        ),
                                     ),
                                 ],
                                 md=6,
@@ -4524,7 +5210,12 @@ def register_callbacks(app) -> None:
                         color="secondary",
                         className="py-2 mt-3 mb-0",
                     ),
-                    dbc.Button("Save Monitor Settings", id="reference-save-schedule-btn", color="primary", className="mt-3"),
+                    dbc.Button(
+                        "Save Monitor Settings",
+                        id="reference-save-schedule-btn",
+                        color="primary",
+                        className="mt-3",
+                    ),
                     (
                         html.Div(
                             [
@@ -4642,7 +5333,9 @@ def register_callbacks(app) -> None:
                         ],
                         className="g-3",
                     ),
-                    html.Div(shared_schedule_alerts, className="mt-3") if shared_schedule_alerts else html.Div(),
+                    html.Div(shared_schedule_alerts, className="mt-3")
+                    if shared_schedule_alerts
+                    else html.Div(),
                 ]
             ),
             className="mb-4",
@@ -4676,7 +5369,9 @@ def register_callbacks(app) -> None:
                                         valid=False,
                                         invalid=False,
                                     ),
-                                    dcc.Store(id="reference-delete-model-key-store", data=config.model_key),
+                                    dcc.Store(
+                                        id="reference-delete-model-key-store", data=config.model_key
+                                    ),
                                     html.P(
                                         (
                                             f"Delete the selected monitor {config.display_name} ({config.model_key})? "
@@ -4693,8 +5388,18 @@ def register_callbacks(app) -> None:
                             ),
                             dbc.ModalFooter(
                                 [
-                                    dbc.Button("Cancel", id="reference-delete-cancel-btn", color="secondary", outline=True),
-                                    dbc.Button("Delete", id="reference-delete-confirm-btn", color="danger", disabled=True),
+                                    dbc.Button(
+                                        "Cancel",
+                                        id="reference-delete-cancel-btn",
+                                        color="secondary",
+                                        outline=True,
+                                    ),
+                                    dbc.Button(
+                                        "Delete",
+                                        id="reference-delete-confirm-btn",
+                                        color="danger",
+                                        disabled=True,
+                                    ),
                                 ]
                             ),
                         ],
@@ -4834,8 +5539,16 @@ def register_callbacks(app) -> None:
             config = _get_monitor_config_for_reference(backend, model_id)
             if not config:
                 return [], [], [], None
-            seed_metrics = selected_metrics if selected_metrics is not None else _configured_performance_metric_names(config)
-            seed_default = current_default if current_default is not None else _configured_default_performance_metric(config)
+            seed_metrics = (
+                selected_metrics
+                if selected_metrics is not None
+                else _configured_performance_metric_names(config)
+            )
+            seed_default = (
+                current_default
+                if current_default is not None
+                else _configured_default_performance_metric(config)
+            )
             return _sync_performance_metric_selection(
                 problem_type=config.problem_type,
                 selected_metrics=seed_metrics,
@@ -4910,13 +5623,12 @@ def register_callbacks(app) -> None:
                 config,
                 performance_metric_names=tuple(performance_metric_names or ()),
                 default_performance_metric=default_performance_metric or None,
-                performance_binning_mode=performance_binning_mode or config.performance_binning_mode,
+                performance_binning_mode=performance_binning_mode
+                or config.performance_binning_mode,
                 performance_binning_clip_percentile=performance_binning_clip_percentile,
                 drift_cadence_preset=drift_cadence or config.drift_cadence_preset,
                 performance_cadence_preset=(
-                    performance_cadence
-                    if config.has_labels
-                    else "disabled"
+                    performance_cadence if config.has_labels else "disabled"
                 ),
                 schedule_enabled="enabled" in (schedule_enabled or []),
                 threshold_overrides=threshold_overrides,
@@ -4927,7 +5639,9 @@ def register_callbacks(app) -> None:
             return _status_alert(str(error), "warning"), no_update
         except Exception as error:
             logger.exception("Failed to update monitor settings for %s", model_id, exc_info=error)
-            return _status_alert(_user_action_error_message("Updating monitor settings"), "danger"), no_update
+            return _status_alert(
+                _user_action_error_message("Updating monitor settings"), "danger"
+            ), no_update
         return (
             _status_alert(f"Updated monitor settings for {updated.display_name}.", "success"),
             datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -4943,8 +5657,10 @@ def register_callbacks(app) -> None:
     def save_reference_shared_schedule(_, interval_hours):
         try:
             status = update_shared_workflow_schedule(int(interval_hours or 1))
-        except Exception as error:
-            return _status_alert(_user_action_error_message("Updating the shared workflow schedule"), "danger"), no_update
+        except Exception:
+            return _status_alert(
+                _user_action_error_message("Updating the shared workflow schedule"), "danger"
+            ), no_update
         return (
             _status_alert(
                 f"Updated the shared refresh workflow to {status.current_label.lower()} for job {status.job_id}.",
@@ -4965,7 +5681,9 @@ def register_callbacks(app) -> None:
     def trigger_reference_bootstrap(_, global_model_id, reference_model_id, session_data):
         model_id = _resolve_reference_model_id(global_model_id, reference_model_id)
         if not model_id:
-            return _status_alert("Select a monitor before triggering its initial refresh.", "warning"), no_update
+            return _status_alert(
+                "Select a monitor before triggering its initial refresh.", "warning"
+            ), no_update
         backend = _make_backend(session_data)
         config = _get_monitor_config_for_reference(backend, model_id)
         if not config:
@@ -4973,15 +5691,27 @@ def register_callbacks(app) -> None:
         try:
             trigger = trigger_refresh_job(
                 model_key=config.model_key,
-                control_plane_catalog=(session_data or {}).get("control_plane_catalog", settings.control_plane_catalog),
-                control_plane_schema=(session_data or {}).get("control_plane_schema", settings.control_plane_schema),
-                lakebase_instance_name=(session_data or {}).get("lakebase_instance_name", settings.lakebase_instance_name),
-                lakebase_database_name=(session_data or {}).get("lakebase_database_name", settings.lakebase_database_name),
-                lakebase_schema=(session_data or {}).get("lakebase_schema", settings.lakebase_schema),
+                control_plane_catalog=(session_data or {}).get(
+                    "control_plane_catalog", settings.control_plane_catalog
+                ),
+                control_plane_schema=(session_data or {}).get(
+                    "control_plane_schema", settings.control_plane_schema
+                ),
+                lakebase_instance_name=(session_data or {}).get(
+                    "lakebase_instance_name", settings.lakebase_instance_name
+                ),
+                lakebase_database_name=(session_data or {}).get(
+                    "lakebase_database_name", settings.lakebase_database_name
+                ),
+                lakebase_schema=(session_data or {}).get(
+                    "lakebase_schema", settings.lakebase_schema
+                ),
                 scope="bootstrap",
             )
         except Exception as error:
-            return _status_alert(_manual_refresh_unavailable_message(config.model_key, error), "warning"), no_update
+            return _status_alert(
+                _manual_refresh_unavailable_message(config.model_key, error), "warning"
+            ), no_update
         run_id_text = f", run_id={trigger.run_id}" if trigger.run_id is not None else ""
         return (
             _status_alert(
@@ -5018,7 +5748,9 @@ def register_callbacks(app) -> None:
         if not model_id:
             return _status_alert("Select a monitor before archiving it.", "warning"), no_update
         backend = _make_backend(session_data)
-        config, resolution_error = _resolve_monitor_config_by_key(backend, model_id, fail_if_ambiguous=True)
+        config, resolution_error = _resolve_monitor_config_by_key(
+            backend, model_id, fail_if_ambiguous=True
+        )
         if resolution_error:
             return _status_alert(resolution_error, "warning"), no_update
         try:
@@ -5027,7 +5759,9 @@ def register_callbacks(app) -> None:
             return _status_alert(str(error), "warning"), no_update
         except Exception as error:
             logger.exception("Archiving monitor %s failed", model_id, exc_info=error)
-            return _status_alert(_user_action_error_message("Archiving the monitor"), "danger"), no_update
+            return _status_alert(
+                _user_action_error_message("Archiving the monitor"), "danger"
+            ), no_update
         resolved_key = str(getattr(config, "model_key", "") or model_id).strip() or model_id
         return (
             _status_alert(
@@ -5046,14 +5780,18 @@ def register_callbacks(app) -> None:
         State("session-config-store", "data"),
         prevent_initial_call=True,
     )
-    def restore_reference_monitor(restore_clicks, global_model_id, reference_model_id, session_data):
+    def restore_reference_monitor(
+        restore_clicks, global_model_id, reference_model_id, session_data
+    ):
         if not restore_clicks or ctx.triggered_id != "reference-restore-monitor-btn":
             return no_update, no_update
         model_id = _resolve_reference_model_id(global_model_id, reference_model_id)
         if not model_id:
             return _status_alert("Select a monitor before restoring it.", "warning"), no_update
         backend = _make_backend(session_data)
-        config, resolution_error = _resolve_monitor_config_by_key(backend, model_id, fail_if_ambiguous=True)
+        config, resolution_error = _resolve_monitor_config_by_key(
+            backend, model_id, fail_if_ambiguous=True
+        )
         if resolution_error:
             return _status_alert(resolution_error, "warning"), no_update
         try:
@@ -5062,7 +5800,9 @@ def register_callbacks(app) -> None:
             return _status_alert(str(error), "warning"), no_update
         except Exception as error:
             logger.exception("Restoring monitor %s failed", model_id, exc_info=error)
-            return _status_alert(_user_action_error_message("Restoring the monitor"), "danger"), no_update
+            return _status_alert(
+                _user_action_error_message("Restoring the monitor"), "danger"
+            ), no_update
         resolved_key = str(getattr(config, "model_key", "") or model_id).strip() or model_id
         return (
             _status_alert(
@@ -5152,12 +5892,16 @@ def register_callbacks(app) -> None:
         State("session-config-store", "data"),
         prevent_initial_call=True,
     )
-    def delete_reference_monitor(_, global_model_id, reference_model_id, confirmation_text, session_data):
+    def delete_reference_monitor(
+        _, global_model_id, reference_model_id, confirmation_text, session_data
+    ):
         model_id = _resolve_reference_model_id(global_model_id, reference_model_id)
         if not model_id:
             return _status_alert("Select a monitor before deleting it.", "warning"), no_update
         backend = _make_backend(session_data)
-        config, resolution_error = _resolve_monitor_config_by_key(backend, model_id, fail_if_ambiguous=True)
+        config, resolution_error = _resolve_monitor_config_by_key(
+            backend, model_id, fail_if_ambiguous=True
+        )
         if resolution_error:
             return _status_alert(resolution_error, "warning"), no_update
         if (confirmation_text or "").strip() != config.model_key:
@@ -5173,7 +5917,9 @@ def register_callbacks(app) -> None:
             return _status_alert(str(error), "warning"), no_update
         except Exception as error:
             logger.exception("Deleting monitor %s failed", model_id, exc_info=error)
-            return _status_alert(_user_action_error_message("Deleting the monitor"), "danger"), no_update
+            return _status_alert(
+                _user_action_error_message("Deleting the monitor"), "danger"
+            ), no_update
         resolved_key = str(getattr(config, "model_key", "") or model_id).strip() or model_id
         return (
             _status_alert(

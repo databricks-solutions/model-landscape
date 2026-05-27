@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-import tomllib
 
+import tomllib
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 

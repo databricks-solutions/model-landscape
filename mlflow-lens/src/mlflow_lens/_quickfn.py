@@ -9,7 +9,8 @@ HTML figure via :func:`mlflow.log_figure`) and returns the figure to the caller.
 from __future__ import annotations
 
 import functools
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from mlflow_lens._version import __version__
 from mlflow_lens.panels import PANEL_TYPES, log_panel
@@ -32,8 +33,7 @@ def quickfn(panel_type: str) -> Callable[[Callable[..., tuple]], Callable[..., A
     """
     if panel_type not in PANEL_TYPES:
         raise ValueError(
-            f"Unknown panel type {panel_type!r}. "
-            f"Add it to mlflow_lens.panels.PANEL_TYPES first."
+            f"Unknown panel type {panel_type!r}. Add it to mlflow_lens.panels.PANEL_TYPES first."
         )
 
     def decorator(impl: Callable[..., tuple]) -> Callable[..., Any]:

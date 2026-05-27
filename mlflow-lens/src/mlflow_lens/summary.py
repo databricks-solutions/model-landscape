@@ -114,9 +114,7 @@ def load(path: str | None) -> pd.DataFrame:
 _PAGE_SIZE = 1000
 
 
-def _search_all_runs(
-    experiment_id: str, tags: dict[str, str] | None = None
-) -> list[Run]:
+def _search_all_runs(experiment_id: str, tags: dict[str, str] | None = None) -> list[Run]:
     """Paginate through all runs in an experiment, defeating the 1000-run cap."""
     filter_parts: list[str] = []
     if tags:

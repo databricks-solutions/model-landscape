@@ -32,7 +32,9 @@ def layout():
                     dbc.Col(
                         [
                             dbc.Label("Monitor"),
-                            dcc.Dropdown(id="reference-monitor-select", placeholder="Select monitor..."),
+                            dcc.Dropdown(
+                                id="reference-monitor-select", placeholder="Select monitor..."
+                            ),
                         ],
                         md=9,
                     ),

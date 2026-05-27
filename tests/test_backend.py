@@ -347,7 +347,9 @@ def test_get_drift_results_requires_a_published_generation() -> None:
     assert drift.empty
 
 
-def test_get_drift_results_aggregates_weekly_history_with_latest_overlay_and_summed_counts() -> None:
+def test_get_drift_results_aggregates_weekly_history_with_latest_overlay_and_summed_counts() -> (
+    None
+):
     backend = _make_backend()
 
     drift = backend.get_drift_results("fraud_model_demo", granularity="weekly")
@@ -674,7 +676,9 @@ def test_get_performance_summary_prefers_daily_label_metrics_and_keeps_null_gaps
     ]
 
 
-def test_get_performance_summary_falls_back_to_source_daily_label_rows_when_persisted_daily_metrics_are_empty() -> None:
+def test_get_performance_summary_falls_back_to_source_daily_label_rows_when_persisted_daily_metrics_are_empty() -> (
+    None
+):
     config = MonitorConfig(
         model_key="fraud_model_demo",
         display_name="Fraud Model Demo",
@@ -743,7 +747,9 @@ def test_get_performance_summary_falls_back_to_source_daily_label_rows_when_pers
     assert performance["timeline_unavailable_reason"] == ""
 
 
-def test_get_performance_summary_prefers_source_daily_label_rows_over_persisted_daily_metrics() -> None:
+def test_get_performance_summary_prefers_source_daily_label_rows_over_persisted_daily_metrics() -> (
+    None
+):
     config = MonitorConfig(
         model_key="fraud_model_demo",
         display_name="Fraud Model Demo",
@@ -809,7 +815,9 @@ def test_get_performance_summary_prefers_source_daily_label_rows_over_persisted_
     assert performance["timeline"] == [{"period": "2026-01-20", "precision": 0.9}]
 
 
-def test_get_performance_summary_caches_exact_source_daily_label_rows_for_identical_bounds() -> None:
+def test_get_performance_summary_caches_exact_source_daily_label_rows_for_identical_bounds() -> (
+    None
+):
     config = MonitorConfig(
         model_key="fraud_model_demo",
         display_name="Fraud Model Demo",
@@ -833,40 +841,43 @@ def test_get_performance_summary_caches_exact_source_daily_label_rows_for_identi
         list_monitor_configs=lambda status="active": [config],
         get_monitor_summary=lambda: pd.DataFrame(),
         get_daily_label_metric_rows=lambda model_id, start_date=None, end_date=None: [],
-        get_source_daily_label_metric_rows=lambda cfg, start_date=None, end_date=None: source_calls.append((start_date, end_date)) or [
-            {
-                "model_key": cfg.model_key,
-                "profile_date": "2026-01-20",
-                "tp": 9,
-                "fp": 1,
-                "fn": 3,
-                "tn": 17,
-                "actual_positive_count": 12,
-                "actual_negative_count": 18,
-                "predicted_positive_count": 10,
-                "predicted_negative_count": 20,
-                "precision": 0.9,
-                "recall": 0.75,
-                "f1": 0.8182,
-                "accuracy": 0.8667,
-            },
-            {
-                "model_key": cfg.model_key,
-                "profile_date": "2026-01-21",
-                "tp": 10,
-                "fp": 0,
-                "fn": 2,
-                "tn": 18,
-                "actual_positive_count": 12,
-                "actual_negative_count": 18,
-                "predicted_positive_count": 10,
-                "predicted_negative_count": 20,
-                "precision": 1.0,
-                "recall": 0.8333,
-                "f1": 0.9091,
-                "accuracy": 0.9333,
-            },
-        ],
+        get_source_daily_label_metric_rows=lambda cfg, start_date=None, end_date=None: (
+            source_calls.append((start_date, end_date))
+            or [
+                {
+                    "model_key": cfg.model_key,
+                    "profile_date": "2026-01-20",
+                    "tp": 9,
+                    "fp": 1,
+                    "fn": 3,
+                    "tn": 17,
+                    "actual_positive_count": 12,
+                    "actual_negative_count": 18,
+                    "predicted_positive_count": 10,
+                    "predicted_negative_count": 20,
+                    "precision": 0.9,
+                    "recall": 0.75,
+                    "f1": 0.8182,
+                    "accuracy": 0.8667,
+                },
+                {
+                    "model_key": cfg.model_key,
+                    "profile_date": "2026-01-21",
+                    "tp": 10,
+                    "fp": 0,
+                    "fn": 2,
+                    "tn": 18,
+                    "actual_positive_count": 12,
+                    "actual_negative_count": 18,
+                    "predicted_positive_count": 10,
+                    "predicted_negative_count": 20,
+                    "precision": 1.0,
+                    "recall": 0.8333,
+                    "f1": 0.9091,
+                    "accuracy": 0.9333,
+                },
+            ]
+        ),
     )
     backend = DashboardBackend(repository=_with_published_generation(repository))
 
@@ -877,7 +888,9 @@ def test_get_performance_summary_caches_exact_source_daily_label_rows_for_identi
     assert source_calls == [("2026-01-20", "2026-01-21")]
 
 
-def test_get_performance_summary_skips_exact_source_daily_label_rows_when_recent_window_bounds_are_unavailable() -> None:
+def test_get_performance_summary_skips_exact_source_daily_label_rows_when_recent_window_bounds_are_unavailable() -> (
+    None
+):
     config = MonitorConfig(
         model_key="fraud_model_demo",
         display_name="Fraud Model Demo",
@@ -939,9 +952,9 @@ def test_get_performance_summary_skips_exact_source_daily_label_rows_when_recent
                 "accuracy": 0.8667,
             },
         ],
-        get_source_daily_label_metric_rows=lambda cfg, start_date=None, end_date=None: (_ for _ in ()).throw(
-            AssertionError("Exact source fallback should not run without bounded dates")
-        ),
+        get_source_daily_label_metric_rows=lambda cfg, start_date=None, end_date=None: (
+            _ for _ in ()
+        ).throw(AssertionError("Exact source fallback should not run without bounded dates")),
     )
     backend = DashboardBackend(repository=_with_published_generation(repository))
 
@@ -950,7 +963,9 @@ def test_get_performance_summary_skips_exact_source_daily_label_rows_when_recent
     assert performance["timeline"] == [{"period": "2026-01-20", "precision": 0.9}]
 
 
-def test_get_performance_summary_falls_back_to_comparison_window_rows_when_exact_source_fallback_is_unavailable() -> None:
+def test_get_performance_summary_falls_back_to_comparison_window_rows_when_exact_source_fallback_is_unavailable() -> (
+    None
+):
     config = MonitorConfig(
         model_key="fraud_model_demo",
         display_name="Fraud Model Demo",
@@ -1034,14 +1049,62 @@ def test_get_exact_performance_breakdown_rebins_latest_window_with_requested_con
         assert current_config.model_key == "fraud_model_demo"
         return pd.DataFrame(
             [
-                {"event_ts": "2026-01-01", "prediction": 1, "label": 1, "amount": 1.0, "velocity_7d": 10.0},
-                {"event_ts": "2026-01-01", "prediction": 0, "label": 1, "amount": 2.0, "velocity_7d": 12.0},
-                {"event_ts": "2026-01-02", "prediction": 1, "label": 0, "amount": 6.0, "velocity_7d": 30.0},
-                {"event_ts": "2026-01-02", "prediction": 1, "label": 1, "amount": 7.0, "velocity_7d": 35.0},
-                {"event_ts": "2026-01-08", "prediction": 1, "label": 1, "amount": 1.5, "velocity_7d": 11.0},
-                {"event_ts": "2026-01-08", "prediction": 1, "label": 0, "amount": 2.5, "velocity_7d": 13.0},
-                {"event_ts": "2026-01-09", "prediction": 1, "label": 1, "amount": 6.5, "velocity_7d": 31.0},
-                {"event_ts": "2026-01-09", "prediction": 1, "label": 0, "amount": 7.5, "velocity_7d": 36.0},
+                {
+                    "event_ts": "2026-01-01",
+                    "prediction": 1,
+                    "label": 1,
+                    "amount": 1.0,
+                    "velocity_7d": 10.0,
+                },
+                {
+                    "event_ts": "2026-01-01",
+                    "prediction": 0,
+                    "label": 1,
+                    "amount": 2.0,
+                    "velocity_7d": 12.0,
+                },
+                {
+                    "event_ts": "2026-01-02",
+                    "prediction": 1,
+                    "label": 0,
+                    "amount": 6.0,
+                    "velocity_7d": 30.0,
+                },
+                {
+                    "event_ts": "2026-01-02",
+                    "prediction": 1,
+                    "label": 1,
+                    "amount": 7.0,
+                    "velocity_7d": 35.0,
+                },
+                {
+                    "event_ts": "2026-01-08",
+                    "prediction": 1,
+                    "label": 1,
+                    "amount": 1.5,
+                    "velocity_7d": 11.0,
+                },
+                {
+                    "event_ts": "2026-01-08",
+                    "prediction": 1,
+                    "label": 0,
+                    "amount": 2.5,
+                    "velocity_7d": 13.0,
+                },
+                {
+                    "event_ts": "2026-01-09",
+                    "prediction": 1,
+                    "label": 1,
+                    "amount": 6.5,
+                    "velocity_7d": 31.0,
+                },
+                {
+                    "event_ts": "2026-01-09",
+                    "prediction": 1,
+                    "label": 0,
+                    "amount": 7.5,
+                    "velocity_7d": 36.0,
+                },
             ]
         )
 
@@ -1092,14 +1155,16 @@ def test_get_exact_performance_breakdown_scopes_features_and_reuses_cache() -> N
     class _BoundsWarehouse:
         def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
             if "FROM comparison_windows" in sql:
-                return pd.DataFrame([
-                    {
-                        "baseline_start": "2026-01-01",
-                        "baseline_end": "2026-01-01",
-                        "window_start": "2026-01-08",
-                        "window_end": "2026-01-08",
-                    }
-                ])
+                return pd.DataFrame(
+                    [
+                        {
+                            "baseline_start": "2026-01-01",
+                            "baseline_end": "2026-01-01",
+                            "window_start": "2026-01-08",
+                            "window_end": "2026-01-08",
+                        }
+                    ]
+                )
             return pd.DataFrame()
 
     load_calls: list[tuple[str, ...] | None] = []
@@ -1109,10 +1174,34 @@ def test_get_exact_performance_breakdown_scopes_features_and_reuses_cache() -> N
         load_calls.append(kwargs.get("feature_columns"))
         return pd.DataFrame(
             [
-                {"event_ts": "2026-01-01", "prediction": 1, "label": 1, "amount": 1.0, "velocity_7d": 10.0},
-                {"event_ts": "2026-01-01", "prediction": 1, "label": 0, "amount": 2.0, "velocity_7d": 12.0},
-                {"event_ts": "2026-01-08", "prediction": 1, "label": 1, "amount": 1.5, "velocity_7d": 11.0},
-                {"event_ts": "2026-01-08", "prediction": 1, "label": 0, "amount": 2.5, "velocity_7d": 13.0},
+                {
+                    "event_ts": "2026-01-01",
+                    "prediction": 1,
+                    "label": 1,
+                    "amount": 1.0,
+                    "velocity_7d": 10.0,
+                },
+                {
+                    "event_ts": "2026-01-01",
+                    "prediction": 1,
+                    "label": 0,
+                    "amount": 2.0,
+                    "velocity_7d": 12.0,
+                },
+                {
+                    "event_ts": "2026-01-08",
+                    "prediction": 1,
+                    "label": 1,
+                    "amount": 1.5,
+                    "velocity_7d": 11.0,
+                },
+                {
+                    "event_ts": "2026-01-08",
+                    "prediction": 1,
+                    "label": 0,
+                    "amount": 2.5,
+                    "velocity_7d": 13.0,
+                },
             ]
         )
 
@@ -1172,14 +1261,16 @@ def test_get_exact_performance_breakdown_keeps_zero_detection_slice() -> None:
     class _BoundsWarehouse:
         def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
             if "FROM comparison_windows" in sql:
-                return pd.DataFrame([
-                    {
-                        "baseline_start": "2026-01-01",
-                        "baseline_end": "2026-01-01",
-                        "window_start": "2026-01-08",
-                        "window_end": "2026-01-08",
-                    }
-                ])
+                return pd.DataFrame(
+                    [
+                        {
+                            "baseline_start": "2026-01-01",
+                            "baseline_end": "2026-01-01",
+                            "window_start": "2026-01-08",
+                            "window_end": "2026-01-08",
+                        }
+                    ]
+                )
             return pd.DataFrame()
 
     def _load_monitor_frame(current_config, **kwargs) -> pd.DataFrame:
@@ -1325,7 +1416,9 @@ def test_get_latest_window_metrics_fall_back_to_source_daily_label_rows() -> Non
 
     repository = SimpleNamespace(
         _warehouse=_SnapshotWarehouse(),
-        table_names=SimpleNamespace(comparison_windows="comparison_windows", performance_metrics="performance_metrics"),
+        table_names=SimpleNamespace(
+            comparison_windows="comparison_windows", performance_metrics="performance_metrics"
+        ),
         list_monitor_configs=lambda status="active": [config],
         get_monitor_summary=lambda: pd.DataFrame(),
         get_daily_label_metric_rows=lambda model_id, start_date=None, end_date=None: [],
@@ -1410,28 +1503,33 @@ def test_get_latest_window_metrics_use_exact_window_bounds_for_source_daily_labe
 
     repository = SimpleNamespace(
         _warehouse=_SnapshotWarehouse(),
-        table_names=SimpleNamespace(comparison_windows="comparison_windows", performance_metrics="performance_metrics"),
+        table_names=SimpleNamespace(
+            comparison_windows="comparison_windows", performance_metrics="performance_metrics"
+        ),
         list_monitor_configs=lambda status="active": [config],
         get_monitor_summary=lambda: pd.DataFrame(),
         get_daily_label_metric_rows=lambda model_id, start_date=None, end_date=None: [],
-        get_source_daily_label_metric_rows=lambda cfg, start_date=None, end_date=None: source_calls.append((start_date, end_date)) or [
-            {
-                "model_key": cfg.model_key,
-                "profile_date": "2026-01-20",
-                "tp": 9,
-                "fp": 1,
-                "fn": 3,
-                "tn": 17,
-                "actual_positive_count": 12,
-                "actual_negative_count": 18,
-                "predicted_positive_count": 10,
-                "predicted_negative_count": 20,
-                "precision": 0.9,
-                "recall": 0.75,
-                "f1": 0.8182,
-                "accuracy": 0.8667,
-            },
-        ],
+        get_source_daily_label_metric_rows=lambda cfg, start_date=None, end_date=None: (
+            source_calls.append((start_date, end_date))
+            or [
+                {
+                    "model_key": cfg.model_key,
+                    "profile_date": "2026-01-20",
+                    "tp": 9,
+                    "fp": 1,
+                    "fn": 3,
+                    "tn": 17,
+                    "actual_positive_count": 12,
+                    "actual_negative_count": 18,
+                    "predicted_positive_count": 10,
+                    "predicted_negative_count": 20,
+                    "precision": 0.9,
+                    "recall": 0.75,
+                    "f1": 0.8182,
+                    "accuracy": 0.8667,
+                },
+            ]
+        ),
     )
     backend = DashboardBackend(repository=_with_published_generation(repository))
 
@@ -1441,7 +1539,9 @@ def test_get_latest_window_metrics_use_exact_window_bounds_for_source_daily_labe
     assert source_calls == [("2026-01-14", "2026-01-21")]
 
 
-def test_get_latest_window_metrics_prefer_source_daily_label_rows_over_persisted_daily_metrics() -> None:
+def test_get_latest_window_metrics_prefer_source_daily_label_rows_over_persisted_daily_metrics() -> (
+    None
+):
     config = MonitorConfig(
         model_key="fraud_model_demo",
         display_name="Fraud Model Demo",
@@ -1474,7 +1574,9 @@ def test_get_latest_window_metrics_prefer_source_daily_label_rows_over_persisted
 
     repository = SimpleNamespace(
         _warehouse=_SnapshotWarehouse(),
-        table_names=SimpleNamespace(comparison_windows="comparison_windows", performance_metrics="performance_metrics"),
+        table_names=SimpleNamespace(
+            comparison_windows="comparison_windows", performance_metrics="performance_metrics"
+        ),
         list_monitor_configs=lambda status="active": [config],
         get_monitor_summary=lambda: pd.DataFrame(),
         get_daily_label_metric_rows=lambda model_id, start_date=None, end_date=None: [
@@ -1526,7 +1628,9 @@ def test_get_latest_window_metrics_prefer_source_daily_label_rows_over_persisted
     }
 
 
-def test_get_latest_window_metrics_falls_back_to_comparison_window_rows_when_exact_source_fallback_is_unavailable() -> None:
+def test_get_latest_window_metrics_falls_back_to_comparison_window_rows_when_exact_source_fallback_is_unavailable() -> (
+    None
+):
     config = MonitorConfig(
         model_key="fraud_model_demo",
         display_name="Fraud Model Demo",
@@ -1559,7 +1663,9 @@ def test_get_latest_window_metrics_falls_back_to_comparison_window_rows_when_exa
 
     repository = SimpleNamespace(
         _warehouse=_SnapshotWarehouse(),
-        table_names=SimpleNamespace(comparison_windows="comparison_windows", performance_metrics="performance_metrics"),
+        table_names=SimpleNamespace(
+            comparison_windows="comparison_windows", performance_metrics="performance_metrics"
+        ),
         list_monitor_configs=lambda status="active": [config],
         get_monitor_summary=lambda: pd.DataFrame(),
         get_daily_label_metric_rows=lambda model_id, start_date=None, end_date=None: [],
@@ -1648,7 +1754,9 @@ def test_get_quality_stats_and_history_support_class_filters_from_daily_profiles
     assert list(history["row_count"]) == [40, 60]
 
 
-def test_get_quality_stats_returns_filtered_source_bounds_unavailable_when_no_safe_bounds_exist() -> None:
+def test_get_quality_stats_returns_filtered_source_bounds_unavailable_when_no_safe_bounds_exist() -> (
+    None
+):
     config = MonitorConfig(
         model_key="fraud_model_demo",
         display_name="Fraud Model Demo",
@@ -1682,7 +1790,9 @@ def test_get_quality_stats_returns_filtered_source_bounds_unavailable_when_no_sa
     assert quality == {"_empty_reason": "filtered_source_bounds_unavailable"}
 
 
-def test_get_quality_stats_derives_safe_bounds_for_filtered_source_fallback_from_recent_quality_profiles() -> None:
+def test_get_quality_stats_derives_safe_bounds_for_filtered_source_fallback_from_recent_quality_profiles() -> (
+    None
+):
     config = MonitorConfig(
         model_key="fraud_model_demo",
         display_name="Fraud Model Demo",
@@ -1702,20 +1812,35 @@ def test_get_quality_stats_derives_safe_bounds_for_filtered_source_fallback_from
         get_monitor_summary=lambda: pd.DataFrame(),
         get_daily_class_quality_profile_rows=lambda *args, **kwargs: [],
         get_daily_quality_profile_rows=lambda *args, **kwargs: [
-            {"profile_date": "2026-01-20", "row_count": 10, "prediction_mean": 0.1, "prediction_std": 0.01, "null_rates": "{}"},
-            {"profile_date": "2026-01-21", "row_count": 20, "prediction_mean": 0.2, "prediction_std": 0.02, "null_rates": "{}"},
-        ],
-        get_source_daily_quality_profile_rows=lambda config, start_date=None, end_date=None, **kwargs: source_calls.append((start_date, end_date)) or [
             {
-                "model_key": config.model_key,
                 "profile_date": "2026-01-20",
-                "row_count": 5,
-                "prediction_mean": 0.3,
-                "prediction_std": 0.05,
-                "null_rates": "{\"amount\": 0.0}",
-                "label_row_count": 5,
-            }
+                "row_count": 10,
+                "prediction_mean": 0.1,
+                "prediction_std": 0.01,
+                "null_rates": "{}",
+            },
+            {
+                "profile_date": "2026-01-21",
+                "row_count": 20,
+                "prediction_mean": 0.2,
+                "prediction_std": 0.02,
+                "null_rates": "{}",
+            },
         ],
+        get_source_daily_quality_profile_rows=lambda config, start_date=None, end_date=None, **kwargs: (
+            source_calls.append((start_date, end_date))
+            or [
+                {
+                    "model_key": config.model_key,
+                    "profile_date": "2026-01-20",
+                    "row_count": 5,
+                    "prediction_mean": 0.3,
+                    "prediction_std": 0.05,
+                    "null_rates": '{"amount": 0.0}',
+                    "label_row_count": 5,
+                }
+            ]
+        ),
     )
     backend = DashboardBackend(repository=repository)
 
@@ -1846,7 +1971,9 @@ def test_get_drift_results_supports_class_filtered_daily_feature_profiles() -> N
     assert drift.iloc[0]["psi"] > 0.0
 
 
-def test_get_drift_results_derives_class_filtered_feature_profiles_from_bounded_source_rows() -> None:
+def test_get_drift_results_derives_class_filtered_feature_profiles_from_bounded_source_rows() -> (
+    None
+):
     class _WindowWarehouse(_FakeWarehouse):
         def query_params(self, sql: str, params: tuple) -> pd.DataFrame:
             if "FROM comparison_windows" in sql:
@@ -1881,21 +2008,28 @@ def test_get_drift_results_derives_class_filtered_feature_profiles_from_bounded_
     )
     repository = SimpleNamespace(
         _warehouse=_WindowWarehouse(),
-        table_names=SimpleNamespace(comparison_windows="comparison_windows", drift_metrics="drift_metrics"),
+        table_names=SimpleNamespace(
+            comparison_windows="comparison_windows", drift_metrics="drift_metrics"
+        ),
         list_monitor_configs=lambda status="active": [config],
         get_monitor_summary=lambda: pd.DataFrame(),
         get_latest_published_generation_id=lambda model_key: "published-1",
         get_daily_class_feature_profile_rows=lambda *args, **kwargs: [],
-        load_monitor_frame=lambda config, start_date=None, end_date=None, feature_columns=None, max_total_rows=None, sample_rows_per_day=None: load_calls.append((start_date, end_date)) or pd.DataFrame(
-            [
-                {"event_ts": "2026-01-01T00:00:00", "prediction": 1, "label": 1, "amount": 1.0},
-                {"event_ts": "2026-01-02T00:00:00", "prediction": 1, "label": 1, "amount": 1.2},
-                {"event_ts": "2026-01-03T00:00:00", "prediction": 1, "label": 1, "amount": 5.0},
-                {"event_ts": "2026-01-04T00:00:00", "prediction": 1, "label": 1, "amount": 5.2},
-            ]
+        load_monitor_frame=lambda config, start_date=None, end_date=None, feature_columns=None, max_total_rows=None, sample_rows_per_day=None: (
+            load_calls.append((start_date, end_date))
+            or pd.DataFrame(
+                [
+                    {"event_ts": "2026-01-01T00:00:00", "prediction": 1, "label": 1, "amount": 1.0},
+                    {"event_ts": "2026-01-02T00:00:00", "prediction": 1, "label": 1, "amount": 1.2},
+                    {"event_ts": "2026-01-03T00:00:00", "prediction": 1, "label": 1, "amount": 5.0},
+                    {"event_ts": "2026-01-04T00:00:00", "prediction": 1, "label": 1, "amount": 5.2},
+                ]
+            )
         ),
         get_source_daily_quality_profile_rows=lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("Source quality probe should not run when bounded source rows can derive drift directly")
+            AssertionError(
+                "Source quality probe should not run when bounded source rows can derive drift directly"
+            )
         ),
     )
     backend = DashboardBackend(repository=repository)
@@ -1944,7 +2078,9 @@ def test_get_drift_results_marks_no_filtered_rows_when_bounded_source_probe_is_e
     )
     repository = SimpleNamespace(
         _warehouse=_WindowWarehouse(),
-        table_names=SimpleNamespace(comparison_windows="comparison_windows", drift_metrics="drift_metrics"),
+        table_names=SimpleNamespace(
+            comparison_windows="comparison_windows", drift_metrics="drift_metrics"
+        ),
         list_monitor_configs=lambda status="active": [config],
         get_monitor_summary=lambda: pd.DataFrame(),
         get_latest_published_generation_id=lambda model_key: "published-1",
@@ -2049,7 +2185,9 @@ def test_feature_detail_returns_empty_when_only_unbounded_load_is_supported() ->
         ),
         list_monitor_configs=lambda status="active": [config],
         get_monitor_summary=lambda: pd.DataFrame(),
-        load_monitor_frame=lambda config_arg: pd.DataFrame([{"event_ts": "2026-01-20T00:00:00", "amount": 10.0}]),
+        load_monitor_frame=lambda config_arg: pd.DataFrame(
+            [{"event_ts": "2026-01-20T00:00:00", "amount": 10.0}]
+        ),
     )
     backend = DashboardBackend(repository=_with_published_generation(repository))
 
@@ -2155,8 +2293,18 @@ def test_current_window_detail_reads_use_current_window_bounds_only() -> None:
         calls.append(kwargs)
         return pd.DataFrame(
             [
-                {"event_ts": "2026-01-14T00:00:00", "amount": 10.0, "region": "west", "prediction": 0.2},
-                {"event_ts": "2026-01-21T00:00:00", "amount": 20.0, "region": "east", "prediction": 0.8},
+                {
+                    "event_ts": "2026-01-14T00:00:00",
+                    "amount": 10.0,
+                    "region": "west",
+                    "prediction": 0.2,
+                },
+                {
+                    "event_ts": "2026-01-21T00:00:00",
+                    "amount": 20.0,
+                    "region": "east",
+                    "prediction": 0.8,
+                },
             ]
         )
 
@@ -2227,13 +2375,28 @@ def test_dimension_breakdown_limits_aggregation_to_top_dimension_values() -> Non
             raise AssertionError(f"Unexpected query: {sql}")
 
     rows = [
-        {"event_ts": "2026-01-14T00:00:00", "amount": float(index), "region": f"region_{index}", "prediction": 0.2}
+        {
+            "event_ts": "2026-01-14T00:00:00",
+            "amount": float(index),
+            "region": f"region_{index}",
+            "prediction": 0.2,
+        }
         for index in range(30)
     ]
     rows.extend(
         [
-            {"event_ts": "2026-01-21T00:00:00", "amount": 999.0, "region": "region_0", "prediction": 0.9},
-            {"event_ts": "2026-01-21T00:00:00", "amount": 998.0, "region": "region_1", "prediction": 0.9},
+            {
+                "event_ts": "2026-01-21T00:00:00",
+                "amount": 999.0,
+                "region": "region_0",
+                "prediction": 0.9,
+            },
+            {
+                "event_ts": "2026-01-21T00:00:00",
+                "amount": 998.0,
+                "region": "region_1",
+                "prediction": 0.9,
+            },
         ]
     )
 
@@ -2393,7 +2556,13 @@ def test_feature_distribution_daily_profile_query_is_bounded_to_latest_window_da
     profile_query = next(sql for sql, _ in queries if "FROM daily_feature_profiles" in sql)
     profile_params = next(params for sql, params in queries if "FROM daily_feature_profiles" in sql)
     assert "profile_date BETWEEN CAST(%s AS DATE) AND CAST(%s AS DATE)" in profile_query
-    assert profile_params == ("fraud_model_demo", "amount", "2026-01-07", "2026-01-21", "published-1")
+    assert profile_params == (
+        "fraud_model_demo",
+        "amount",
+        "2026-01-07",
+        "2026-01-21",
+        "published-1",
+    )
 
 
 def test_get_overview_rows_uses_bulk_historical_snapshot_queries() -> None:
@@ -2563,14 +2732,23 @@ def test_get_overview_rows_uses_bulk_historical_snapshot_queries() -> None:
     assert chargeback_row["drifting_features"] == 1
     assert chargeback_row["max_null_rate"] == 0.7
     assert chargeback_row["computing"] is False
-    quality_query = next(sql for sql in queries if "ROW_NUMBER() OVER" in sql and "FROM quality_metrics" in sql)
+    quality_query = next(
+        sql for sql in queries if "ROW_NUMBER() OVER" in sql and "FROM quality_metrics" in sql
+    )
     normalized_quality_query = " ".join(quality_query.split())
     assert ") latest_quality WHERE row_num = 1" in normalized_quality_query
-    assert "PARTITION BY quality.model_key ORDER BY quality.computed_at DESC" in normalized_quality_query
-    drift_query = next(sql for sql in queries if "feature_metric_history AS" in sql and "FROM drift_metrics" in sql)
+    assert (
+        "PARTITION BY quality.model_key ORDER BY quality.computed_at DESC"
+        in normalized_quality_query
+    )
+    drift_query = next(
+        sql for sql in queries if "feature_metric_history AS" in sql and "FROM drift_metrics" in sql
+    )
     normalized_drift_query = " ".join(drift_query.split())
     assert "MAX(drift.metric_value) AS metric_value" in normalized_drift_query
-    assert "GROUP BY drift.model_key, drift.feature_name, drift.metric_name" in normalized_drift_query
+    assert (
+        "GROUP BY drift.model_key, drift.feature_name, drift.metric_name" in normalized_drift_query
+    )
     assert "FROM feature_metric_history" in normalized_drift_query
     assert not any("ORDER BY window_end, feature_name, metric_name" in sql for sql in queries)
 
@@ -2724,7 +2902,9 @@ def test_get_overview_rows_uses_monitor_threshold_overrides_for_drifting_feature
 def test_get_overview_rows_returns_empty_without_active_monitors() -> None:
     repository = SimpleNamespace(
         list_monitor_configs=lambda status="active": [],
-        get_monitor_summary=lambda: (_ for _ in ()).throw(AssertionError("summary should not be queried")),
+        get_monitor_summary=lambda: (_ for _ in ()).throw(
+            AssertionError("summary should not be queried")
+        ),
     )
     backend = DashboardBackend(repository=_with_published_generation(repository))
 
@@ -2734,7 +2914,9 @@ def test_get_overview_rows_returns_empty_without_active_monitors() -> None:
 
 def test_safe_json_helpers_skip_malformed_numeric_values() -> None:
     assert _safe_json_list([1, "bad", None, "4.5"]) == [1.0, 4.5]
-    assert _null_rate_dict('{"amount": 1.2, "country": "oops", "velocity_7d": null}') == {"amount": 1.2}
+    assert _null_rate_dict('{"amount": 1.2, "country": "oops", "velocity_7d": null}') == {
+        "amount": 1.2
+    }
 
 
 def test_shared_thresholds_cover_metric_specific_warning_logic() -> None:
@@ -2744,7 +2926,9 @@ def test_shared_thresholds_cover_metric_specific_warning_logic() -> None:
     assert critical == 0.15
 
 
-def test_get_reference_data_includes_recent_incident_history_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_reference_data_includes_recent_incident_history_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
         backend_module,
         "resolve_shared_workflow_schedule_status",
@@ -2792,7 +2976,9 @@ def test_get_reference_data_includes_recent_incident_history_when_available(monk
             performance_metrics="performance_metrics",
         ),
         list_monitor_configs=lambda status="active": [config],
-        get_monitor_summary=lambda: pd.DataFrame([{"model_key": "fraud_model_demo", "total_rows": 840}]),
+        get_monitor_summary=lambda: pd.DataFrame(
+            [{"model_key": "fraud_model_demo", "total_rows": 840}]
+        ),
         get_monitor_runtime_state=lambda model_id: None,
         get_recent_refresh_runs=lambda model_id, limit=12: [
             {
@@ -2914,7 +3100,9 @@ def test_get_incidents_data_enriches_rows_with_monitor_names() -> None:
 
     incidents = backend.get_incidents_data(limit_history=20)
 
-    assert incidents["models"] == [{"id": "fraud_model_demo", "name": "Fraud Model Demo", "status": "active"}]
+    assert incidents["models"] == [
+        {"id": "fraud_model_demo", "name": "Fraud Model Demo", "status": "active"}
+    ]
     assert incidents["open_incidents"].iloc[0]["display_name"] == "Fraud Model Demo"
     assert incidents["open_incidents"].iloc[0]["status"] == "open"
     assert incidents["history"].iloc[0]["display_name"] == "Fraud Model Demo"

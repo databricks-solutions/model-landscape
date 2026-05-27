@@ -22,9 +22,7 @@ def _build(y_true: Any, y_score: np.ndarray, classes: list[Any], **layout: Any) 
     if is_binary(classes):
         pos_idx = 1 if y_score.ndim == 2 else 0
         scores_pos = y_score[:, pos_idx] if y_score.ndim == 2 else y_score
-        precision, recall, _ = precision_recall_curve(
-            y_true, scores_pos, pos_label=classes[1]
-        )
+        precision, recall, _ = precision_recall_curve(y_true, scores_pos, pos_label=classes[1])
         ap = float(average_precision_score((y_true == classes[1]).astype(int), scores_pos))
         curves.append(
             {

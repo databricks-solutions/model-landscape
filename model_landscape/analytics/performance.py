@@ -4,11 +4,19 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import accuracy_score, mean_absolute_error, mean_squared_error
 
-from model_landscape.domain.performance_metrics import default_performance_metric_names, normalize_performance_metric_names
-from model_landscape.services.class_filters import normalized_binary_series, resolved_prediction_binary_series
+from model_landscape.domain.performance_metrics import (
+    default_performance_metric_names,
+    normalize_performance_metric_names,
+)
+from model_landscape.services.class_filters import (
+    normalized_binary_series,
+    resolved_prediction_binary_series,
+)
 
 
-def _clean_binning_values(values: np.ndarray, *, clip_percentile: float | None = None) -> np.ndarray:
+def _clean_binning_values(
+    values: np.ndarray, *, clip_percentile: float | None = None
+) -> np.ndarray:
     clean = np.asarray(values, dtype=float)
     clean = clean[~np.isnan(clean)]
     if clean.size == 0:
@@ -90,7 +98,6 @@ def compute_classification_metrics(
     tp = int(((pred_binary == 1) & (truth_binary == 1)).sum())
     fp = int(((pred_binary == 1) & (truth_binary == 0)).sum())
     fn = int(((pred_binary == 0) & (truth_binary == 1)).sum())
-    tn = int(((pred_binary == 0) & (truth_binary == 0)).sum())
     predicted_positive_count = tp + fp
     precision = (tp / predicted_positive_count) if predicted_positive_count > 0 else None
     recall = (tp / (tp + fn)) if predicted_positive_count > 0 and (tp + fn) > 0 else None
@@ -160,7 +167,9 @@ def compute_daily_classification_metrics(
     }
 
 
-def compute_regression_metrics(df: pd.DataFrame, prediction_col: str, label_col: str) -> dict[str, float]:
+def compute_regression_metrics(
+    df: pd.DataFrame, prediction_col: str, label_col: str
+) -> dict[str, float]:
     pred = pd.to_numeric(df[prediction_col], errors="coerce").to_numpy()
     truth = pd.to_numeric(df[label_col], errors="coerce").to_numpy()
     mask = ~(np.isnan(pred) | np.isnan(truth))
@@ -248,16 +257,18 @@ def rank_degradation_contributors(
                     if regression_mode
                     else current_metric - baseline_metric
                 )
-                rows.append({
-                    "feature_name": feature,
-                    "bin_label": f"[{edges[index]:.4g}, {edges[index + 1]:.4g})",
-                    "baseline_metric": baseline_metric,
-                    "current_metric": current_metric,
-                    "delta": round(delta, 4),
-                    "volume_pct": volume_pct,
-                    "contribution": round(delta * volume_pct / 100, 4),
-                    "metric_name": metric_name,
-                })
+                rows.append(
+                    {
+                        "feature_name": feature,
+                        "bin_label": f"[{edges[index]:.4g}, {edges[index + 1]:.4g})",
+                        "baseline_metric": baseline_metric,
+                        "current_metric": current_metric,
+                        "delta": round(delta, 4),
+                        "volume_pct": volume_pct,
+                        "contribution": round(delta * volume_pct / 100, 4),
+                        "metric_name": metric_name,
+                    }
+                )
     frame = pd.DataFrame(rows)
     if frame.empty:
         return frame

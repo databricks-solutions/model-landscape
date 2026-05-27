@@ -9,7 +9,9 @@ def test_build_refresh_diagnostics_reports_no_runs_cleanly() -> None:
     assert diagnostics["state"] == "no_runs"
     assert diagnostics["summary"]["dominant_bottleneck"] == "No Runs Yet"
     assert diagnostics["summary"]["compute_footprint"] == "No compute footprint data yet"
-    assert diagnostics["summary"]["recommendations"] == ["Run the first refresh to start collecting diagnostics."]
+    assert diagnostics["summary"]["recommendations"] == [
+        "Run the first refresh to start collecting diagnostics."
+    ]
 
 
 def test_build_refresh_diagnostics_classifies_source_scan_bound_runs() -> None:
@@ -131,8 +133,18 @@ def test_build_refresh_diagnostics_flags_elevated_compute_footprint() -> None:
 
 def test_build_refresh_diagnostics_flags_failure_heavy_history() -> None:
     runs = [
-        {"status": "failed", "scope": "bootstrap", "started_at": "2026-01-21T10:00:00", "total_duration_ms": 0},
-        {"status": "failed", "scope": "bootstrap", "started_at": "2026-01-20T10:00:00", "total_duration_ms": 0},
+        {
+            "status": "failed",
+            "scope": "bootstrap",
+            "started_at": "2026-01-21T10:00:00",
+            "total_duration_ms": 0,
+        },
+        {
+            "status": "failed",
+            "scope": "bootstrap",
+            "started_at": "2026-01-20T10:00:00",
+            "total_duration_ms": 0,
+        },
         {
             "status": "completed",
             "scope": "drift_quality",
@@ -149,4 +161,6 @@ def test_build_refresh_diagnostics_flags_failure_heavy_history() -> None:
 
     assert diagnostics["state"] == "insufficient_data"
     assert diagnostics["summary"]["success_rate_pct"] == 33.3
-    assert diagnostics["summary"]["recommendations"][0].startswith("Recent failures limit timing guidance")
+    assert diagnostics["summary"]["recommendations"][0].startswith(
+        "Recent failures limit timing guidance"
+    )

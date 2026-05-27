@@ -40,17 +40,21 @@ def test_replace_dashboard_projection_uses_upserts_before_pruning() -> None:
 
     read_model.replace_dashboard_projection(
         configs=[config],
-        summary=pd.DataFrame([{
-            "model_key": "payments_risk_v1",
-            "display_name": "Payments Risk",
-            "max_psi": 0.42,
-            "feature_count": 1,
-            "latest_window_end": "2026-01-21",
-            "total_rows": 500,
-            "latest_data_date": "2026-01-21",
-            "last_refresh_at": "2026-01-21T12:00:00+00:00",
-            "open_incident_count": 1,
-        }]),
+        summary=pd.DataFrame(
+            [
+                {
+                    "model_key": "payments_risk_v1",
+                    "display_name": "Payments Risk",
+                    "max_psi": 0.42,
+                    "feature_count": 1,
+                    "latest_window_end": "2026-01-21",
+                    "total_rows": 500,
+                    "latest_data_date": "2026-01-21",
+                    "last_refresh_at": "2026-01-21T12:00:00+00:00",
+                    "open_incident_count": 1,
+                }
+            ]
+        ),
         incidents=pd.DataFrame(),
     )
 
@@ -58,4 +62,7 @@ def test_replace_dashboard_projection_uses_upserts_before_pruning() -> None:
     summary_insert = connection.executed_many[1][0]
     assert "ON CONFLICT (model_key) DO UPDATE" in inventory_insert
     assert "ON CONFLICT (model_key) DO UPDATE" in summary_insert
-    assert all("DELETE FROM" not in sql or "WHERE model_key NOT IN" in sql or "open_incidents" in sql for sql, _ in connection.executed[3:])
+    assert all(
+        "DELETE FROM" not in sql or "WHERE model_key NOT IN" in sql or "open_incidents" in sql
+        for sql, _ in connection.executed[3:]
+    )

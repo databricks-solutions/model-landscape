@@ -5,7 +5,6 @@ from pathlib import Path
 
 import mlflow
 import plotly.graph_objects as go
-
 from mlflow_lens.classifier import class_prediction_error
 
 
@@ -32,6 +31,4 @@ def test_class_prediction_error_logs_artifacts(experiment_id, binary_data):
     assert payload["type"] == "class_prediction_error"
     assert isinstance(payload["data"], list)
     assert "true" in payload["data"][0]
-    client.download_artifacts(
-        run.info.run_id, "lens/panels/class_prediction_error.html"
-    )
+    client.download_artifacts(run.info.run_id, "lens/panels/class_prediction_error.html")

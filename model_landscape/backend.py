@@ -17,7 +17,10 @@ from model_landscape.analytics.performance import (
 )
 from model_landscape.config import settings
 from model_landscape.domain.models import MonitorConfig, MonitorDiscoveryResult, MonitorRuntimeState
-from model_landscape.services.class_filters import normalize_class_filter, supports_binary_class_filters
+from model_landscape.services.class_filters import (
+    normalize_class_filter,
+    supports_binary_class_filters,
+)
 from model_landscape.services.control_plane import ControlPlaneRepository, build_repository
 from model_landscape.services.monitor_discovery import MonitorDiscoveryService
 from model_landscape.services.onboarding import baseline_label
@@ -29,7 +32,6 @@ from model_landscape.services.refresh_engine import (
 )
 from model_landscape.services.refresh_jobs import resolve_shared_workflow_schedule_status
 from model_landscape.services.thresholds import get_thresholds, merged_thresholds
-
 
 logger = logging.getLogger(__name__)
 
@@ -103,9 +105,7 @@ def _approximate_histogram_values(
     if len(edges) < 2 or len(counts) != len(edges) - 1:
         return []
     positive_bins = [
-        (index, max(float(count), 0.0))
-        for index, count in enumerate(counts)
-        if float(count) > 0
+        (index, max(float(count), 0.0)) for index, count in enumerate(counts) if float(count) > 0
     ]
     if not positive_bins:
         return []
@@ -151,15 +151,21 @@ def _safe_int(value: object) -> int:
     return int(numeric)
 
 
-def _non_empty_text_bounds(values: list[object] | tuple[object, ...]) -> tuple[str | None, str | None]:
+def _non_empty_text_bounds(
+    values: list[object] | tuple[object, ...],
+) -> tuple[str | None, str | None]:
     normalized = sorted(str(value).strip() for value in values if str(value).strip())
     if not normalized:
         return None, None
     return normalized[0], normalized[-1]
 
 
-def _combine_weighted_mean_std(parts: list[tuple[int, float | None, float | None]]) -> tuple[float | None, float | None]:
-    valid_parts = [(count, mean, std) for count, mean, std in parts if count > 0 and mean is not None]
+def _combine_weighted_mean_std(
+    parts: list[tuple[int, float | None, float | None]],
+) -> tuple[float | None, float | None]:
+    valid_parts = [
+        (count, mean, std) for count, mean, std in parts if count > 0 and mean is not None
+    ]
     if not valid_parts:
         return None, None
     total_count = sum(count for count, _, _ in valid_parts)
@@ -226,7 +232,9 @@ def _resolve_dynamic_bin_edges(
     normalized_mode = str(binning_mode or "auto").strip().lower()
     if normalized_mode == "custom" and custom_edges and len(custom_edges) >= 2:
         return np.asarray(custom_edges, dtype=float)
-    combined = np.concatenate([values for values in (baseline_values, current_values) if values.size > 0])
+    combined = np.concatenate(
+        [values for values in (baseline_values, current_values) if values.size > 0]
+    )
     if combined.size == 0:
         return np.asarray([], dtype=float)
     if normalized_mode == "fixed":
@@ -242,10 +250,18 @@ def _aggregated_classification_metrics(frame: pd.DataFrame) -> dict[str, float |
             "f1": None,
             "accuracy": None,
         }
-    tp = int(pd.to_numeric(frame.get("tp", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
-    fp = int(pd.to_numeric(frame.get("fp", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
-    fn = int(pd.to_numeric(frame.get("fn", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
-    tn = int(pd.to_numeric(frame.get("tn", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
+    tp = int(
+        pd.to_numeric(frame.get("tp", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
+    )
+    fp = int(
+        pd.to_numeric(frame.get("fp", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
+    )
+    fn = int(
+        pd.to_numeric(frame.get("fn", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
+    )
+    tn = int(
+        pd.to_numeric(frame.get("tn", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
+    )
     precision = (tp / (tp + fp)) if (tp + fp) > 0 else None
     recall = (tp / (tp + fn)) if (tp + fn) > 0 else None
     f1 = None
@@ -284,7 +300,11 @@ def _classification_metric_effective_value(
         return float(raw_value), "defined"
     predicted_positive_count = int(metrics.get("predicted_positive_count") or 0)
     actual_positive_count = int(metrics.get("actual_positive_count") or 0)
-    if metric_key in {"precision", "recall", "f1"} and predicted_positive_count == 0 and actual_positive_count > 0:
+    if (
+        metric_key in {"precision", "recall", "f1"}
+        and predicted_positive_count == 0
+        and actual_positive_count > 0
+    ):
         return 0.0, "undefined_zero_detections"
     return None, "undefined"
 
@@ -311,7 +331,9 @@ def _quality_history_from_daily_profiles(frame: pd.DataFrame) -> pd.DataFrame:
     working["baseline_start"] = ""
     working["baseline_end"] = ""
     working["window_id"] = working["period"].apply(lambda value: f"daily_profile|{value}")
-    working["row_count"] = pd.to_numeric(working["row_count"], errors="coerce").fillna(0).astype(int)
+    working["row_count"] = (
+        pd.to_numeric(working["row_count"], errors="coerce").fillna(0).astype(int)
+    )
     working["prediction_mean"] = pd.to_numeric(working["prediction_mean"], errors="coerce")
     working["prediction_std"] = pd.to_numeric(working["prediction_std"], errors="coerce")
     working["null_rates_dict"] = working["null_rates"].apply(_null_rate_dict)
@@ -319,11 +341,15 @@ def _quality_history_from_daily_profiles(frame: pd.DataFrame) -> pd.DataFrame:
         lambda values: max(values.values()) if values else 0.0
     )
     working["computed_at_ts"] = pd.to_datetime(working.get("computed_at"), errors="coerce")
-    working = working.sort_values(["period", "computed_at_ts", "profile_date_ts"]).drop_duplicates("period", keep="last")
+    working = working.sort_values(["period", "computed_at_ts", "profile_date_ts"]).drop_duplicates(
+        "period", keep="last"
+    )
     return working.sort_values("profile_date_ts").reset_index(drop=True)
 
 
-def _quality_summary_from_daily_profiles(model_key: str, rows: list[dict[str, object]]) -> dict[str, object]:
+def _quality_summary_from_daily_profiles(
+    model_key: str, rows: list[dict[str, object]]
+) -> dict[str, object]:
     if not rows:
         return {}
     frame = pd.DataFrame(rows)
@@ -359,7 +385,9 @@ def _quality_summary_from_daily_profiles(model_key: str, rows: list[dict[str, ob
         if row_count <= 0:
             continue
         for feature_name, null_pct in _null_rate_dict(row.get("null_rates")).items():
-            null_totals[feature_name] = null_totals.get(feature_name, 0.0) + (float(null_pct) * row_count)
+            null_totals[feature_name] = null_totals.get(feature_name, 0.0) + (
+                float(null_pct) * row_count
+            )
     null_rates = {
         feature_name: round(weighted_total / total_rows, 2)
         for feature_name, weighted_total in sorted(null_totals.items())
@@ -418,7 +446,9 @@ def _period_label(series: pd.Series, granularity: str) -> pd.Series:
     elif granularity == "weekly":
         labels = timestamps.dt.to_period("W").dt.end_time.dt.date.astype("object")
     labels = labels.where(timestamps.notna(), None)
-    return labels.map(lambda value: str(value) if value is not None and not pd.isna(value) else None)
+    return labels.map(
+        lambda value: str(value) if value is not None and not pd.isna(value) else None
+    )
 
 
 def _sql_placeholders(count: int) -> str:
@@ -433,15 +463,12 @@ def _drift_results_from_frame(frame: pd.DataFrame, granularity: str = "daily") -
     working["computed_at_ts"] = pd.to_datetime(working["computed_at"], errors="coerce")
     working["period"] = _period_label(working["window_end"], granularity)
     working = working[working["period"].notna()].copy()
-    metrics = (
-        working.pivot_table(
-            index=["feature_name", "period"],
-            columns="metric_name",
-            values="metric_value",
-            aggfunc="max",
-        )
-        .reset_index()
-    )
+    metrics = working.pivot_table(
+        index=["feature_name", "period"],
+        columns="metric_name",
+        values="metric_value",
+        aggfunc="max",
+    ).reset_index()
     window_level = working.drop_duplicates(
         subset=[
             "feature_name",
@@ -452,39 +479,38 @@ def _drift_results_from_frame(frame: pd.DataFrame, granularity: str = "daily") -
             "window_end",
         ]
     )
-    latest_static = (
-        window_level.sort_values(["feature_name", "period", "window_end_ts", "computed_at_ts"])
-        .drop_duplicates(subset=["feature_name", "period"], keep="last")
+    latest_static = window_level.sort_values(
+        ["feature_name", "period", "window_end_ts", "computed_at_ts"]
+    ).drop_duplicates(subset=["feature_name", "period"], keep="last")[
         [
-            [
-                "feature_name",
-                "period",
-                "window_start",
-                "window_end",
-                "baseline_start",
-                "baseline_end",
-                "ref_mean",
-                "cur_mean",
-                "ref_std",
-                "cur_std",
-                "ref_null_pct",
-                "cur_null_pct",
-                "computed_at",
-            ]
+            "feature_name",
+            "period",
+            "window_start",
+            "window_end",
+            "baseline_start",
+            "baseline_end",
+            "ref_mean",
+            "cur_mean",
+            "ref_std",
+            "cur_std",
+            "ref_null_pct",
+            "cur_null_pct",
+            "computed_at",
         ]
+    ]
+    aggregated_counts = window_level.groupby(["feature_name", "period"], as_index=False).agg(
+        ref_count=("ref_count", "sum"),
+        cur_count=("cur_count", "sum"),
     )
-    aggregated_counts = (
-        window_level.groupby(["feature_name", "period"], as_index=False)
-        .agg(
-            ref_count=("ref_count", "sum"),
-            cur_count=("cur_count", "sum"),
+    result = (
+        latest_static.merge(aggregated_counts, on=["feature_name", "period"], how="left")
+        .merge(
+            metrics,
+            on=["feature_name", "period"],
+            how="left",
         )
+        .rename(columns={"feature_name": "feature"})
     )
-    result = latest_static.merge(aggregated_counts, on=["feature_name", "period"], how="left").merge(
-        metrics,
-        on=["feature_name", "period"],
-        how="left",
-    ).rename(columns={"feature_name": "feature"})
     for metric in ("psi", "js_divergence", "kl_divergence"):
         if metric not in result.columns:
             result[metric] = 0.0
@@ -536,7 +562,10 @@ class DashboardBackend:
             try:
                 rows = loader(model_id)
             except Exception:
-                logger.exception("Failed to load recent daily quality profiles for source-fallback bounds", extra={"model_key": model_id})
+                logger.exception(
+                    "Failed to load recent daily quality profiles for source-fallback bounds",
+                    extra={"model_key": model_id},
+                )
                 rows = []
         if rows:
             frame = pd.DataFrame(rows)
@@ -569,10 +598,7 @@ class DashboardBackend:
             if hasattr(self.repository, "list_monitor_runtime_states")
             else {}
         )
-        summary_map = {
-            str(row["model_key"]): row
-            for _, row in summary.iterrows()
-        }
+        summary_map = {str(row["model_key"]): row for _, row in summary.iterrows()}
         models: list[dict] = []
         for config in configs:
             row = summary_map.get(config.model_key, {})
@@ -599,7 +625,8 @@ class DashboardBackend:
                     "total_rows": _safe_int(row.get("total_rows", 0)),
                     "open_incident_count": _safe_int(row.get("open_incident_count", 0)),
                     "freshness_status": _freshness_status(config, runtime_state),
-                    "last_run_status": (runtime_state.last_run_status if runtime_state else None) or "",
+                    "last_run_status": (runtime_state.last_run_status if runtime_state else None)
+                    or "",
                 }
             )
         return models
@@ -618,7 +645,9 @@ class DashboardBackend:
             for config in configs
         ]
 
-    def get_monitor_config(self, model_id: str, status: str | list[str] | tuple[str, ...] | None = "active") -> MonitorConfig | None:
+    def get_monitor_config(
+        self, model_id: str, status: str | list[str] | tuple[str, ...] | None = "active"
+    ) -> MonitorConfig | None:
         for config in self.repository.list_monitor_configs(status=status):
             if config.model_key == model_id:
                 return config
@@ -695,7 +724,7 @@ class DashboardBackend:
                         ORDER BY created_at DESC, source_run_id DESC
                     ) AS model_landscape_window_rank
                 FROM {comparison_windows}
-                WHERE {' AND '.join(filters)}
+                WHERE {" AND ".join(filters)}
             ),
             deduped_windows AS (
                 SELECT window_id, model_key, window_grain, window_start, window_end, baseline_start, baseline_end, baseline_kind
@@ -742,12 +771,16 @@ class DashboardBackend:
         class_basis: str | None = None,
         class_value: str | None = None,
     ) -> pd.DataFrame:
-        normalized_class_basis, normalized_class_value, class_filter_active = normalize_class_filter(class_basis, class_value)
+        normalized_class_basis, normalized_class_value, class_filter_active = (
+            normalize_class_filter(class_basis, class_value)
+        )
         config = self.get_monitor_config(model_id)
         if class_filter_active:
             if not supports_binary_class_filters(config):
                 return _empty_frame_with_reason("unsupported_class_filter")
-            metadata_list = self._get_window_metadata(model_id, start_date=start_date, end_date=end_date)
+            metadata_list = self._get_window_metadata(
+                model_id, start_date=start_date, end_date=end_date
+            )
             if not metadata_list:
                 return _empty_frame_with_reason("missing_class_facts")
             load_start, load_end = _non_empty_text_bounds(
@@ -810,7 +843,9 @@ class DashboardBackend:
                 include_drift_quality=True,
                 include_performance=False,
             )
-            return _drift_results_from_frame(pd.DataFrame(derived.drift_rows), granularity=granularity)
+            return _drift_results_from_frame(
+                pd.DataFrame(derived.drift_rows), granularity=granularity
+            )
         filters = ["model_key = %s"]
         params: list[object] = []
         generation_id = self._published_generation_id(model_id)
@@ -862,7 +897,7 @@ class DashboardBackend:
                         ORDER BY computed_at DESC, source_run_id DESC
                     ) AS model_landscape_metric_rank
                 FROM {self.repository.table_names.drift_metrics}
-                WHERE {' AND '.join(filters)}
+                WHERE {" AND ".join(filters)}
             ),
             deduped_metrics AS (
                 SELECT
@@ -922,7 +957,9 @@ class DashboardBackend:
         if drift.empty or metric not in drift.columns:
             return pd.DataFrame()
         latest_period = drift["period"].max()
-        return drift[drift["period"] == latest_period].nlargest(top_n, metric).reset_index(drop=True)
+        return (
+            drift[drift["period"] == latest_period].nlargest(top_n, metric).reset_index(drop=True)
+        )
 
     def _daily_quality_rows(
         self,
@@ -933,7 +970,9 @@ class DashboardBackend:
         class_basis: str | None = None,
         class_value: str | None = None,
     ) -> tuple[list[dict[str, object]], str]:
-        normalized_class_basis, normalized_class_value, class_filter_active = normalize_class_filter(class_basis, class_value)
+        normalized_class_basis, normalized_class_value, class_filter_active = (
+            normalize_class_filter(class_basis, class_value)
+        )
         if class_filter_active:
             persisted_rows = (
                 self.repository.get_daily_class_quality_profile_rows(
@@ -989,7 +1028,9 @@ class DashboardBackend:
         resolved_start, resolved_end = self._resolved_dashboard_source_bounds(
             start_date=start_date,
             end_date=end_date,
-            fallback_dates=None if (start_date or end_date) else list(self._recent_unfiltered_quality_bounds(model_id)),
+            fallback_dates=None
+            if (start_date or end_date)
+            else list(self._recent_unfiltered_quality_bounds(model_id)),
         )
         if not resolved_start or not resolved_end:
             return None, "filtered_source_bounds_unavailable"
@@ -1043,7 +1084,7 @@ class DashboardBackend:
             f"""
             SELECT *
             FROM {self.repository.table_names.quality_metrics}
-            WHERE {' AND '.join(filters)}
+            WHERE {" AND ".join(filters)}
             ORDER BY computed_at DESC
             LIMIT 1
             """,
@@ -1097,7 +1138,7 @@ class DashboardBackend:
             WITH recent_history AS (
                 SELECT *
                 FROM {self.repository.table_names.quality_history}
-                WHERE {' AND '.join(filters)}
+                WHERE {" AND ".join(filters)}
                 ORDER BY window_end DESC
                 LIMIT {_MAX_DASHBOARD_WINDOW_HISTORY}
             )
@@ -1108,7 +1149,9 @@ class DashboardBackend:
             tuple(params),
         )
         if frame.empty:
-            daily_quality_profiles = getattr(self.repository.table_names, "daily_quality_profiles", "")
+            daily_quality_profiles = getattr(
+                self.repository.table_names, "daily_quality_profiles", ""
+            )
             if not daily_quality_profiles:
                 return pd.DataFrame()
             daily_filters = ["model_key = %s"]
@@ -1120,7 +1163,7 @@ class DashboardBackend:
                 WITH recent_profiles AS (
                     SELECT *
                     FROM {daily_quality_profiles}
-                    WHERE {' AND '.join(daily_filters)}
+                    WHERE {" AND ".join(daily_filters)}
                     ORDER BY profile_date DESC
                     LIMIT {_MAX_DASHBOARD_DAILY_PROFILE_DAYS}
                 )
@@ -1135,14 +1178,18 @@ class DashboardBackend:
         working["window_end_ts"] = pd.to_datetime(working["window_end"], errors="coerce")
         working["computed_at_ts"] = pd.to_datetime(working["computed_at"], errors="coerce")
         working["period"] = working["window_end_ts"].dt.date.astype(str)
-        working["row_count"] = pd.to_numeric(working["row_count"], errors="coerce").fillna(0).astype(int)
+        working["row_count"] = (
+            pd.to_numeric(working["row_count"], errors="coerce").fillna(0).astype(int)
+        )
         working["prediction_mean"] = pd.to_numeric(working["prediction_mean"], errors="coerce")
         working["prediction_std"] = pd.to_numeric(working["prediction_std"], errors="coerce")
         working["null_rates_dict"] = working["null_rates"].apply(_null_rate_dict)
         working["max_null_rate"] = working["null_rates_dict"].apply(
             lambda values: max(values.values()) if values else 0.0
         )
-        working = working.sort_values(["period", "computed_at_ts", "window_end_ts"]).drop_duplicates("period", keep="last")
+        working = working.sort_values(
+            ["period", "computed_at_ts", "window_end_ts"]
+        ).drop_duplicates("period", keep="last")
         return working.sort_values("window_end_ts").reset_index(drop=True)
 
     def get_null_rate_history(
@@ -1168,12 +1215,14 @@ class DashboardBackend:
         for _, row in history.iterrows():
             rates = row.get("null_rates_dict") or {}
             for feature, null_rate in rates.items():
-                exploded_rows.append({
-                    "period": row["period"],
-                    "feature": feature,
-                    "null_rate": float(null_rate),
-                    "window_end": row.get("window_end"),
-                })
+                exploded_rows.append(
+                    {
+                        "period": row["period"],
+                        "feature": feature,
+                        "null_rate": float(null_rate),
+                        "window_end": row.get("window_end"),
+                    }
+                )
         if not exploded_rows:
             return pd.DataFrame()
         frame = pd.DataFrame(exploded_rows)
@@ -1184,7 +1233,11 @@ class DashboardBackend:
             .head(top_n)["feature"]
             .tolist()
         )
-        return frame[frame["feature"].isin(top_features)].sort_values(["period", "feature"]).reset_index(drop=True)
+        return (
+            frame[frame["feature"].isin(top_features)]
+            .sort_values(["period", "feature"])
+            .reset_index(drop=True)
+        )
 
     def _source_daily_class_feature_rows_fallback(
         self,
@@ -1375,15 +1428,12 @@ class DashboardBackend:
         if frame.empty:
             return {}
         working = frame.copy()
-        pivoted = (
-            working.pivot_table(
-                index=["model_key", "feature_name"],
-                columns="metric_name",
-                values="metric_value",
-                aggfunc="max",
-            )
-            .reset_index()
-        )
+        pivoted = working.pivot_table(
+            index=["model_key", "feature_name"],
+            columns="metric_name",
+            values="metric_value",
+            aggfunc="max",
+        ).reset_index()
         drift_map: dict[str, dict[str, object]] = {}
         for model_key, group in pivoted.groupby("model_key", sort=False):
             warning_threshold, critical_threshold = get_thresholds(
@@ -1408,7 +1458,9 @@ class DashboardBackend:
                 "max_metric": _safe_float(metric_series.max()) if not metric_series.empty else 0.0,
                 "avg_metric": _safe_float(metric_series.mean()) if not metric_series.empty else 0.0,
                 "avg_js": _safe_float(js_series.mean()) if not js_series.empty else 0.0,
-                "drifting_features": int((metric_series >= warning_threshold).sum()) if not metric_series.empty else 0,
+                "drifting_features": int((metric_series >= warning_threshold).sum())
+                if not metric_series.empty
+                else 0,
                 "total_features": int(len(group.index)),
                 "top_drifter": top_drifter,
                 "threshold_warning": float(warning_threshold),
@@ -1425,10 +1477,14 @@ class DashboardBackend:
             for config in self.repository.list_monitor_configs(status="active")
         }
         threshold_map = {
-            model_id: merged_thresholds(getattr(active_configs.get(model_id), "threshold_overrides", None))
+            model_id: merged_thresholds(
+                getattr(active_configs.get(model_id), "threshold_overrides", None)
+            )
             for model_id in model_ids
         }
-        drift_map = self._historical_drift_summary_map(model_ids, metric, threshold_map=threshold_map)
+        drift_map = self._historical_drift_summary_map(
+            model_ids, metric, threshold_map=threshold_map
+        )
         rows: list[dict] = []
         for model in models:
             drift = drift_map.get(model["id"], {})
@@ -1447,15 +1503,23 @@ class DashboardBackend:
                     "avg_js": _safe_float(drift.get("avg_js")),
                     "drifting_features": int(drift.get("drifting_features") or 0),
                     "total_features": int(model.get("feature_count") or 0),
-                    "top_drifter": str(drift.get("top_drifter") or ("Computing/Pending" if computing else "N/A")),
+                    "top_drifter": str(
+                        drift.get("top_drifter") or ("Computing/Pending" if computing else "N/A")
+                    ),
                     "max_null_rate": _safe_float(quality.get("max_null_rate")),
                     "has_labels": model["has_labels"],
                     "computing": computing,
                     "freshness_status": model["freshness_status"],
                     "last_run_status": model["last_run_status"],
                     "metric": metric,
-                    "threshold_warning": float(drift.get("threshold_warning") or get_thresholds(metric, threshold_map.get(model["id"]))[0]),
-                    "threshold_critical": float(drift.get("threshold_critical") or get_thresholds(metric, threshold_map.get(model["id"]))[1]),
+                    "threshold_warning": float(
+                        drift.get("threshold_warning")
+                        or get_thresholds(metric, threshold_map.get(model["id"]))[0]
+                    ),
+                    "threshold_critical": float(
+                        drift.get("threshold_critical")
+                        or get_thresholds(metric, threshold_map.get(model["id"]))[1]
+                    ),
                     "thresholds": threshold_map.get(model["id"], merged_thresholds()),
                 }
             )
@@ -1483,7 +1547,11 @@ class DashboardBackend:
         if not config:
             return None, pd.DataFrame(), pd.DataFrame()
         drift = self.get_drift_results(model_id)
-        if drift.empty or "window_end" not in drift.columns or "baseline_start" not in drift.columns:
+        if (
+            drift.empty
+            or "window_end" not in drift.columns
+            or "baseline_start" not in drift.columns
+        ):
             return config, pd.DataFrame(), pd.DataFrame()
         latest = drift.sort_values("window_end").iloc[-1]
         start_date = str(latest.get("baseline_start") or "")
@@ -1496,7 +1564,9 @@ class DashboardBackend:
         )
         if frame.empty or config.contract.timestamp_col not in frame.columns:
             return config, pd.DataFrame(), pd.DataFrame()
-        baseline, current = split_baseline_current(frame, config.contract.timestamp_col, config.baseline)
+        baseline, current = split_baseline_current(
+            frame, config.contract.timestamp_col, config.baseline
+        )
         return config, baseline, current
 
     def _load_current_window_frame(
@@ -1510,7 +1580,9 @@ class DashboardBackend:
             return None, pd.DataFrame()
         bounds = self._latest_window_bounds(model_id)
         if not bounds:
-            fallback_config, _, current = self._load_baseline_current(model_id, feature_columns=feature_columns)
+            fallback_config, _, current = self._load_baseline_current(
+                model_id, feature_columns=feature_columns
+            )
             return fallback_config, current
         start_date = bounds["window_start"] or None
         end_date = bounds["window_end"] or None
@@ -1545,7 +1617,9 @@ class DashboardBackend:
 
         # Feature Deep Dive raw fallbacks are only safe when the repository can
         # enforce an absolute cap on returned rows for the selected window.
-        if not (_supported("start_date") and _supported("end_date") and _supported("max_total_rows")):
+        if not (
+            _supported("start_date") and _supported("end_date") and _supported("max_total_rows")
+        ):
             return pd.DataFrame()
 
         kwargs = {
@@ -1593,7 +1667,7 @@ class DashboardBackend:
             f"""
             SELECT baseline_start, baseline_end, window_start, window_end
             FROM {comparison_windows}
-            WHERE {' AND '.join(filters)}
+            WHERE {" AND ".join(filters)}
             ORDER BY window_end DESC, created_at DESC
             LIMIT 1
             """,
@@ -1609,7 +1683,9 @@ class DashboardBackend:
             "window_end": str(row.get("window_end") or ""),
         }
 
-    def _feature_samples_from_daily_profiles(self, model_id: str, feature: str) -> tuple[pd.Series, pd.Series, bool]:
+    def _feature_samples_from_daily_profiles(
+        self, model_id: str, feature: str
+    ) -> tuple[pd.Series, pd.Series, bool]:
         daily_feature_profiles = getattr(self.repository.table_names, "daily_feature_profiles", "")
         if not daily_feature_profiles:
             return pd.Series(dtype=float), pd.Series(dtype=float), False
@@ -1641,7 +1717,7 @@ class DashboardBackend:
             f"""
             SELECT profile_date, distribution_json
             FROM {daily_feature_profiles}
-            WHERE {' AND '.join(filters)}
+            WHERE {" AND ".join(filters)}
             ORDER BY profile_date
             """,
             tuple(params),
@@ -1672,7 +1748,11 @@ class DashboardBackend:
                 baseline_values.extend(sample_values)
             elif window_start <= profile_date <= window_end:
                 current_values.extend(sample_values)
-        return pd.Series(baseline_values, dtype=float), pd.Series(current_values, dtype=float), used_histogram_approximation
+        return (
+            pd.Series(baseline_values, dtype=float),
+            pd.Series(current_values, dtype=float),
+            used_histogram_approximation,
+        )
 
     def get_feature_distribution(self, model_id: str, feature: str) -> tuple[pd.Series, pd.Series]:
         details = self.get_feature_distribution_details(model_id, feature)
@@ -1685,7 +1765,9 @@ class DashboardBackend:
         *,
         require_exact_samples: bool = False,
     ) -> dict[str, object]:
-        baseline_samples, current_samples, used_histogram_approximation = self._feature_samples_from_daily_profiles(model_id, feature)
+        baseline_samples, current_samples, used_histogram_approximation = (
+            self._feature_samples_from_daily_profiles(model_id, feature)
+        )
         bounds = self._latest_window_bounds(model_id)
         window_label = "Latest comparison window unavailable."
         config = self.get_monitor_config(model_id)
@@ -1695,17 +1777,25 @@ class DashboardBackend:
                 f"Baseline: {bounds['baseline_start'] or '—'} to {bounds['baseline_end'] or '—'} | "
                 f"Current: {bounds['window_start'] or '—'} to {bounds['window_end'] or '—'}"
             )
-        if not baseline_samples.empty and not current_samples.empty and not (require_exact_samples and used_histogram_approximation):
+        if (
+            not baseline_samples.empty
+            and not current_samples.empty
+            and not (require_exact_samples and used_histogram_approximation)
+        ):
             return {
                 "baseline": baseline_samples,
                 "current": current_samples,
-                "distribution_source": "persisted_histogram" if used_histogram_approximation else "persisted_samples",
+                "distribution_source": "persisted_histogram"
+                if used_histogram_approximation
+                else "persisted_samples",
                 "approximate": bool(used_histogram_approximation),
                 "window_label": window_label,
             }
         baseline, current = pd.DataFrame(), pd.DataFrame()
         if config:
-            config, baseline, current = self._load_baseline_current(model_id, feature_columns=(feature,))
+            config, baseline, current = self._load_baseline_current(
+                model_id, feature_columns=(feature,)
+            )
         if not config or feature not in baseline.columns or feature not in current.columns:
             return {
                 "baseline": pd.Series(dtype=float),
@@ -1713,7 +1803,11 @@ class DashboardBackend:
                 "distribution_source": (
                     "unavailable_requested_raw"
                     if require_exact_samples
-                    else ("unavailable_unsafe_bounded_read" if not raw_fallback_supported else "unavailable")
+                    else (
+                        "unavailable_unsafe_bounded_read"
+                        if not raw_fallback_supported
+                        else "unavailable"
+                    )
                 ),
                 "approximate": False,
                 "window_label": window_label,
@@ -1829,8 +1923,16 @@ class DashboardBackend:
                 mode=outlier_mode,
                 value=outlier_value,
             )
-            baseline_values = pd.to_numeric(feature_baseline.get(feature), errors="coerce").dropna().to_numpy(dtype=float, copy=False)
-            current_values = pd.to_numeric(feature_current.get(feature), errors="coerce").dropna().to_numpy(dtype=float, copy=False)
+            baseline_values = (
+                pd.to_numeric(feature_baseline.get(feature), errors="coerce")
+                .dropna()
+                .to_numpy(dtype=float, copy=False)
+            )
+            current_values = (
+                pd.to_numeric(feature_current.get(feature), errors="coerce")
+                .dropna()
+                .to_numpy(dtype=float, copy=False)
+            )
             edges = _resolve_dynamic_bin_edges(
                 baseline_values,
                 current_values,
@@ -1865,12 +1967,20 @@ class DashboardBackend:
                 if base_slice.empty or cur_slice.empty:
                     continue
                 if regression_mode:
-                    base_metrics = compute_regression_metrics(base_slice, config.contract.prediction_col, config.contract.label_col)
-                    cur_metrics = compute_regression_metrics(cur_slice, config.contract.prediction_col, config.contract.label_col)
+                    base_metrics = compute_regression_metrics(
+                        base_slice, config.contract.prediction_col, config.contract.label_col
+                    )
+                    cur_metrics = compute_regression_metrics(
+                        cur_slice, config.contract.prediction_col, config.contract.label_col
+                    )
                     baseline_metric = base_metrics.get(metric_name) if base_metrics else None
                     current_metric = cur_metrics.get(metric_name) if cur_metrics else None
-                    baseline_effective = float(baseline_metric) if baseline_metric is not None else None
-                    current_effective = float(current_metric) if current_metric is not None else None
+                    baseline_effective = (
+                        float(baseline_metric) if baseline_metric is not None else None
+                    )
+                    current_effective = (
+                        float(current_metric) if current_metric is not None else None
+                    )
                     metric_status = "defined"
                 else:
                     base_metrics = compute_daily_classification_metrics(
@@ -1887,8 +1997,12 @@ class DashboardBackend:
                     )
                     baseline_metric = base_metrics.get(metric_name) if base_metrics else None
                     current_metric = cur_metrics.get(metric_name) if cur_metrics else None
-                    baseline_effective, baseline_status = _classification_metric_effective_value(base_metrics, metric_name)
-                    current_effective, current_status = _classification_metric_effective_value(cur_metrics, metric_name)
+                    baseline_effective, baseline_status = _classification_metric_effective_value(
+                        base_metrics, metric_name
+                    )
+                    current_effective, current_status = _classification_metric_effective_value(
+                        cur_metrics, metric_name
+                    )
                     if "undefined_zero_detections" in {baseline_status, current_status}:
                         metric_status = "undefined_zero_detections"
                     elif "undefined" in {baseline_status, current_status}:
@@ -1907,8 +2021,12 @@ class DashboardBackend:
                     {
                         "feature": feature,
                         "bin_label": f"[{edges[index]:.4g}, {edges[index + 1]:.4g})",
-                        "baseline_metric": float(baseline_metric) if baseline_metric is not None else None,
-                        "current_metric": float(current_metric) if current_metric is not None else None,
+                        "baseline_metric": float(baseline_metric)
+                        if baseline_metric is not None
+                        else None,
+                        "current_metric": float(current_metric)
+                        if current_metric is not None
+                        else None,
                         "delta": round(float(delta), 4),
                         "current_volume_pct": round(current_share, 2),
                         "degradation_contribution": round(float(delta) * current_share / 100.0, 4),
@@ -1919,8 +2037,14 @@ class DashboardBackend:
                 )
         result = pd.DataFrame(rows)
         if not result.empty:
-            result["_bin_sort"] = result["bin_label"].str.extract(r"\[([^,]+),", expand=False).apply(_safe_float)
-            result = result.sort_values(["feature", "_bin_sort", "bin_label"]).drop(columns=["_bin_sort"]).reset_index(drop=True)
+            result["_bin_sort"] = (
+                result["bin_label"].str.extract(r"\[([^,]+),", expand=False).apply(_safe_float)
+            )
+            result = (
+                result.sort_values(["feature", "_bin_sort", "bin_label"])
+                .drop(columns=["_bin_sort"])
+                .reset_index(drop=True)
+            )
         contributors = (
             result.groupby("feature", as_index=False)["degradation_contribution"]
             .sum()
@@ -1954,7 +2078,9 @@ class DashboardBackend:
         return payload
 
     def get_dimension_breakdown(self, model_id: str, feature: str, dimension: str) -> pd.DataFrame:
-        config, current = self._load_current_window_frame(model_id, feature_columns=(feature, dimension))
+        config, current = self._load_current_window_frame(
+            model_id, feature_columns=(feature, dimension)
+        )
         if not config or feature not in current.columns or dimension not in current.columns:
             return pd.DataFrame()
         working = current[[dimension, feature]].copy()
@@ -1979,9 +2105,24 @@ class DashboardBackend:
             filtered.groupby("_dimension_value", dropna=False)
             .agg(
                 feature_average=(feature, "mean"),
-                feature_p25=(feature, lambda values: float(values.quantile(0.25)) if values.notna().any() else float("nan")),
-                feature_p50=(feature, lambda values: float(values.quantile(0.50)) if values.notna().any() else float("nan")),
-                feature_p75=(feature, lambda values: float(values.quantile(0.75)) if values.notna().any() else float("nan")),
+                feature_p25=(
+                    feature,
+                    lambda values: (
+                        float(values.quantile(0.25)) if values.notna().any() else float("nan")
+                    ),
+                ),
+                feature_p50=(
+                    feature,
+                    lambda values: (
+                        float(values.quantile(0.50)) if values.notna().any() else float("nan")
+                    ),
+                ),
+                feature_p75=(
+                    feature,
+                    lambda values: (
+                        float(values.quantile(0.75)) if values.notna().any() else float("nan")
+                    ),
+                ),
                 row_count=(feature, "size"),
             )
             .reset_index()
@@ -2058,12 +2199,26 @@ class DashboardBackend:
         for column in ("metric_value", "row_count", "volume_pct"):
             if column in frame.columns:
                 frame[column] = pd.to_numeric(frame[column], errors="coerce")
-        sort_columns = [column for column in ("profile_date_ts", "feature_name", "bin_label", "metric_name") if column in frame.columns]
-        return frame.sort_values(sort_columns).reset_index(drop=True) if sort_columns else frame.reset_index(drop=True)
+        sort_columns = [
+            column
+            for column in ("profile_date_ts", "feature_name", "bin_label", "metric_name")
+            if column in frame.columns
+        ]
+        return (
+            frame.sort_values(sort_columns).reset_index(drop=True)
+            if sort_columns
+            else frame.reset_index(drop=True)
+        )
 
-    def _daily_performance_timeline_fallback(self, model_id: str, metric_name: str) -> list[dict[str, float | None]]:
+    def _daily_performance_timeline_fallback(
+        self, model_id: str, metric_name: str
+    ) -> list[dict[str, float | None]]:
         profiles = self.get_daily_performance_profiles(model_id)
-        if profiles.empty or "metric_name" not in profiles.columns or "profile_date_ts" not in profiles.columns:
+        if (
+            profiles.empty
+            or "metric_name" not in profiles.columns
+            or "profile_date_ts" not in profiles.columns
+        ):
             return []
         metric_key = str(metric_name or "").strip().lower()
         dated_profiles = profiles[profiles["profile_date_ts"].notna()].copy()
@@ -2089,7 +2244,9 @@ class DashboardBackend:
             )
         return timeline
 
-    def _window_performance_timeline(self, dated: pd.DataFrame, metric_name: str) -> list[dict[str, float | None]]:
+    def _window_performance_timeline(
+        self, dated: pd.DataFrame, metric_name: str
+    ) -> list[dict[str, float | None]]:
         if dated.empty:
             return []
         timeline: list[dict[str, float | None]] = []
@@ -2135,10 +2292,17 @@ class DashboardBackend:
                 )
             )
         except Exception:
-            logger.exception("Failed to derive daily label metrics directly from the source rows", extra={"model_key": model_id})
+            logger.exception(
+                "Failed to derive daily label metrics directly from the source rows",
+                extra={"model_key": model_id},
+            )
             return pd.DataFrame()
         with _EXACT_SOURCE_DAILY_METRIC_CACHE_LOCK:
-            expired_keys = [key for key, (expires_at, _) in _EXACT_SOURCE_DAILY_METRIC_CACHE.items() if expires_at <= now]
+            expired_keys = [
+                key
+                for key, (expires_at, _) in _EXACT_SOURCE_DAILY_METRIC_CACHE.items()
+                if expires_at <= now
+            ]
             for key in expired_keys:
                 _EXACT_SOURCE_DAILY_METRIC_CACHE.pop(key, None)
         if frame.empty:
@@ -2223,7 +2387,9 @@ class DashboardBackend:
             metrics[metric_name] = round(float(value), 4) if value is not None else None
         return metrics
 
-    def _latest_window_metric_fallback_from_window_rows(self, model_id: str) -> dict[str, float | None]:
+    def _latest_window_metric_fallback_from_window_rows(
+        self, model_id: str
+    ) -> dict[str, float | None]:
         metrics: dict[str, float | None] = {}
         for metric_name in ("precision", "recall", "f1", "accuracy"):
             rows = self.get_performance_rows(model_id, metric_name=metric_name)
@@ -2305,7 +2471,7 @@ class DashboardBackend:
             WITH filtered_metrics AS (
                 SELECT *
                 FROM {self.repository.table_names.performance_metrics}
-                WHERE {' AND '.join(filters)}
+                WHERE {" AND ".join(filters)}
             ),
             recent_windows AS (
                 SELECT window_end
@@ -2330,7 +2496,13 @@ class DashboardBackend:
                 "contribution": "degradation_contribution",
             }
         )
-        for column in ("baseline_metric", "current_metric", "delta", "current_volume_pct", "degradation_contribution"):
+        for column in (
+            "baseline_metric",
+            "current_metric",
+            "delta",
+            "current_volume_pct",
+            "degradation_contribution",
+        ):
             if column in renamed.columns:
                 renamed[column] = pd.to_numeric(renamed[column], errors="coerce")
         return renamed
@@ -2373,7 +2545,11 @@ class DashboardBackend:
         elif uses_daily_classification_timeline:
             label_metrics = self._resolved_daily_label_metrics(model_id)
         timeline_unavailable_reason = ""
-        if uses_daily_classification_timeline and not label_metrics.empty and metric_name in label_metrics.columns:
+        if (
+            uses_daily_classification_timeline
+            and not label_metrics.empty
+            and metric_name in label_metrics.columns
+        ):
             timeline = [
                 {
                     "period": str(row["profile_date_ts"].date()),
@@ -2385,12 +2561,14 @@ class DashboardBackend:
         elif uses_daily_classification_timeline:
             timeline = self._window_performance_timeline(dated, metric_name)
             if not timeline:
-                timeline_unavailable_reason = (
-                    f"{metric_name.upper()} over time is unavailable until daily labeled facts or comparison-window performance rows are populated for this monitor."
-                )
+                timeline_unavailable_reason = f"{metric_name.upper()} over time is unavailable until daily labeled facts or comparison-window performance rows are populated for this monitor."
         else:
             timeline = self._window_performance_timeline(dated, metric_name)
-        latest_bins = dated.copy() if dated.empty else dated[dated["window_end"] == dated["window_end"].max()].copy()
+        latest_bins = (
+            dated.copy()
+            if dated.empty
+            else dated[dated["window_end"] == dated["window_end"].max()].copy()
+        )
         contributors = (
             latest_bins.groupby("feature", as_index=False)
             .agg(weighted_delta=("degradation_contribution", "sum"))
@@ -2400,7 +2578,8 @@ class DashboardBackend:
         )
         delta_source = latest_bins if not latest_bins.empty else frame
         has_significant_degradation = bool(
-            "delta" in delta_source.columns and (pd.to_numeric(delta_source["delta"], errors="coerce").fillna(0.0) < -0.005).any()
+            "delta" in delta_source.columns
+            and (pd.to_numeric(delta_source["delta"], errors="coerce").fillna(0.0) < -0.005).any()
         )
         return {
             "timeline": timeline,
@@ -2409,7 +2588,9 @@ class DashboardBackend:
             "all_bins": frame,
             "has_significant_degradation": has_significant_degradation,
             "worst_weighted_delta": _safe_series_min(
-                contributors["weighted_delta"] if "weighted_delta" in contributors.columns else pd.Series(dtype=float)
+                contributors["weighted_delta"]
+                if "weighted_delta" in contributors.columns
+                else pd.Series(dtype=float)
             ),
             "timeline_unavailable_reason": timeline_unavailable_reason,
         }
@@ -2418,7 +2599,11 @@ class DashboardBackend:
         config = self.get_monitor_config(model_id, status=None)
         summary = self.repository.get_monitor_summary()
         summary_row = summary[summary["model_key"] == model_id]
-        runtime_state = self.repository.get_monitor_runtime_state(model_id) if hasattr(self.repository, "get_monitor_runtime_state") else None
+        runtime_state = (
+            self.repository.get_monitor_runtime_state(model_id)
+            if hasattr(self.repository, "get_monitor_runtime_state")
+            else None
+        )
         recent_runs = (
             self.repository.get_recent_refresh_runs(model_id, limit=12)
             if hasattr(self.repository, "get_recent_refresh_runs")

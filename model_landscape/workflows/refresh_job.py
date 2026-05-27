@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import argparse
 
-from model_landscape.services.spark_refresh import build_refresh_repository
 from model_landscape.services.refresh_runner import run_refresh_cycle
+from model_landscape.services.spark_refresh import build_refresh_repository
 
 
 def _parse_optional_bool(value: str | None) -> bool:
@@ -24,15 +24,56 @@ def parse_args() -> argparse.Namespace:
         default="false",
         metavar="{true,false}",
     )
-    parser.add_argument("--lakebase-instance-name", "--lakebase_instance_name", dest="lakebase_instance_name", required=False, default="")
-    parser.add_argument("--lakebase-database-name", "--lakebase_database_name", dest="lakebase_database_name", required=False, default="")
-    parser.add_argument("--lakebase-host", "--lakebase_host", dest="lakebase_host", required=False, default="")
-    parser.add_argument("--lakebase-port", "--lakebase_port", dest="lakebase_port", required=False, type=int, default=5432)
-    parser.add_argument("--lakebase-pguser", "--lakebase_pguser", dest="lakebase_pguser", required=False, default="")
-    parser.add_argument("--lakebase-password", "--lakebase_password", dest="lakebase_password", required=False, default="")
-    parser.add_argument("--lakebase-sslmode", "--lakebase_sslmode", dest="lakebase_sslmode", required=False, default="require")
-    parser.add_argument("--lakebase-schema", "--lakebase_schema", dest="lakebase_schema", required=False, default="")
-    parser.add_argument("--scope", choices=["scheduler", "bootstrap", "drift_quality", "performance_repair"], default="scheduler")
+    parser.add_argument(
+        "--lakebase-instance-name",
+        "--lakebase_instance_name",
+        dest="lakebase_instance_name",
+        required=False,
+        default="",
+    )
+    parser.add_argument(
+        "--lakebase-database-name",
+        "--lakebase_database_name",
+        dest="lakebase_database_name",
+        required=False,
+        default="",
+    )
+    parser.add_argument(
+        "--lakebase-host", "--lakebase_host", dest="lakebase_host", required=False, default=""
+    )
+    parser.add_argument(
+        "--lakebase-port",
+        "--lakebase_port",
+        dest="lakebase_port",
+        required=False,
+        type=int,
+        default=5432,
+    )
+    parser.add_argument(
+        "--lakebase-pguser", "--lakebase_pguser", dest="lakebase_pguser", required=False, default=""
+    )
+    parser.add_argument(
+        "--lakebase-password",
+        "--lakebase_password",
+        dest="lakebase_password",
+        required=False,
+        default="",
+    )
+    parser.add_argument(
+        "--lakebase-sslmode",
+        "--lakebase_sslmode",
+        dest="lakebase_sslmode",
+        required=False,
+        default="require",
+    )
+    parser.add_argument(
+        "--lakebase-schema", "--lakebase_schema", dest="lakebase_schema", required=False, default=""
+    )
+    parser.add_argument(
+        "--scope",
+        choices=["scheduler", "bootstrap", "drift_quality", "performance_repair"],
+        default="scheduler",
+    )
     parser.add_argument("--mode", choices=["auto", "backfill", "incremental"], default="auto")
     return parser.parse_args()
 
@@ -57,7 +98,9 @@ def main() -> int:
         lakebase_sslmode=args.lakebase_sslmode or None,
         lakebase_schema=args.lakebase_schema or None,
     )
-    counts = run_refresh_cycle(repository, model_key=args.model_key, mode=args.mode, scope=effective_scope)
+    counts = run_refresh_cycle(
+        repository, model_key=args.model_key, mode=args.mode, scope=effective_scope
+    )
     print(
         "refresh-control-plane complete: "
         f"scope={effective_scope} mode={args.mode} models={counts.models} drift_rows={counts.drift_rows} "

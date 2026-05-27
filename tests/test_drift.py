@@ -5,10 +5,17 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from model_landscape.analytics.drift import compute_feature_drift, compute_js, compute_kl, compute_psi
+from model_landscape.analytics.drift import (
+    compute_feature_drift,
+    compute_js,
+    compute_kl,
+    compute_psi,
+)
 
 
-def test_numeric_drift_metrics_remain_finite_when_current_values_fall_outside_reference_range() -> None:
+def test_numeric_drift_metrics_remain_finite_when_current_values_fall_outside_reference_range() -> (
+    None
+):
     reference = np.linspace(0.0, 10.0, 101)
     current = np.linspace(100.0, 110.0, 101)
 

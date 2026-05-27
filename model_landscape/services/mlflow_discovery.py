@@ -6,7 +6,6 @@ from typing import Any
 
 from model_landscape.domain.models import MLflowDiscovery, MLflowLineage
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -73,10 +72,14 @@ class MLflowDiscoveryService:
             return MLflowDiscovery(warnings=(warning,))
 
         registered_model = (
-            self._discover_registered_model(registered_model_name) if registered_model_name else MLflowDiscovery()
+            self._discover_registered_model(registered_model_name)
+            if registered_model_name
+            else MLflowDiscovery()
         )
         experiment = (
-            self._discover_experiment(experiment_name_or_id) if experiment_name_or_id else MLflowDiscovery()
+            self._discover_experiment(experiment_name_or_id)
+            if experiment_name_or_id
+            else MLflowDiscovery()
         )
         return self._merge_discoveries(registered_model, experiment)
 
@@ -96,13 +99,16 @@ class MLflowDiscoveryService:
             self._init_error = str(error)
             logger.info("MLflow discovery unavailable: %s", error)
 
-    def _merge_discoveries(self, primary: MLflowDiscovery, secondary: MLflowDiscovery) -> MLflowDiscovery:
+    def _merge_discoveries(
+        self, primary: MLflowDiscovery, secondary: MLflowDiscovery
+    ) -> MLflowDiscovery:
         warnings = tuple(dict.fromkeys(primary.warnings + secondary.warnings))
         lineage = MLflowLineage(
             experiment_name=primary.lineage.experiment_name or secondary.lineage.experiment_name,
             experiment_id=primary.lineage.experiment_id or secondary.lineage.experiment_id,
             run_id=primary.lineage.run_id or secondary.lineage.run_id,
-            registered_model_name=primary.lineage.registered_model_name or secondary.lineage.registered_model_name,
+            registered_model_name=primary.lineage.registered_model_name
+            or secondary.lineage.registered_model_name,
             model_version=primary.lineage.model_version or secondary.lineage.model_version,
         )
         features = primary.feature_columns or secondary.feature_columns
@@ -112,7 +118,9 @@ class MLflowDiscoveryService:
             and secondary.lineage.registered_model_name
             and primary.lineage.registered_model_name != secondary.lineage.registered_model_name
         ):
-            warnings += ("Registered model and experiment metadata point at different model names.",)
+            warnings += (
+                "Registered model and experiment metadata point at different model names.",
+            )
         return MLflowDiscovery(
             lineage=lineage,
             feature_columns=features,
@@ -133,7 +141,9 @@ class MLflowDiscoveryService:
             except Exception:
                 experiment = None
         if experiment is None:
-            return MLflowDiscovery(warnings=(f"MLflow experiment {experiment_name_or_id!r} was not found.",))
+            return MLflowDiscovery(
+                warnings=(f"MLflow experiment {experiment_name_or_id!r} was not found.",)
+            )
 
         try:
             runs = list(
@@ -146,7 +156,8 @@ class MLflowDiscoveryService:
         except Exception as error:
             return MLflowDiscovery(
                 lineage=MLflowLineage(
-                    experiment_name=_normalize(getattr(experiment, "name", None)) or experiment_name_or_id,
+                    experiment_name=_normalize(getattr(experiment, "name", None))
+                    or experiment_name_or_id,
                     experiment_id=_normalize(getattr(experiment, "experiment_id", None)),
                 ),
                 warnings=(f"MLflow experiment search failed: {error}",),
@@ -165,7 +176,8 @@ class MLflowDiscoveryService:
             warnings.append("MLflow experiment has no runs.")
             return MLflowDiscovery(
                 lineage=MLflowLineage(
-                    experiment_name=_normalize(getattr(experiment, "name", None)) or experiment_name_or_id,
+                    experiment_name=_normalize(getattr(experiment, "name", None))
+                    or experiment_name_or_id,
                     experiment_id=_normalize(getattr(experiment, "experiment_id", None)),
                 ),
                 warnings=tuple(warnings),
@@ -175,12 +187,16 @@ class MLflowDiscoveryService:
         tags = getattr(run_data, "tags", {}) or {}
         params = getattr(run_data, "params", {}) or {}
         if not feature_columns:
-            warnings.append("MLflow run did not expose a model signature; using table heuristics for features.")
+            warnings.append(
+                "MLflow run did not expose a model signature; using table heuristics for features."
+            )
         return MLflowDiscovery(
             lineage=MLflowLineage(
-                experiment_name=_normalize(getattr(experiment, "name", None)) or experiment_name_or_id,
+                experiment_name=_normalize(getattr(experiment, "name", None))
+                or experiment_name_or_id,
                 experiment_id=_normalize(getattr(experiment, "experiment_id", None)),
-                run_id=_normalize(getattr(getattr(chosen_run, "info", None), "run_id", None)) or None,
+                run_id=_normalize(getattr(getattr(chosen_run, "info", None), "run_id", None))
+                or None,
                 registered_model_name=_normalize(tags.get("mlflow.registeredModelName")) or None,
                 model_version=(
                     _normalize(tags.get("model_version"))
@@ -201,17 +217,23 @@ class MLflowDiscoveryService:
         except Exception as error:
             return MLflowDiscovery(warnings=(f"MLflow registered model lookup failed: {error}",))
         if not versions:
-            return MLflowDiscovery(warnings=(f"Registered model {registered_model_name!r} was not found.",))
+            return MLflowDiscovery(
+                warnings=(f"Registered model {registered_model_name!r} was not found.",)
+            )
 
         versions.sort(key=lambda version: self._version_sort_key(getattr(version, "version", None)))
         latest = versions[-1]
         run_id = _normalize(getattr(latest, "run_id", None))
         model_version = _normalize(getattr(latest, "version", None))
-        feature_columns = self._signature_feature_columns_for_uri(f"models:/{registered_model_name}/{model_version}")
+        feature_columns = self._signature_feature_columns_for_uri(
+            f"models:/{registered_model_name}/{model_version}"
+        )
         if not feature_columns and run_id:
             feature_columns = self._signature_feature_columns_for_run(run_id)
         if not feature_columns:
-            warnings.append("Registered model did not expose a readable signature; using table heuristics for features.")
+            warnings.append(
+                "Registered model did not expose a readable signature; using table heuristics for features."
+            )
 
         run = None
         if run_id:
@@ -267,7 +289,9 @@ class MLflowDiscoveryService:
         run_data = getattr(run, "data", None)
         if run_data is None:
             return None
-        metric_names = {str(name).lower() for name in (getattr(run_data, "metrics", {}) or {}).keys()}
+        metric_names = {
+            str(name).lower() for name in (getattr(run_data, "metrics", {}) or {}).keys()
+        }
         param_values = {
             str(value).lower()
             for value in (getattr(run_data, "params", {}) or {}).values()
@@ -280,9 +304,13 @@ class MLflowDiscoveryService:
         }
         classifier_tokens = {"classification", "classifier", "binary", "multiclass"}
         regression_tokens = {"regression", "regressor"}
-        if param_values.intersection(classifier_tokens) or tag_values.intersection(classifier_tokens):
+        if param_values.intersection(classifier_tokens) or tag_values.intersection(
+            classifier_tokens
+        ):
             return "classification"
-        if param_values.intersection(regression_tokens) or tag_values.intersection(regression_tokens):
+        if param_values.intersection(regression_tokens) or tag_values.intersection(
+            regression_tokens
+        ):
             return "regression"
         if metric_names.intersection({"auc", "roc_auc", "f1", "precision", "recall", "log_loss"}):
             return "classification"

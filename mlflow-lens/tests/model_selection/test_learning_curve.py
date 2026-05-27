@@ -6,9 +6,8 @@ from pathlib import Path
 import mlflow
 import numpy as np
 import plotly.graph_objects as go
-from sklearn.linear_model import LogisticRegression
-
 from mlflow_lens.model_selection import learning_curve
+from sklearn.linear_model import LogisticRegression
 
 
 def test_learning_curve_returns_figure(cls_dataset):
@@ -39,9 +38,7 @@ def test_learning_curve_logs_artifacts(experiment_id, cls_dataset):
         )
 
     client = mlflow.tracking.MlflowClient()
-    json_path = client.download_artifacts(
-        run.info.run_id, "lens/panels/learning_curve.json"
-    )
+    json_path = client.download_artifacts(run.info.run_id, "lens/panels/learning_curve.json")
     payload = json.loads(Path(json_path).read_text())
     assert payload["type"] == "learning_curve"
     assert isinstance(payload["data"], list)
