@@ -32,56 +32,28 @@
 # MAGIC lower device trust, far from home, and new accounts all increase fraud
 # MAGIC probability. About 5% are fraudulent — a realistic class imbalance.
 # MAGIC We split 80/20 by time so the test set is genuinely "the future".
+# MAGIC
+# MAGIC The data generator is the **single source of truth** for fraud feature
+# MAGIC distributions; the same baseline + latent signal is reused by the
+# MAGIC production-inference generator in notebook 02, so a model trained here
+# MAGIC sees zero drift on day-0 inference.
 
 # COMMAND ----------
 
-import numpy as np
-import pandas as pd
-from datetime import datetime, timedelta
+# MAGIC %run ./_resources/data_generator
 
-rng = np.random.default_rng(42)
-n = 100_000
-start = datetime(2025, 7, 1)
+# COMMAND ----------
 
-amount = rng.lognormal(5, 1.5, n)
-device_trust = rng.beta(8, 3, n)
-distance_km = rng.exponential(40, n)
-velocity_24h = rng.exponential(3, n)
-account_age = rng.integers(10, 1500, n).astype(float)
-
-logit = (
-    1.5 * (np.log(amount) - 5) / 1.5
-    - 2.0 * (device_trust - 0.7) / 0.15
-    + 1.0 * (distance_km - 40) / 40
-    + 0.8 * (velocity_24h - 3) / 3
-    - 0.5 * (account_age - 750) / 400
-    + rng.normal(0, 0.4, n) - 2.5
-)
-is_fraud = (rng.random(n) < 1 / (1 + np.exp(-logit))).astype(int)
-
-features = pd.DataFrame({
-    "transaction_id": [f"txn_{i:07d}" for i in range(n)],
-    "timestamp": [start + timedelta(seconds=int(s)) for s in np.sort(rng.integers(0, 180 * 86400, n))],
-    "transaction_amount": np.round(amount, 2),
-    "device_trust_score": np.round(device_trust, 4),
-    "distance_from_home_km": np.round(distance_km, 1),
-    "velocity_24h": np.round(velocity_24h, 2),
-    "account_age_days": account_age.astype(int),
-    "hour_of_day": rng.integers(0, 24, n).astype(int),
-    "is_weekend": rng.choice([0, 1], n, p=[5/7, 2/7]).astype(int),
-    "merchant_category": rng.choice(["retail", "online", "dining", "travel", "grocery"], n, p=[.30, .25, .20, .10, .15]),
-    "region": rng.choice(["na", "eu", "apac", "latam"], n, p=[.45, .30, .20, .05]),
-    "is_fraud": is_fraud,
-})
-
-print(f"Fraud rate: {is_fraud.mean():.1%} ({is_fraud.sum():,} / {n:,})")
+features = generate_fraud_training_set(n=100_000, seed=42)
+print(f"Fraud rate: {features['is_fraud'].mean():.1%} "
+      f"({int(features['is_fraud'].sum()):,} / {len(features):,})")
 
 # COMMAND ----------
 
 features_spark = spark.createDataFrame(features).orderBy("timestamp")
 features_spark.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(table("fraud_features"))
 
-split = int(n * 0.8)
+split = int(len(features) * 0.8)
 train_df = features_spark.limit(split)
 test_df = features_spark.subtract(train_df)
 
