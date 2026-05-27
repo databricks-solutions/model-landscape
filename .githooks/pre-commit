@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Pre-commit hook for Model Landscape.
+# Mirrors the lint job that CI runs, so the same failures show up here.
+#
+# Install once:  uv run model-landscape-init-hooks
+# (writes `git config core.hooksPath .githooks` for this clone)
+set -euo pipefail
+
+# Collect staged Python files. If none, skip the hook entirely so docs-only
+# commits aren't slowed down.
+staged_py=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.py$' || true)
+
+if [ -z "$staged_py" ]; then
+    exit 0
+fi
+
+# Use uv run so the hook works whether or not the user activated the venv.
+# If ruff isn't installed (`uv sync --extra dev` hasn't been run yet) we
+# bail with a clear message rather than a python traceback.
+if ! uv run --quiet --extra dev ruff --version >/dev/null 2>&1; then
+    echo "ruff not available. Run 'uv sync --extra dev' once, then re-commit." >&2
+    exit 1
+fi
+
+echo "$staged_py" | xargs uv run --quiet --extra dev ruff check --fix --exit-non-zero-on-fix
+echo "$staged_py" | xargs uv run --quiet --extra dev ruff format --check

@@ -29,12 +29,36 @@ dev = [
   "mlflow-lens",
   "pyspark>=3.5,<4.0",
   "pytest>=8.3,<10.0",
+  "ruff>=0.6,<1.0",
 ]
 
 [project.scripts]
 model-landscape = "model_landscape.app:main"
 model-landscape-refresh = "model_landscape.workflows.refresh_job:main"
 model-landscape-setup = "model_landscape.workflows.setup_control_plane:main"
+model-landscape-init-hooks = "model_landscape._dev:init_hooks"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+# Databricks notebooks rely on `%run` magic and implicit globals
+# (`spark`, `dbutils`, `display`) that ruff can't resolve, so lint
+# those trees as a whole.
+extend-exclude = [
+  ".venv",
+  "dist",
+  "site",
+  "docs/gallery/_figures",
+  "tutorial",
+  "notebooks",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = [
+  "E501",  # line length handled by `ruff format` instead
+  "B905",  # zip(..., strict=True) is nice-to-have, not a correctness issue
+]
 
 [tool.setuptools.packages.find]
 include = ["model_landscape*"]

@@ -1,6 +1,28 @@
-# Model Landscape
+<p align="center">
+  <a href="https://github.com/databricks-solutions/model-landscape">
+    <img src="docs/model-lens-logo.svg" width="220" height="220" alt="Model Landscape logo" />
+  </a>
+</p>
 
-Databricks-native model observability. Two halves of one product:
+<p align="center">
+  <b>Databricks-native model observability — catch drift before it costs you.</b>
+</p>
+
+<div align="center">
+
+![Databricks](https://img.shields.io/badge/Databricks-FF3621?logo=databricks&logoColor=white)
+![MLflow](https://img.shields.io/badge/MLflow-0194E2?logo=mlflow&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
+![Plotly](https://img.shields.io/badge/Plotly-3F4F75?logo=plotly&logoColor=white)
+![Dash](https://img.shields.io/badge/Dash-008DE4?logo=plotly&logoColor=white)
+![uv](https://img.shields.io/badge/uv-DE5FE9?logo=uv&logoColor=white)
+[![Docs](https://img.shields.io/badge/docs-databricks--solutions.github.io-FF3621)](https://databricks-solutions.github.io/model-landscape/)
+
+</div>
+
+---
+
+Model Landscape is two halves of one product:
 
 - **mlflow-lens** — a small SDK that enriches MLflow runs with interactive
   Plotly panels (classification, regression, model selection), training-time
@@ -52,11 +74,16 @@ Full first-time-setup guide: [Get started](https://databricks-solutions.github.i
 ## Local development
 
 ```bash
-uv sync --extra dev               # install workspace + dev deps
-uv run pytest -q                  # run tests
-uv build --wheel --out-dir dist   # build SDK + app wheel
-uv run python -m model_landscape.app  # run app locally
+uv sync --extra dev                       # install workspace + dev deps
+uv run model-landscape-init-hooks         # one-time: wire .githooks/pre-commit
+uv run pytest -q                          # run tests
+uv build --wheel --out-dir dist           # build SDK + app wheel
+uv run python -m model_landscape.app      # run app locally
 ```
+
+`model-landscape-init-hooks` points git at `.githooks/`, where the
+checked-in pre-commit hook runs `ruff check` and `ruff format --check`
+on staged Python files before each commit. Run it once per fresh clone.
 
 ## License
 

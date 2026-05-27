@@ -1,0 +1,42 @@
+name: Dependency Audit
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"     # 06:00 UTC Mondays, after CodeQL
+  pull_request:
+    paths:
+      - pyproject.toml
+      - mlflow-lens/pyproject.toml
+      - uv.lock
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  audit:
+    name: pip-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+            mlflow-lens/pyproject.toml
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Sync deps (workspace + SDK)
+        run: uv sync --extra dev
+
+      - name: Install pip-audit
+        run: uv pip install pip-audit
+
+      - name: Audit
+        run: uv run pip-audit --strict

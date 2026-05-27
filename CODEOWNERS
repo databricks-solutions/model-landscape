@@ -1,0 +1,6 @@
+# Owners for paths in this repo. Listed users are auto-requested as
+# reviewers on PRs that touch matching paths. See:
+# https://docs.github.com/en/repositories/managing-your-repositories-settings-and-customization/customizing-your-repository/about-code-owners
+#
+# Default owner — applies to every file unless overridden below.
+# *  @scott-mckean
