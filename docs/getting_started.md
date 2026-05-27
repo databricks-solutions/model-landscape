@@ -18,10 +18,12 @@ workspace, end-to-end.
 
 ### Deploy the bundle
 
+`databricks bundle deploy` rebuilds the wheel automatically via the
+`artifacts` block in `databricks.yml` — no manual `uv build` step.
+
 ```bash
 git clone https://github.com/databricks-solutions/model-landscape.git
 cd model-landscape
-uv build --wheel --out-dir dist
 
 databricks bundle deploy -t warehouse_only \
   --var "sql_warehouse_id=<your-warehouse-id>" \
@@ -82,7 +84,16 @@ mlflow-lens is published as a wheel attached to each
 [GitHub Release](https://github.com/databricks-solutions/model-landscape/releases).
 
 ```bash
-pip install "https://github.com/databricks-solutions/model-landscape/releases/download/mlflow-lens-v0.1.0/mlflow_lens-0.1.0-py3-none-any.whl"
+pip install "https://github.com/databricks-solutions/model-landscape/releases/download/mlflow-lens-v0.2.0/mlflow_lens-0.2.0-py3-none-any.whl"
+```
+
+Or pin directly to any tag via a `git+...` URL — setuptools resolves
+the SDK version dynamically from
+`mlflow-lens/src/mlflow_lens/_version.py` at that ref, so you always
+get an exact-version install without going through the Releases page:
+
+```bash
+pip install "git+https://github.com/databricks-solutions/model-landscape.git@mlflow-lens-v0.2.0#subdirectory=mlflow-lens"
 ```
 
 On Databricks Serverless v5+, all runtime dependencies (`mlflow-skinny`,

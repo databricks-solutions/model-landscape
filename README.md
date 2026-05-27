@@ -28,10 +28,12 @@ uv run mkdocs serve
 
 ## Quick deploy
 
+`databricks bundle deploy` rebuilds the wheel automatically — no manual
+`uv build` needed.
+
 ```bash
 git clone https://github.com/databricks-solutions/model-landscape.git
 cd model-landscape
-uv build --wheel --out-dir dist
 
 databricks bundle deploy -t warehouse_only \
   --var "sql_warehouse_id=<id>" \

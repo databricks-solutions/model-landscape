@@ -107,7 +107,7 @@ This is the recommended path for constrained customer workspaces.
 
 The helper script `notebooks/prepare_existing_app_source.py` generates:
 - `app.yaml` with literal `SQL_WAREHOUSE_ID`
-- `src/` application source
+- `model_landscape/` application source
 - `dist/*.whl` for the refresh job
 - `refresh-job.json` REST API payload for job creation
 
