@@ -1,0 +1,68 @@
+name: docs
+
+on:
+  push:
+    branches: [main]
+    tags: ["mlflow-lens-v*"]
+  pull_request:
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "mlflow-lens/src/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            mlflow-lens/pyproject.toml
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Install mlflow-lens + docs deps
+        run: |
+          uv sync --no-dev
+          uv pip install \
+            'mkdocs-material>=9.5' \
+            'mkdocstrings[python]>=0.26' \
+            'mkdocs-include-markdown-plugin>=6.0'
+
+      - name: Generate gallery figures
+        run: uv run python docs/_build_gallery.py
+
+      - name: Build site
+        run: uv run mkdocs build --strict
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/mlflow-lens-v'))
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
