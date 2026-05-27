@@ -4,9 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "model-landscape"
-version = "0.1.0"
-description = "Model Landscape: Databricks-native model observability"
+version = "0.1.1"
+description = "Model Landscape: Databricks-native model observability app"
 requires-python = ">=3.10"
+authors = [
+  { name = "Scott McKean", email = "scott.mckean@databricks.com" },
+  { name = "Volo Vragov" },
+]
 dependencies = [
   "dash>=3.0,<4.0",
   "dash-bootstrap-components>=2.0,<3.0",
@@ -22,6 +26,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "mlflow-lens",
   "pyspark>=3.5,<4.0",
   "pytest>=8.3,<10.0",
 ]
@@ -40,3 +45,9 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+
+[tool.uv.workspace]
+members = ["mlflow-lens"]
+
+[tool.uv.sources]
+mlflow-lens = { workspace = true }
