@@ -1,78 +1,79 @@
-# mlflow-lens
+---
+title: Model Landscape
+hide:
+  - navigation
+---
 
-**Plotly-native panels and run-summary helpers for MLflow.**
+# Catch model drift before it costs you.
 
-`mlflow-lens` is a small, focused SDK that lives next to your MLflow runs. It
-gives you Yellowbrick-style diagnostic plots — confusion matrices, ROC curves,
-precision-recall curves, residuals, learning curves, and more — rendered as
-interactive Plotly figures and logged alongside the run as both raw data
-(`lens/panels/*.json`) and self-contained HTML (`lens/panels/*.html`).
+**Model Landscape** is a Databricks-native observability stack for production
+ML. It's two things that work together:
 
-```python
-import mlflow
-from mlflow_lens.classifier import roc_auc
+- **mlflow-lens** — a small SDK that enriches your MLflow runs with
+  interactive Plotly panels, structured summaries, training-time drift, and
+  workspace context. One line per panel, two artifacts per panel
+  (`lens/panels/<type>.json` for the app to read, `<type>.html` for you to
+  click in the MLflow UI).
+- **The warehouse app** — a Databricks App that monitors Unity Catalog
+  inference tables for drift, performance degradation, data-quality issues,
+  and incidents. The data never leaves your workspace.
 
-with mlflow.start_run():
-    fig = roc_auc(model, X_test, y_test, log=True)
-    fig.show()
-```
+Together they answer the question every ML team eventually has to: **is the
+model still working, and if not, what changed?**
 
-## Why mlflow-lens?
+[:material-presentation-play: &nbsp;Watch the 3-minute intro deck](intro-deck.html){ .md-button .md-button--primary }
+[:material-rocket-launch-outline: &nbsp;Get started](getting_started.md){ .md-button }
 
-- **Plotly-only.** Every figure is interactive in notebooks and in the MLflow
-  artifact viewer. No matplotlib in the dep tree.
-- **Yellowbrick-shaped API.** Quick functions you call like
-  `roc_auc(model, X, y)` — no class hierarchy to learn.
-- **JSON + HTML side-by-side.** The raw data lives in `lens/panels/*.json`
-  so dashboards can render compactly; the interactive HTML is right there
-  in the MLflow UI for one-click inspection.
-- **Single source of truth in your run.** Tags like `lens.panel.roc_curve=true`
-  and `lens.figure.roc_curve=true` make panels discoverable.
+---
 
-## What's in the box
+## Two halves of one product
 
 <div class="grid cards" markdown>
 
-- :material-chart-scatter-plot: __Classification__
+- :material-database-eye: &nbsp; __The warehouse app__
 
     ---
 
-    ROC/AUC, confusion matrix, precision-recall, classification report,
-    class prediction error, discrimination threshold.
+    Point it at any Unity Catalog inference table. It computes daily drift
+    (PSI / JS / KL), per-bin performance, data-quality signals, and opens
+    incidents when thresholds are breached. Designed for fleets, not single
+    models.
 
-    [→ Classifier panels](api/classifier.md)
+    [→ Architecture](ARCHITECTURE.md) · [→ Deploy](DEPLOY_TO_WORKSPACE.md) · [→ Existing-app install](EXISTING_APP_DEPLOYMENT.md)
 
-- :material-chart-line: __Regression__
-
-    ---
-
-    Prediction error, residuals, alpha selection.
-
-    [→ Regressor panels](api/regressor.md)
-
-- :material-tune-variant: __Model selection__
+- :material-chart-scatter-plot: &nbsp; __The mlflow-lens SDK__
 
     ---
 
-    Learning curve, validation curve, feature importances, CV scores.
+    Yellowbrick-style quick functions, Plotly-only, that log both the raw
+    data and an interactive figure to your MLflow run. Classification,
+    regression, model-selection panels in one import.
 
-    [→ Model selection panels](api/model_selection.md)
-
-- :material-database-arrow-right: __Run helpers__
-
-    ---
-
-    Training-time drift, structured run summaries, cost tagging,
-    Databricks workspace context.
-
-    [→ Drift](api/drift.md) · [→ Summary](api/summary.md)
+    [→ SDK concepts](concepts.md) · [→ API reference](api/index.md) · [→ Panel gallery](gallery/index.md)
 
 </div>
 
+## What you do with it
+
+```python
+import mlflow
+from mlflow_lens.classifier import roc_auc, confusion_matrix
+
+with mlflow.start_run():
+    roc_auc(model, X_test, y_test, log=True)
+    confusion_matrix(model, X_test, y_test, log=True)
+```
+
+Then point the warehouse app at the inference table this model is scoring
+in production. When the holiday season ships a 25-point shift in
+`merchant_category`, the app opens an incident on day 1 — not day 14.
+
+[See the end-to-end tutorial →](getting_started.md#run-the-tutorial)
+
+---
+
 ## Status
 
-`mlflow-lens` is in **Alpha** (0.1.x). The panel JSON schemas are
-versioned (`schema_version: "1"`) and considered stable; the Python API
-may still evolve before 1.0.
-
-See the [changelog](changelog.md) for what shipped in each release.
+`v0.1.x` — alpha. Panel JSON schemas are versioned (`schema_version: "1"`)
+and considered stable; the Python API may evolve before 1.0. See the
+[changelog](changelog.md) for what shipped in each release.

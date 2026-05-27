@@ -34,7 +34,7 @@ If you already have an app and want to keep its existing compute and app service
 - [Existing App Deployment](./EXISTING_APP_DEPLOYMENT.md)
 
 If the app already exists, do not use the generic `bundle deploy` path below with that same app name unless you first bind the bundle app resource to the existing app. Otherwise Databricks tries to create the app resource again and the deploy fails with an "App already exists" error.
-If the operator cannot manage the app's `sql_warehouse` resource, do not keep retrying that bind/deploy path. Use the generated manual existing-app source path from [prepare_existing_app_source.py](../notebooks/prepare_existing_app_source.py) instead.
+If the operator cannot manage the app's `sql_warehouse` resource, do not keep retrying that bind/deploy path. Use the generated manual existing-app source path from [`notebooks/prepare_existing_app_source.py`](https://github.com/databricks-solutions/model-landscape/blob/main/notebooks/prepare_existing_app_source.py) instead.
 The manual guide also now includes a detailed refresh-job creation and verification sequence for that path, including `jobs create`, `jobs reset`, `jobs get`, `jobs run-now`, and the `REFRESH_JOB_ID` hardening step.
 If the customer workspace already has a shared refresh job, prefer reusing that exact job ID by resetting it to the generated `refresh-job.json` contract and then wiring the app with `REFRESH_JOB_ID`.
 

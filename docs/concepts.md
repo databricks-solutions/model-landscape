@@ -1,5 +1,41 @@
 # Concepts
 
+> *MLflow logs everything. mlflow-lens explains it.*
+
+mlflow-lens turns metrics into meaning, runs into stories, changes into
+explanations, and costs into attribution. The SDK is a thin overlay on
+MLflow — it composes with `mlflow.start_run()`, it never wraps or replaces
+it.
+
+## Design principles
+
+1. **MLflow is the source of truth.** No duplicate experiment storage, no
+   competing abstractions. Everything derives from MLflow runs,
+   LoggedModels, artifacts, and Databricks system tables.
+2. **Thin overlay, not a platform.** No orchestration, no pipeline system.
+3. **Zero-friction adoption.** The warehouse app works on raw MLflow
+   experiments immediately — SDK enrichment is additive with graceful
+   degradation when custom artifacts are absent.
+4. **Structured artifacts, plus interactive figures.** Panel data is JSON
+   so it's composable, queryable, and consistent across runs. Each panel
+   also ships an interactive Plotly HTML for human inspection.
+5. **Cross-run understanding > single-run inspection.** Primary value is
+   comparison and timelines across training runs. Native MLflow handles
+   single-run debugging.
+6. **Version everything.** All artifacts carry `lens_version` and
+   `schema_version`. Tags use a `lens.` prefix. Unknown fields are
+   preserved, not dropped.
+7. **MLflow 3 native.** First-class LoggedModel support; requires
+   `mlflow>=2.10`; never depends on removed APIs.
+
+## What mlflow-lens is *not*
+
+- **Production inference monitoring.** That's the warehouse app's job.
+- **LLM tracing or evaluation.** MLflow 3 handles this natively.
+- **Pipeline orchestration.** Use Databricks Workflows.
+- **Model serving.** Use Databricks Model Serving.
+- **A replacement for MLflow's native UI.** mlflow-lens complements it.
+
 ## Two layers: data + figure
 
 Every panel in mlflow-lens is logged as **two artifacts** in the same run:
