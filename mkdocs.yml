@@ -8,6 +8,11 @@ edit_uri: edit/main/docs/
 docs_dir: docs
 site_dir: site
 
+# Build flat .html files (getting_started.html, not getting_started/index.html)
+# so the site works when opened directly via file:// and the GitHub Pages
+# server doesn't have to do the trailing-slash redirect.
+use_directory_urls: false
+
 theme:
   name: material
   logo: model-lens-logo.svg
@@ -72,14 +77,14 @@ exclude_docs: |
 
 nav:
   - Home: index.md
-  - Check out the intro deck: intro-deck.html
-  - Get started: getting_started.md
+  - Intro Deck: intro-deck.html
+  - Get Started: getting_started.md
   - Concepts: concepts.md
-  - The app:
+  - App:
       - Architecture: architecture.md
       - Deploy to a workspace: deploy.md
       - Deploy into an existing app: existing_app.md
-  - SDK reference:
+  - SDK:
       - API overview: api/index.md
       - Classifier panels: api/classifier.md
       - Regressor panels: api/regressor.md
