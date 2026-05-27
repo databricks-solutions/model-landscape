@@ -1,0 +1,72 @@
+mlflow-lens
+Copyright 2026 Databricks, Inc.
+
+This package is licensed under the Databricks License. See LICENSE.md for
+the full license text.
+
+This package depends on the following third-party libraries. The list below
+covers the transitive dependency closure of `mlflow-lens` (i.e., what a
+`pip install mlflow-lens` actually pulls in). The optional `[spark]` extra
+adds `pyspark` (Apache-2.0) and is not enumerated below.
+
+| Package                            | License                           | Source |
+|------------------------------------|-----------------------------------|--------|
+| annotated-doc                      | MIT                               | https://github.com/Kludex/annotated-doc |
+| annotated-types                    | MIT                               | https://github.com/annotated-types/annotated-types |
+| anyio                              | MIT                               | https://github.com/agronholm/anyio |
+| cachetools                         | MIT                               | https://github.com/tkem/cachetools |
+| certifi                            | MPL-2.0                           | https://github.com/certifi/python-certifi |
+| cffi                               | MIT                               | https://github.com/python-cffi/cffi |
+| charset-normalizer                 | MIT                               | https://github.com/jawah/charset_normalizer |
+| click                              | BSD-3-Clause                      | https://github.com/pallets/click |
+| cloudpickle                        | BSD-3-Clause                      | https://github.com/cloudpipe/cloudpickle |
+| cryptography                       | Apache-2.0 OR BSD-3-Clause        | https://github.com/pyca/cryptography |
+| databricks-sdk                     | Apache-2.0                        | https://github.com/databricks/databricks-sdk-py |
+| fastapi                            | MIT                               | https://github.com/fastapi/fastapi |
+| gitdb                              | BSD-3-Clause                      | https://github.com/gitpython-developers/gitdb |
+| gitpython                          | BSD-3-Clause                      | https://github.com/gitpython-developers/GitPython |
+| google-auth                        | Apache-2.0                        | https://github.com/googleapis/google-auth-library-python |
+| h11                                | MIT                               | https://github.com/python-hyper/h11 |
+| idna                               | BSD-3-Clause                      | https://github.com/kjd/idna |
+| importlib-metadata                 | Apache-2.0                        | https://github.com/python/importlib_metadata |
+| mlflow-skinny                      | Apache-2.0                        | https://github.com/mlflow/mlflow |
+| numpy                              | BSD-3-Clause                      | https://github.com/numpy/numpy |
+| opentelemetry-api                  | Apache-2.0                        | https://github.com/open-telemetry/opentelemetry-python |
+| opentelemetry-sdk                  | Apache-2.0                        | https://github.com/open-telemetry/opentelemetry-python |
+| opentelemetry-semantic-conventions | Apache-2.0                        | https://github.com/open-telemetry/opentelemetry-python |
+| packaging                          | Apache-2.0 OR BSD-2-Clause        | https://github.com/pypa/packaging |
+| pandas                             | BSD-3-Clause                      | https://github.com/pandas-dev/pandas |
+| protobuf                           | BSD-3-Clause                      | https://github.com/protocolbuffers/protobuf |
+| pyasn1                             | BSD-2-Clause                      | https://github.com/pyasn1/pyasn1 |
+| pyasn1-modules                     | BSD-2-Clause                      | https://github.com/pyasn1/pyasn1-modules |
+| pycparser                          | BSD-3-Clause                      | https://github.com/eliben/pycparser |
+| pydantic                           | MIT                               | https://github.com/pydantic/pydantic |
+| pydantic-core                      | MIT                               | https://github.com/pydantic/pydantic-core |
+| python-dateutil                    | Apache-2.0 OR BSD-3-Clause        | https://github.com/dateutil/dateutil |
+| pytz                               | MIT                               | https://pythonhosted.org/pytz |
+| pyyaml                             | MIT                               | https://github.com/yaml/pyyaml |
+| requests                           | Apache-2.0                        | https://github.com/psf/requests |
+| six                                | MIT                               | https://github.com/benjaminp/six |
+| smmap                              | BSD-3-Clause                      | https://github.com/gitpython-developers/smmap |
+| sqlparse                           | BSD-3-Clause                      | https://github.com/andialbrecht/sqlparse |
+| starlette                          | BSD-3-Clause                      | https://github.com/encode/starlette |
+| typing-extensions                  | PSF-2.0                           | https://github.com/python/typing_extensions |
+| typing-inspection                  | MIT                               | https://github.com/pydantic/typing-inspection |
+| tzdata                             | Apache-2.0                        | https://github.com/python/tzdata |
+| urllib3                            | MIT                               | https://github.com/urllib3/urllib3 |
+| uvicorn                            | BSD-3-Clause                      | https://github.com/encode/uvicorn |
+| zipp                               | MIT                               | https://github.com/jaraco/zipp |
+
+Notes:
+
+- MPL-2.0 (certifi): Distributes the Mozilla CA certificate bundle.
+- Dual-licensed packages (cryptography, packaging, python-dateutil): Use is
+  governed by either license at the user's choice.
+- Optional [spark] extra adds pyspark (Apache-2.0) and its transitive py4j
+  (BSD-3-Clause).
+
+How to regenerate this list:
+
+    cd mlflow-lens && uv build
+    uv venv /tmp/v && uv pip install --python /tmp/v/bin/python dist/*.whl
+    uv pip list --python /tmp/v/bin/python --format=freeze

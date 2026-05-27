@@ -15,11 +15,61 @@ Each scenario generates in under 5 seconds.
 
 from __future__ import annotations
 
+import os
 from datetime import date, datetime, timedelta
 from typing import Callable
 
 import numpy as np
 import pandas as pd
+
+
+# ---------------------------------------------------------------------------
+# Fixture-time helpers — let tests pin "now" without breaking tutorial UX
+# ---------------------------------------------------------------------------
+
+def _fixture_now() -> pd.Timestamp:
+    """Wall-clock now, override-able via MODEL_LANDSCAPE_FIXTURE_NOW for tests."""
+    override = os.environ.get("MODEL_LANDSCAPE_FIXTURE_NOW")
+    if override:
+        return pd.Timestamp(override).normalize()
+    return pd.Timestamp.now().normalize()
+
+
+def _fixture_today() -> date:
+    return _fixture_now().date()
+
+
+# Baseline feature distributions and fraud-signal weights live at module
+# scope so generate_fraud_training_set and generate_fraud_inference share a
+# single source of truth — same parameters, different time treatment.
+
+FRAUD_BASELINE: dict[str, tuple[float, float]] = {
+    "transaction_amount": (150.0, 80.0),
+    "device_trust_score": (0.72, 0.15),
+    "distance_from_home_km": (25.0, 30.0),
+    "velocity_24h": (3.0, 2.0),
+    "account_age_days": (450.0, 300.0),
+}
+
+FRAUD_SIGNAL_WEIGHTS: dict[str, float] = {
+    "transaction_amount": 0.25,
+    "device_trust_score": -0.35,
+    "distance_from_home_km": 0.20,
+    "velocity_24h": 0.30,
+    "account_age_days": -0.10,
+}
+
+FRAUD_CLIP_RANGES: dict[str, tuple[float, float]] = {
+    "transaction_amount": (1.0, 5000.0),
+    "device_trust_score": (0.0, 1.0),
+    "distance_from_home_km": (0.0, 500.0),
+    "velocity_24h": (0.0, 50.0),
+    "account_age_days": (1.0, 3000.0),
+}
+
+# Class-prior logit offset for training ground-truth labels.
+# sigmoid(-2.5) ≈ 0.076 → ~5% positive rate, realistic fraud class imbalance.
+FRAUD_CLASS_PRIOR_LOGIT: float = -2.5
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +203,76 @@ def _fraud_region_weights(day: int) -> dict[str, float]:
     return {"na": 0.35, "eu": 0.27, "apac": 0.18, "latam": 0.20}
 
 
+def generate_fraud_training_set(
+    n: int = 100_000,
+    seed: int = 42,
+    start_date: date | None = None,
+    n_days_spread: int = 180,
+) -> pd.DataFrame:
+    """Generate a fraud-detection training set using the same feature
+    distributions and latent fraud signal as :func:`generate_fraud_inference`.
+
+    No drift, no day loop — this is the "world as the model knew it" data.
+    The baseline period (first 14 days) of inference is sampled from these
+    exact distributions, so a model trained here should show ~0 PSI against
+    the inference baseline.
+    """
+    rng = np.random.default_rng(seed)
+    if start_date is None:
+        start_date = date(2025, 7, 1)
+
+    # Numeric features — same baseline as inference, no shifts.
+    features: dict[str, np.ndarray] = {}
+    for feat, (mu, sigma) in FRAUD_BASELINE.items():
+        features[feat] = rng.normal(mu, sigma, size=n)
+    for col, (lo, hi) in FRAUD_CLIP_RANGES.items():
+        features[col] = np.clip(features[col], lo, hi)
+
+    # Derived
+    hour_of_day = rng.integers(0, 24, size=n)
+    is_weekend = rng.choice([0, 1], size=n, p=[5 / 7, 2 / 7])
+
+    # Categoricals — use day-0 weights from the inference generator so the
+    # marginal distributions match.
+    merchant_w = _fraud_merchant_weights(day=0)
+    region_w = _fraud_region_weights(day=0)
+    merchant = rng.choice(list(merchant_w), size=n, p=np.array(list(merchant_w.values())))
+    region = rng.choice(list(region_w), size=n, p=np.array(list(region_w.values())))
+
+    # Latent fraud signal — same formula as inference, with a class-prior
+    # offset so ground-truth fraud rate is realistic (~5%). The inference
+    # generator's `prediction` column doesn't use this offset because it
+    # represents what a (separately trained) model predicts, not ground truth.
+    signal = np.full(n, FRAUD_CLASS_PRIOR_LOGIT)
+    for feat, weight in FRAUD_SIGNAL_WEIGHTS.items():
+        mu, sigma = FRAUD_BASELINE[feat]
+        signal += weight * (features[feat] - mu) / max(sigma, 1e-6)
+    signal += rng.normal(0, 0.3, size=n)
+    fraud_prob = 1.0 / (1.0 + np.exp(-signal))
+    is_fraud = (rng.random(n) < fraud_prob).astype(int)
+
+    # Timestamps spread over n_days_spread, monotonically increasing so
+    # an 80/20 time-ordered split makes sense.
+    secs = np.sort(rng.integers(0, n_days_spread * 86400, size=n))
+    base_ts = datetime(start_date.year, start_date.month, start_date.day)
+    timestamps = [base_ts + timedelta(seconds=int(s)) for s in secs]
+
+    return pd.DataFrame({
+        "transaction_id": [f"txn_{i:07d}" for i in range(n)],
+        "timestamp": timestamps,
+        "transaction_amount": np.round(features["transaction_amount"], 2),
+        "device_trust_score": np.round(features["device_trust_score"], 4),
+        "distance_from_home_km": np.round(features["distance_from_home_km"], 1),
+        "velocity_24h": np.round(features["velocity_24h"], 2),
+        "account_age_days": features["account_age_days"].astype(int),
+        "hour_of_day": hour_of_day.astype(int),
+        "is_weekend": is_weekend.astype(int),
+        "merchant_category": merchant,
+        "region": region,
+        "is_fraud": is_fraud,
+    })
+
+
 def generate_fraud_inference(
     n_days: int = 60,
     rows_per_day: int = 500,
@@ -167,25 +287,10 @@ def generate_fraud_inference(
     plus feature columns and categorical slice columns.
     """
     if start_date is None:
-        start_date = date.today() - timedelta(days=n_days)
+        start_date = _fixture_today() - timedelta(days=n_days)
 
-    # Baseline feature parameters (mean, std)
-    baseline = {
-        "transaction_amount": (150.0, 80.0),
-        "device_trust_score": (0.72, 0.15),
-        "distance_from_home_km": (25.0, 30.0),
-        "velocity_24h": (3.0, 2.0),
-        "account_age_days": (450.0, 300.0),
-    }
-
-    # Feature weights for the latent fraud signal (how each feature contributes)
-    signal_weights = {
-        "transaction_amount": 0.25,
-        "device_trust_score": -0.35,
-        "distance_from_home_km": 0.20,
-        "velocity_24h": 0.30,
-        "account_age_days": -0.10,
-    }
+    baseline = FRAUD_BASELINE
+    signal_weights = FRAUD_SIGNAL_WEIGHTS
 
     null_schedule = {
         "device_trust_score": lambda d: 0.02 if d < 30 or d > 45 else 0.02 + 0.10 * min(1.0, (d - 30) / 5),
@@ -215,11 +320,8 @@ def generate_fraud_inference(
                 features[feat] = rng.normal(mu, sigma, size=n)
 
         # Clip to realistic ranges
-        features["transaction_amount"] = np.clip(features["transaction_amount"], 1.0, 5000.0)
-        features["device_trust_score"] = np.clip(features["device_trust_score"], 0.0, 1.0)
-        features["distance_from_home_km"] = np.clip(features["distance_from_home_km"], 0.0, 500.0)
-        features["velocity_24h"] = np.clip(features["velocity_24h"], 0.0, 50.0)
-        features["account_age_days"] = np.clip(features["account_age_days"], 1.0, 3000.0)
+        for col, (lo, hi) in FRAUD_CLIP_RANGES.items():
+            features[col] = np.clip(features[col], lo, hi)
 
         # Derived features
         features["hour_of_day"] = rng.integers(0, 24, size=n).astype(float)
@@ -293,7 +395,7 @@ def generate_fraud_labels(
     Only rows whose labels have "arrived" (delay < days since event) are included.
     """
     rng = np.random.default_rng(seed + 9999)
-    today = pd.Timestamp.now().normalize()
+    today = _fixture_now()
 
     event_ts = pd.to_datetime(inference_df["event_ts"])
     delays = rng.integers(label_delay_days[0], label_delay_days[1] + 1, size=len(inference_df))
@@ -368,7 +470,7 @@ def generate_maintenance_inference(
     Regression problem: predict remaining useful life (RUL) in hours.
     """
     if start_date is None:
-        start_date = date.today() - timedelta(days=n_days)
+        start_date = _fixture_today() - timedelta(days=n_days)
 
     baseline = {
         "vibration_mm_s": (4.5, 1.8),
@@ -518,7 +620,7 @@ def generate_maintenance_labels(
     delays = rng.integers(1, 4, size=len(subset))
     label_ts = event_ts + pd.to_timedelta(delays, unit="D")
 
-    today = pd.Timestamp.now().normalize()
+    today = _fixture_now()
     arrived_mask = label_ts <= today
 
     label_df = pd.DataFrame({

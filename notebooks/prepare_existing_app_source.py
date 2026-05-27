@@ -18,7 +18,7 @@ Usage::
         --control-plane-schema <schema> \\
         --output-dir /tmp/model-landscape-deploy
 
-See also:  docs/EXISTING_APP_DEPLOYMENT.md
+See also:  docs/existing_app.md
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / "src"))
+sys.path.insert(0, str(REPO_ROOT))
 
 from model_landscape.manual_setup import (
     MANUAL_SOURCE_ITEMS,

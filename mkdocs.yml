@@ -1,0 +1,113 @@
+site_name: Model Landscape
+site_description: "Databricks-native model observability: an MLflow enrichment SDK and a warehouse app that catch drift before it costs you."
+site_url: https://databricks-solutions.github.io/model-landscape/
+repo_url: https://github.com/databricks-solutions/model-landscape
+repo_name: databricks-solutions/model-landscape
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+site_dir: site
+
+# Build flat .html files (getting_started.html, not getting_started/index.html)
+# so the site works when opened directly via file:// and the GitHub Pages
+# server doesn't have to do the trailing-slash redirect.
+use_directory_urls: false
+
+theme:
+  name: material
+  logo: model-lens-logo.svg
+  favicon: model-lens-logo.svg
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.top
+    - content.code.copy
+    - content.code.annotate
+    - search.suggest
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep orange
+      accent: deep orange
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep orange
+      accent: deep orange
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+extra_css:
+  - stylesheets/extra.css
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [mlflow-lens/src]
+          options:
+            docstring_style: google
+            show_source: false
+            show_root_heading: true
+            members_order: source
+            heading_level: 2
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+
+exclude_docs: |
+  _build_gallery.py
+  gallery/_template.md
+
+nav:
+  - Home: index.md
+  - Intro Deck: intro-deck.html
+  - Get Started: getting_started.md
+  - Concepts: concepts.md
+  - App:
+      - Architecture: architecture.md
+      - Deploy to a workspace: deploy.md
+      - Deploy into an existing app: existing_app.md
+  - SDK:
+      - API overview: api/index.md
+      - Classifier panels: api/classifier.md
+      - Regressor panels: api/regressor.md
+      - Model-selection panels: api/model_selection.md
+      - Panels (low-level): api/panels.md
+      - Drift: api/drift.md
+      - Summary: api/summary.md
+  - Gallery:
+      - Gallery overview: gallery/index.md
+      - Classification:
+          - ROC / AUC: gallery/roc_auc.md
+          - Confusion matrix: gallery/confusion_matrix.md
+          - Precision-recall: gallery/precision_recall.md
+          - Classification report: gallery/classification_report.md
+          - Class prediction error: gallery/class_prediction_error.md
+          - Discrimination threshold: gallery/discrimination_threshold.md
+      - Regression:
+          - Prediction error: gallery/prediction_error.md
+          - Residuals: gallery/residuals.md
+          - Alpha selection: gallery/alpha_selection.md
+      - Model selection:
+          - Learning curve: gallery/learning_curve.md
+          - Validation curve: gallery/validation_curve.md
+          - Feature importances: gallery/feature_importances.md
+          - CV scores: gallery/cv_scores.md
+  - Changelog: changelog.md

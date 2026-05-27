@@ -95,6 +95,6 @@ def test_prepare_existing_app_source_script_writes_manual_app_yaml(tmp_path: Pat
     text = (output_dir / "app.yaml").read_text()
     assert 'value: "wh-123"' in text
     assert "valueFrom: sql_warehouse" not in text
-    assert (output_dir / "src" / "model_landscape" / "app.py").exists()
+    assert (output_dir / "model_landscape" / "app.py").exists()
     assert (output_dir / "requirements.txt").exists()
     assert "Prepared existing-app source tree" in result.stdout
