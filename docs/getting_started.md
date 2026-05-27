@@ -69,9 +69,9 @@ two monitors, several open incidents from the designed drift, and the F1
 recovery after v2 ships.
 
 For the full deploy reference (variables, targets, troubleshooting),
-see [Deploy to a workspace](DEPLOY_TO_WORKSPACE.md). If you're installing
-into a pre-existing Databricks App (constrained workspaces),
-see [Deploy into an existing app](EXISTING_APP_DEPLOYMENT.md).
+see [Deploy to a workspace](deploy.md). If you're installing into a
+pre-existing Databricks App (constrained workspaces), see
+[Deploy into an existing app](existing_app.md).
 
 ---
 

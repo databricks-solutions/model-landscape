@@ -21,8 +21,8 @@ ML. It's two things that work together:
 Together they answer the question every ML team eventually has to: **is the
 model still working, and if not, what changed?**
 
-[:material-presentation-play: &nbsp;Watch the 3-minute intro deck](intro-deck.html){ .md-button .md-button--primary }
-[:material-rocket-launch-outline: &nbsp;Get started](getting_started.md){ .md-button }
+[Check out the intro deck](intro-deck.html){ .md-button .md-button--primary }
+[Get started](getting_started.md){ .md-button }
 
 ---
 
@@ -30,7 +30,7 @@ model still working, and if not, what changed?**
 
 <div class="grid cards" markdown>
 
-- :material-database-eye: &nbsp; __The warehouse app__
+- **The warehouse app**
 
     ---
 
@@ -39,17 +39,17 @@ model still working, and if not, what changed?**
     incidents when thresholds are breached. Designed for fleets, not single
     models.
 
-    [→ Architecture](ARCHITECTURE.md) · [→ Deploy](DEPLOY_TO_WORKSPACE.md) · [→ Existing-app install](EXISTING_APP_DEPLOYMENT.md)
+    [Architecture](architecture.md) · [Deploy](deploy.md) · [Existing-app install](existing_app.md)
 
-- :material-chart-scatter-plot: &nbsp; __The mlflow-lens SDK__
+- **The mlflow-lens SDK**
 
     ---
 
     Yellowbrick-style quick functions, Plotly-only, that log both the raw
     data and an interactive figure to your MLflow run. Classification,
-    regression, model-selection panels in one import.
+    regression, and model-selection panels in one import.
 
-    [→ SDK concepts](concepts.md) · [→ API reference](api/index.md) · [→ Panel gallery](gallery/index.md)
+    [SDK concepts](concepts.md) · [API reference](api/index.md) · [Panel gallery](gallery/index.md)
 
 </div>
 

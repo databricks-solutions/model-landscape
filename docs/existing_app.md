@@ -1,9 +1,9 @@
-# Deploying Into an Existing Databricks App
+# Deploy into an existing app
 
 Use this guide when the workspace already has a Databricks App and you want to
 deploy Model Landscape into it without creating a new app resource.
 
-## When to Use This Path
+## When to use this path
 
 - You have an existing Databricks App that must keep its URL and service principal
 - You have an approved SQL warehouse
@@ -11,7 +11,7 @@ deploy Model Landscape into it without creating a new app resource.
 - You cannot or prefer not to use `databricks bundle deploy` for the app resource
 
 If you want Databricks to create a new app automatically, use
-[Deploy to a Workspace](./DEPLOY_TO_WORKSPACE.md) instead.
+[Deploy to a Workspace](deploy.md) instead.
 
 ## Prerequisites
 
@@ -27,7 +27,7 @@ Collect these values before starting:
 | Refresh job ID (if reusing) | `12345678` |
 | Spark node type (if creating job) | `i3.xlarge` |
 
-## Quick Path
+## Quick path
 
 For operators who want the shortest working deployment:
 
@@ -74,9 +74,9 @@ databricks apps deploy <app-name> \
 # 6. Grant permissions (see Permissions section below)
 ```
 
-## Two Deployment Tracks
+## Two deployment tracks
 
-### Track A: Bundle-Bound Existing App
+### Track A: bundle-bound existing app
 
 Use when you have `Can manage` on the existing app and SQL warehouse.
 
@@ -100,7 +100,7 @@ databricks bundle deploy -t warehouse_only \
 
 If this fails with a `sql_warehouse` permission error, switch to Track B.
 
-### Track B: Manual Deployment (No App-Resource Management)
+### Track B: manual deployment (no app-resource management)
 
 Use when the operator cannot manage the app's `sql_warehouse` resource.
 This is the recommended path for constrained customer workspaces.
@@ -113,7 +113,7 @@ The helper script `notebooks/prepare_existing_app_source.py` generates:
 
 See the Quick Path above for the full command sequence.
 
-## Refresh Job Contract
+## Refresh job contract
 
 The shared refresh job must match:
 
@@ -135,7 +135,7 @@ databricks jobs reset --json @/tmp/ml-deploy/refresh-job-reset.json
 
 ## Permissions
 
-### App Service Principal
+### App service principal
 
 | Scope | Grants |
 |-------|--------|
@@ -146,7 +146,7 @@ databricks jobs reset --json @/tmp/ml-deploy/refresh-job-reset.json
 | Refresh job (recommended) | `CAN_MANAGE` for full in-app job management |
 | Refresh job (minimum for direct trigger) | `CAN_MANAGE_RUN` |
 
-### Refresh Job Run-As Identity
+### Refresh job run-as identity
 
 | Scope | Grants |
 |-------|--------|
@@ -165,7 +165,7 @@ After deployment, open the app and confirm:
 5. `Setup Control Plane` creates the control-plane tables
 6. First monitor saves and triggers (or queues for scheduled pickup)
 
-## Scheduler-Only Mode
+## Scheduler-only mode
 
 `scheduler_only` is a supported operating mode, not a deployment failure.
 It applies when the app service principal does not have `CAN_MANAGE_RUN`

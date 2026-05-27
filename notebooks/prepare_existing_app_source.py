@@ -18,7 +18,7 @@ Usage::
         --control-plane-schema <schema> \\
         --output-dir /tmp/model-landscape-deploy
 
-See also:  docs/EXISTING_APP_DEPLOYMENT.md
+See also:  docs/existing_app.md
 """
 
 from __future__ import annotations

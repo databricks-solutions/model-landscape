@@ -1,8 +1,8 @@
-# Deploy To A Workspace
+# Deploy to a workspace
 
 This is the step-by-step path to deploy Model Landscape into your own Databricks workspace before handing it to a client.
 
-## Choose A Deployment Mode
+## Choose a deployment mode
 
 Model Landscape supports two modes:
 
@@ -12,7 +12,7 @@ Model Landscape supports two modes:
 2. `dev` or `prod`
    Use this when you want the scheduled refresh workflow to keep a Lakebase projection current.
 
-## What You Need Before Deploy
+## What you need before deploy
 
 You need a workspace with:
 
@@ -31,7 +31,7 @@ If you use Lakebase mode, you also need a Lakebase database user for the refresh
 
 If you already have an app and want to keep its existing compute and app service principal, use the dedicated manual walkthrough:
 
-- [Existing App Deployment](./EXISTING_APP_DEPLOYMENT.md)
+- [Existing App Deployment](existing_app.md)
 
 If the app already exists, do not use the generic `bundle deploy` path below with that same app name unless you first bind the bundle app resource to the existing app. Otherwise Databricks tries to create the app resource again and the deploy fails with an "App already exists" error.
 If the operator cannot manage the app's `sql_warehouse` resource, do not keep retrying that bind/deploy path. Use the generated manual existing-app source path from [`notebooks/prepare_existing_app_source.py`](https://github.com/databricks-solutions/model-landscape/blob/main/notebooks/prepare_existing_app_source.py) instead.
@@ -62,7 +62,7 @@ Keep the checked-in `app.yaml` template environment-neutral. Set `REFRESH_JOB_ID
 
 If no shared refresh workflow exists in the workspace yet, onboarding can still save the monitor config, but no scheduled pickup can happen until that shared workflow is created and the app points at it.
 
-## Permission Matrix
+## Permission matrix
 
 Treat permissions as identity-specific:
 
@@ -86,7 +86,7 @@ Treat permissions as identity-specific:
 - Optional Lakebase app reads or workflow sync:
   permission to resolve the Lakebase instance and connect to the target database; workflow sync also needs write access to the target Lakebase schema.
 
-## Variables You Must Supply
+## Variables you must supply
 
 For `warehouse_only`, Model Landscape expects:
 
@@ -143,7 +143,7 @@ For `dev` or `prod`, Model Landscape expects:
 - `lakebase_database_name`
 - `lakebase_pguser`
 
-## 1. Cleanup If You Are Re-Deploying
+## 1. Cleanup if you are re-deploying
 
 If you manually deleted the app or are reusing a workspace with old bundle state, clean up the stale workspace bundle directory first:
 
@@ -153,7 +153,7 @@ databricks workspace delete /Workspace/Users/<your-email>/.bundle/model-landscap
 
 Do this before the next `databricks bundle deploy`.
 
-## 2. Validate Locally
+## 2. Validate locally
 
 From the repo root:
 
@@ -210,10 +210,10 @@ Before calling the build broadly customer-ready, run these focused workspace rel
 
 If you know the workspace will monitor very large or very wide inference tables, set the large-table caps deliberately before deploy rather than discovering OOM pressure during the first backfill. Lowering the caps is usually safer than immediately scaling compute.
 
-## 3. Deploy The Bundle
+## 3. Deploy the bundle
 
 This section assumes the bundle is managing creation of the Databricks App resource.
-If the app already exists and you want to preserve its current service principal, use [Existing App Deployment](./EXISTING_APP_DEPLOYMENT.md) instead of this section.
+If the app already exists and you want to preserve its current service principal, use [Existing App Deployment](existing_app.md) instead of this section.
 
 Warehouse-only:
 
@@ -263,7 +263,7 @@ Expected result:
 - after `databricks apps deploy`, the app source is deployed to compute
 - on CLI `v0.260.0`, the app resource only binds the SQL warehouse; Lakebase app reads are configured from the app session fields or app env overrides
 
-## 4. Grant The App Access
+## 4. Grant the app access
 
 Model Landscape creates an app service principal automatically, but it does not receive warehouse or Unity Catalog access by default.
 Also do not assume the bundle's `sql_warehouse: CAN_USE` binding is sufficient forever. If the app is started, source-deployed, restarted, or otherwise managed outside the bundle lifecycle, explicitly verify the warehouse grant after deployment.
@@ -307,7 +307,7 @@ Additionally:
 
 If you want Model Landscape to initialize the control plane from the UI, the identity running setup also needs create privileges in that namespace.
 
-## 5. Open The App
+## 5. Open the app
 
 Open the deployed Databricks App named `model-landscape`.
 
@@ -321,7 +321,7 @@ Verify:
 - if you want fast app reads, enter `Lakebase Instance Name` and `Lakebase Database Name` in the setup card before loading the dashboard
 - in warehouse-only mode, the app may show an informational banner recommending Lakebase if the workspace exposes Lakebase instances
 
-## 6. Initialize The Control Plane
+## 6. Initialize the control plane
 
 In the app `Setup` step, click `Setup Control Plane`.
 
@@ -376,7 +376,7 @@ Expected:
 - `comparison_windows`
 - `monitor_runtime_state`
 
-## 7. Load Test Data
+## 7. Load test data
 
 Run the MLOps tutorial to generate realistic demo data with intentional drift:
 
@@ -387,7 +387,7 @@ databricks bundle run tutorial_mlops
 The tutorial generates fraud detection and predictive maintenance scenarios
 with calibrated drift patterns. See `tutorial/README.md` for details.
 
-## 8. Create The First Monitor
+## 8. Create the first monitor
 
 In the app:
 
@@ -460,7 +460,7 @@ Expected result:
 - after the workflow finishes, the new monitor appears on the overview page and the analysis pages can load it
 - the first refresh still backfills historical daily comparison windows immediately instead of writing only a single latest snapshot
 
-## 9. Verify Persisted State
+## 9. Verify persisted state
 
 Verify the warehouse system of record after the triggered workflow finishes:
 
@@ -514,7 +514,7 @@ Expected result:
 - `performance_bin_specs` contains one canonical bucket spec row per numeric feature that participates in performance repair
 - if Lakebase is configured for the current app session or refresh workflow, Lakebase tables contain the latest monitor inventory, summary, and open incidents
 
-## 10. Verify The Workflow
+## 10. Verify the workflow
 
 If the async trigger is not configured or fails, open the workflow `<app-name>-refresh` and run it once manually.
 
@@ -527,19 +527,7 @@ Expected result:
 - in `dev` / `prod`, the workflow also updates the Lakebase projection
 - in `warehouse_only`, the app can still use Lakebase reads if you entered Lakebase instance/database values in the UI, but scheduled refreshes do not sync Lakebase automatically
 
-## 11. What To Check Before Sending To A Client
-
-Do not send this to a client until all of the following are true:
-
-- app deploy succeeds in your workspace
-- setup works from the UI
-- a real or scratch monitor can be created
-- the refresh workflow completes
-- warehouse tables populate correctly
-- in Lakebase mode, Lakebase tables populate correctly
-- the app loads summary and incidents without errors
-
-## Common Failure Modes
+## Common failure modes
 
 - Missing SQL warehouse permission:
   - the app opens but scan/setup/refresh calls fail

@@ -2,7 +2,7 @@
 
 This document describes the deployed Model Landscape architecture across both supported deployment modes.
 
-## Design Goals
+## Design goals
 
 Model Landscape is optimized for four things:
 
@@ -12,7 +12,7 @@ Model Landscape is optimized for four things:
 4. Keep monitoring state durable and auditable.
 5. Keep the UI responsive without turning Lakebase into the system of record.
 
-## Deployment Modes
+## Deployment modes
 
 Model Landscape supports two runtime shapes:
 
@@ -26,7 +26,7 @@ Model Landscape supports two runtime shapes:
    - the refresh workflow syncs a Lakebase read model for fast monitor and incident views
    - the app can use the same Lakebase read model when the operator provides Lakebase instance/database values in the session or app env
 
-## Architecture Overview
+## Architecture overview
 
 ```mermaid
 flowchart LR
@@ -86,7 +86,7 @@ Primary code:
 - `src/model_landscape/pages/`
 - `src/model_landscape/ui/`
 
-### 2. Databricks SQL Warehouse
+### 2. Databricks SQL warehouse
 
 The SQL warehouse is the access layer for:
 
@@ -97,7 +97,7 @@ The SQL warehouse is the access layer for:
 
 The warehouse is the compute access layer and the authoritative read/write path for system-of-record state.
 
-### 3. Unity Catalog Control Plane
+### 3. Unity Catalog control plane
 
 The durable monitoring state lives in Delta tables under a customer-selected Unity Catalog namespace:
 
@@ -145,7 +145,7 @@ Monitor config writes are now atomic Delta `MERGE` operations keyed by `model_ke
 
 The Performance page no longer carries a second independent bin-detail chart. The per-bin impact chart remains the high-level “what hurts the metric” surface, but it now re-bins the latest comparison window live with the same binning and outlier controls exposed on the page. Because one custom edge list cannot be meaningful across unrelated feature scales, custom edges are scoped to the selected Performance feature; Auto and Fixed Bin Count remain the all-feature modes. Feature Deep Dive remains the feature-specific follow-up path through a prefilled handoff for the selected feature.
 
-### 4. Lakebase Read Model
+### 4. Lakebase read model
 
 Lakebase is used as a projection for the app, not as the canonical store.
 
@@ -157,7 +157,7 @@ Current Lakebase projection tables:
 
 The app uses Lakebase for hot UI reads when configured. If Lakebase is unavailable or not configured, Model Landscape falls back to the warehouse-backed queries.
 
-### 5. Refresh Workflow
+### 5. Refresh workflow
 
 The refresh workflow is a Spark-capable Databricks job.
 
@@ -236,9 +236,9 @@ Primary code:
 - `src/model_landscape/services/refresh_runner.py`
 - `src/model_landscape/services/refresh_engine.py`
 
-## Data Flow
+## Data flow
 
-### Onboarding Flow
+### Onboarding flow
 
 1. The operator enters a source inference table and can optionally add a labels table plus an MLflow experiment or registered model.
 2. The app loads schema metadata and sample rows through the SQL warehouse.
@@ -254,7 +254,7 @@ Primary code:
 11. If that trigger is unavailable, the scheduled hourly shared job still picks up the pending bootstrap automatically, but only if that shared workflow already exists and the app points at it correctly.
 12. If the monitor is still pending after wiring or permission fixes, the `Monitor Settings` page exposes `Run First Refresh` to retry bootstrap for the selected monitor only.
 
-### Refresh Flow
+### Refresh flow
 
 1. The workflow loads active monitor configs and their runtime state.
 2. For each config, it reads source data from the inference table.
@@ -286,7 +286,7 @@ Current limitation:
 - local `pytest` coverage is necessary but not sufficient for the Spark path, because the Spark-specific tests still skip automatically without a working local JVM; real Databricks execution remains the release gate for very large tenants
 - remaining incident readback/productization work includes richer incident history surfaces in the app and wide-monitor Spark efficiency improvements
 
-### Readback Flow
+### Readback flow
 
 1. In Lakebase mode, the app reads monitor summary and incident inbox data from Lakebase.
 2. In warehouse-only mode, or if Lakebase is unavailable, it reads those views from the warehouse-backed repository.
@@ -298,7 +298,7 @@ Current limitation:
 
 `incidents` is intentionally the current open-incident projection. Historical openings, escalations, and recoveries are preserved separately in `incident_history`, so a model can have severe historical drift with zero current open incidents if the latest comparison window has recovered.
 
-## Why The System Of Record Stays In Unity Catalog
+## Why the system of record stays in Unity Catalog
 
 Model Landscape keeps the authoritative monitoring state in Unity Catalog because it is:
 
@@ -309,7 +309,7 @@ Model Landscape keeps the authoritative monitoring state in Unity Catalog becaus
 
 Lakebase improves interaction speed, but it is intentionally only a projection.
 
-## Why Lakebase Exists
+## Why Lakebase exists
 
 Model Landscape uses Lakebase for the UI because the app has a different access pattern than the analytics layer.
 
@@ -326,7 +326,7 @@ Bad Lakebase candidates:
 - historical metric fact tables as the only durable copy
 - refresh computation state
 
-## Read/Write Split
+## Read/write split
 
 The product now follows this split:
 
@@ -337,7 +337,7 @@ The product now follows this split:
 - `warehouse fallback overview reads`: fetch the latest drift and quality snapshots in bulk across active monitors instead of issuing one full-history query per monitor
 - `warehouse fallback overview reads`: use explicit latest-row windowing for both quality and drift snapshots, plus explicit aliases on derived quality subqueries, so the bulk Overview path stays valid in Databricks SQL and stable when the latest window has repeated writes
 
-## Operational Notes
+## Operational notes
 
 - The app does not perform DDL on normal reads. Control-plane creation is an explicit setup step.
 - If the control-plane catalog should be created by Model Landscape itself, setup must be run by an identity with catalog-create privileges.

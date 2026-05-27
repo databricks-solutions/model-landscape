@@ -15,9 +15,7 @@ theme:
   features:
     - navigation.tabs
     - navigation.tabs.sticky
-    - navigation.sections
     - navigation.top
-    - navigation.indexes
     - content.code.copy
     - content.code.annotate
     - search.suggest
@@ -37,6 +35,9 @@ theme:
       toggle:
         icon: material/weather-sunny
         name: Switch to light mode
+
+extra_css:
+  - stylesheets/extra.css
 
 plugins:
   - search
@@ -71,38 +72,37 @@ exclude_docs: |
 
 nav:
   - Home: index.md
-  - Watch the intro deck: intro-deck.html
+  - Check out the intro deck: intro-deck.html
   - Get started: getting_started.md
   - Concepts: concepts.md
   - The app:
-      - Architecture: ARCHITECTURE.md
-      - Deploy to a workspace: DEPLOY_TO_WORKSPACE.md
-      - Deploy into an existing app: EXISTING_APP_DEPLOYMENT.md
-  - mlflow-lens SDK:
-      - API:
-          - api/index.md
-          - Classifier panels: api/classifier.md
-          - Regressor panels: api/regressor.md
-          - Model-selection panels: api/model_selection.md
-          - Panels (low-level): api/panels.md
-          - Drift: api/drift.md
-          - Summary: api/summary.md
-      - Gallery:
-          - gallery/index.md
-          - Classification:
-              - ROC / AUC: gallery/roc_auc.md
-              - Confusion matrix: gallery/confusion_matrix.md
-              - Precision-recall: gallery/precision_recall.md
-              - Classification report: gallery/classification_report.md
-              - Class prediction error: gallery/class_prediction_error.md
-              - Discrimination threshold: gallery/discrimination_threshold.md
-          - Regression:
-              - Prediction error: gallery/prediction_error.md
-              - Residuals: gallery/residuals.md
-              - Alpha selection: gallery/alpha_selection.md
-          - Model selection:
-              - Learning curve: gallery/learning_curve.md
-              - Validation curve: gallery/validation_curve.md
-              - Feature importances: gallery/feature_importances.md
-              - CV scores: gallery/cv_scores.md
+      - Architecture: architecture.md
+      - Deploy to a workspace: deploy.md
+      - Deploy into an existing app: existing_app.md
+  - SDK reference:
+      - API overview: api/index.md
+      - Classifier panels: api/classifier.md
+      - Regressor panels: api/regressor.md
+      - Model-selection panels: api/model_selection.md
+      - Panels (low-level): api/panels.md
+      - Drift: api/drift.md
+      - Summary: api/summary.md
+  - Gallery:
+      - Gallery overview: gallery/index.md
+      - Classification:
+          - ROC / AUC: gallery/roc_auc.md
+          - Confusion matrix: gallery/confusion_matrix.md
+          - Precision-recall: gallery/precision_recall.md
+          - Classification report: gallery/classification_report.md
+          - Class prediction error: gallery/class_prediction_error.md
+          - Discrimination threshold: gallery/discrimination_threshold.md
+      - Regression:
+          - Prediction error: gallery/prediction_error.md
+          - Residuals: gallery/residuals.md
+          - Alpha selection: gallery/alpha_selection.md
+      - Model selection:
+          - Learning curve: gallery/learning_curve.md
+          - Validation curve: gallery/validation_curve.md
+          - Feature importances: gallery/feature_importances.md
+          - CV scores: gallery/cv_scores.md
   - Changelog: changelog.md
