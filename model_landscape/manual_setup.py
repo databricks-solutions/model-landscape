@@ -21,7 +21,7 @@ REFRESH_JOB_PYPI_DEPENDENCIES: tuple[str, ...] = (
 MANUAL_SOURCE_ITEMS: tuple[str, ...] = (
     "requirements.txt",
     "pyproject.toml",
-    "src",
+    "model_landscape",
 )
 
 

@@ -53,7 +53,7 @@ Full first-time-setup guide: [Get started](https://databricks-solutions.github.i
 uv sync --extra dev               # install workspace + dev deps
 uv run pytest -q                  # run tests
 uv build --wheel --out-dir dist   # build SDK + app wheel
-PYTHONPATH=src uv run python -m model_landscape.app  # run app locally
+uv run python -m model_landscape.app  # run app locally
 ```
 
 ## License

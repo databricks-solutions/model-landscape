@@ -52,8 +52,8 @@ def test_wrapper_scripts_avoid_serverless_fragile_path_patterns() -> None:
     for relative_path in (
         "notebooks/model_landscape_refresh.py",
         "notebooks/model_landscape_setup.py",
-        "src/model_landscape/workflows/refresh_job.py",
-        "src/model_landscape/workflows/setup_control_plane.py",
+        "model_landscape/workflows/refresh_job.py",
+        "model_landscape/workflows/setup_control_plane.py",
     ):
         text = (REPO_ROOT / relative_path).read_text()
         assert "Path(__file__).resolve()" not in text

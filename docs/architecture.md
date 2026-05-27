@@ -80,11 +80,11 @@ Responsibilities:
 
 Primary code:
 
-- `src/model_landscape/app.py`
-- `src/model_landscape/backend.py`
-- `src/model_landscape/callbacks.py`
-- `src/model_landscape/pages/`
-- `src/model_landscape/ui/`
+- `model_landscape/app.py`
+- `model_landscape/backend.py`
+- `model_landscape/callbacks.py`
+- `model_landscape/pages/`
+- `model_landscape/ui/`
 
 ### 2. Databricks SQL warehouse
 
@@ -232,9 +232,9 @@ Packaging/runtime shape:
 Primary code:
 
 - `resources/jobs.yml`
-- `src/model_landscape/workflows/refresh_job.py`
-- `src/model_landscape/services/refresh_runner.py`
-- `src/model_landscape/services/refresh_engine.py`
+- `model_landscape/workflows/refresh_job.py`
+- `model_landscape/services/refresh_runner.py`
+- `model_landscape/services/refresh_engine.py`
 
 ## Data flow
 
