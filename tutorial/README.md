@@ -1,39 +1,41 @@
 # Model Landscape MLOps Tutorial
 
-End-to-end MLOps pipeline that generates realistic data, trains models,
-produces drifted production inference, sets up live monitoring, and closes
-the loop with retraining.
+End-to-end MLOps pipeline in two notebooks: generate data, train and ship a
+Champion model, watch it drift through 60 days of production, and close the
+loop with a retrained v2.
 
-## Quick Start
+## Quick start
 
 ```bash
-# Deploy everything (app + tutorial job + refresh job)
+# Deploy the app + the tutorial job
 databricks bundle deploy -t warehouse_only \
   --var "sql_warehouse_id=<your-warehouse-id>"
 
-# Run the tutorial pipeline
+# Run the tutorial end-to-end
 databricks bundle run tutorial_mlops
 ```
 
 ## Notebooks
 
 | # | Notebook | What happens |
-|---|----------|-------------|
-| 01 | `01_build_features` | Generate 100k fraud transactions, save to Unity Catalog |
-| 02 | `02_train_and_promote` | Train 3 models, enrich with mlflow-lens, validate, promote Champion |
-| 03 | `03_production_inference` | Score with Champion, generate 60 days of drifted inference + a second model (predictive maintenance) |
-| 04 | `04_monitor` | Create monitors, run bootstrap refresh, verify drift and incidents |
-| 05 | `05_close_the_loop` | Detect drift, retrain on recent data, promote v2, verify recovery |
+|---|----------|--------------|
+| 01 | `01_train_and_ship` | Build a 100k-row fraud dataset, train 3 candidates, log mlflow-lens panels (ROC, confusion matrix, PR curve, classification report, feature importances, learning curve), register the best as Champion. |
+| 02 | `02_observe_and_recover` | Score with Champion, fast-forward 60 days of drifted inference (+ a second model for fleet monitoring), create monitors, bootstrap-refresh, investigate incidents, retrain v2, promote, redeploy. |
 
-## Data Generator
+The mlflow-lens panel quick functions in notebook 1 log **both** the
+structured JSON payload (`lens/panels/{type}.json`, consumed by the
+warehouse app) **and** an interactive Plotly figure
+(`lens/panels/{type}.html`, viewable directly in the MLflow UI).
 
-`_resources/data_generator.py` generates two synthetic scenarios with
+## Data generator
+
+`_resources/data_generator.py` produces two synthetic scenarios with
 calibrated drift patterns:
 
 - **Fraud detection** (classification): gradual then sudden drift in
-  transaction patterns, holiday season surge, data pipeline null spike
+  transaction patterns, holiday season surge, data pipeline null spike.
 - **Predictive maintenance** (regression): seasonal temperature shifts,
-  equipment aging, sensor outages
+  equipment aging, sensor outages.
 
 ## Prerequisites
 
