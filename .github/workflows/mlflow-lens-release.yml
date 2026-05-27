@@ -1,0 +1,129 @@
+name: Release mlflow-lens
+
+on:
+  push:
+    tags:
+      - 'mlflow-lens-v*'
+  pull_request:
+    paths:
+      - 'packages/mlflow-lens/**'
+      - '.github/workflows/mlflow-lens-release.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mlflow-lens-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and verify wheel
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Resolve package version
+        id: version
+        working-directory: packages/mlflow-lens
+        run: |
+          PKG_VERSION=$(grep '^__version__' src/mlflow_lens/_version.py | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Package version: $PKG_VERSION"
+
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#mlflow-lens-v}"
+          if [ "${{ steps.version.outputs.version }}" != "$TAG_VERSION" ]; then
+            echo "::error::Tag '$GITHUB_REF_NAME' implies version '$TAG_VERSION' but _version.py says '${{ steps.version.outputs.version }}'"
+            exit 1
+          fi
+
+      - name: Build sdist and wheel
+        working-directory: packages/mlflow-lens
+        run: uv build
+
+      - name: Check distribution metadata
+        working-directory: packages/mlflow-lens
+        run: uvx twine check dist/*
+
+      - name: Smoke-install wheel in a clean venv
+        working-directory: packages/mlflow-lens
+        run: |
+          uv venv /tmp/smoke --python 3.12
+          uv pip install --python /tmp/smoke/bin/python dist/*.whl
+          /tmp/smoke/bin/python -c "
+          import mlflow_lens
+          from mlflow_lens import cost, drift, experiment, panels, summary
+          from mlflow_lens.analytics.drift import compute_psi
+          assert mlflow_lens.__version__ == '${{ steps.version.outputs.version }}', mlflow_lens.__version__
+          print(f'OK: mlflow_lens {mlflow_lens.__version__} imports cleanly')
+          "
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlflow-lens-dist
+          path: packages/mlflow-lens/dist/
+          retention-days: 7
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/mlflow-lens-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: mlflow-lens-dist
+          path: dist
+
+      - name: Generate SHA256 checksums
+        working-directory: dist
+        run: |
+          sha256sum *.whl *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: mlflow-lens ${{ needs.build.outputs.version }}
+          tag_name: ${{ github.ref_name }}
+          fail_on_unmatched_files: true
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ## Install
+
+            ```bash
+            pip install "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mlflow_lens-${{ needs.build.outputs.version }}-py3-none-any.whl"
+            ```
+
+            Or pin in `requirements.txt` / `pyproject.toml`:
+
+            ```
+            mlflow-lens @ https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mlflow_lens-${{ needs.build.outputs.version }}-py3-none-any.whl
+            ```
+
+            ## Verify checksum (optional)
+
+            ```bash
+            curl -LO https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/SHA256SUMS
+            sha256sum -c SHA256SUMS
+            ```
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/SHA256SUMS
