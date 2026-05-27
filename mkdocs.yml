@@ -10,8 +10,8 @@ site_dir: site
 
 theme:
   name: material
-  logo: model-lens-logo.png
-  favicon: model-lens-logo.png
+  logo: model-lens-logo.svg
+  favicon: model-lens-logo.svg
   features:
     - navigation.sections
     - navigation.tabs
