@@ -23,6 +23,23 @@
 
 # COMMAND ----------
 
+# Precheck: notebook 01 must have run successfully — fail fast with a
+# clear message if no Champion alias exists yet.
+import mlflow
+
+_registered = model_name("fraud_detector")
+try:
+    mlflow.MlflowClient().get_model_version_by_alias(_registered, "Champion")
+except mlflow.exceptions.MlflowException as e:
+    raise RuntimeError(
+        f"No Champion alias on {_registered}. "
+        "Run `01_train_and_ship` first (or `databricks bundle run tutorial_mlops` "
+        "to run both notebooks in order)."
+    ) from e
+print(f"✓ Champion model present: {_registered}")
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Score with the Champion model
 # MAGIC
@@ -160,67 +177,36 @@ print(f"✓ Observability store ready at {obs}")
 
 # COMMAND ----------
 
-from model_landscape.domain.models import (
-    BaselinePolicy, InferenceContract, MLflowLineage, MonitorConfig,
-)
+# MAGIC %run ./_resources/monitors
 
-fraud_monitor = MonitorConfig(
+# COMMAND ----------
+
+fraud_monitor = make_monitor_config(
     model_key="fraud_detector_v1",
     display_name="Fraud Detector",
     source_table=table("fraud_inference"),
     problem_type="classification",
-    contract=InferenceContract(
-        timestamp_col="event_ts",
-        prediction_col="prediction",
-        prediction_score_col="prediction_proba",
-        entity_id_col="entity_id",
-        model_version_col="model_version",
-        feature_columns=(
-            "transaction_amount", "device_trust_score", "distance_from_home_km",
-            "velocity_24h", "hour_of_day", "is_weekend", "account_age_days",
-            "merchant_category", "region",
-        ),
-        slice_columns=("region",),
-        categorical_columns=("merchant_category", "region"),
-    ),
-    baseline=BaselinePolicy(kind="rolling", n_days=7),
+    feature_columns=FRAUD_FEATURES,
+    prediction_score_col="prediction_proba",
+    slice_columns=("region",),
+    categorical_columns=("merchant_category", "region"),
     labels_table=table("fraud_labels"),
     labels_join_col="entity_id",
     labels_order_col="label_timestamp",
-    drift_cadence_preset="daily",
-    performance_cadence_preset="daily_7d_repair",
-    schedule_enabled=True,
-    mlflow=MLflowLineage(experiment_name=EXPERIMENT_PATH),
-    created_by="tutorial",
+    mlflow_experiment=EXPERIMENT_PATH,
 )
 
-maintenance_monitor = MonitorConfig(
+maintenance_monitor = make_monitor_config(
     model_key="rul_predictor_v1",
     display_name="Predictive Maintenance — RUL",
     source_table=table("maintenance_inference"),
     problem_type="regression",
-    contract=InferenceContract(
-        timestamp_col="event_ts",
-        prediction_col="prediction",
-        entity_id_col="entity_id",
-        model_version_col="model_version",
-        feature_columns=(
-            "vibration_mm_s", "temperature_c", "pressure_kpa", "rpm",
-            "oil_viscosity", "power_output_kw", "ambient_temp_c",
-            "operating_hours_since_service", "load_factor",
-            "equipment_class", "site",
-        ),
-        slice_columns=("site",),
-        categorical_columns=("equipment_class", "site"),
-    ),
-    baseline=BaselinePolicy(kind="rolling", n_days=7),
+    feature_columns=MAINT_FEATURES,
+    slice_columns=("site",),
+    categorical_columns=("equipment_class", "site"),
     labels_table=table("maintenance_labels"),
     labels_join_col="entity_id",
     labels_order_col="label_timestamp",
-    drift_cadence_preset="daily",
-    performance_cadence_preset="daily_7d_repair",
-    schedule_enabled=True,
-    created_by="tutorial",
 )
 
 repository.upsert_monitor_config(fraud_monitor)
@@ -361,7 +347,17 @@ if metrics["f1"] >= champion_f1 - 0.01:
 else:
     print("\n✗ Challenger didn't improve — keeping current Champion")
 
-# Append 30 days of v2 inference so the next refresh shows recovery
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Simulate the recovery
+# MAGIC
+# MAGIC Append 30 more days of inference scored by v2. On the next refresh,
+# MAGIC Model Landscape sees the version transition and drift dropping back
+# MAGIC toward baseline.
+
+# COMMAND ----------
+
 v2_start = date.today() - timedelta(days=30)
 v2_df = generate_fraud_inference(n_days=30, rows_per_day=500, start_date=v2_start, seed=1000, model_version="2")
 v2_labels = generate_fraud_labels(v2_df, label_delay_days=(2, 5), seed=1000)
@@ -369,7 +365,7 @@ v2_labels = generate_fraud_labels(v2_df, label_delay_days=(2, 5), seed=1000)
 spark.createDataFrame(v2_df).write.mode("append").saveAsTable(table("fraud_inference"))
 if len(v2_labels):
     spark.createDataFrame(v2_labels).write.mode("append").saveAsTable(table("fraud_labels"))
-print(f"\n✓ Appended {len(v2_df):,} v2 inference rows + {len(v2_labels):,} labels")
+print(f"✓ Appended {len(v2_df):,} v2 inference rows + {len(v2_labels):,} labels")
 
 # COMMAND ----------
 
