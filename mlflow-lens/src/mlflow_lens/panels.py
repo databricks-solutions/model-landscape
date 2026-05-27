@@ -16,10 +16,23 @@ from mlflow_lens._artifacts import log_json_artifact
 from mlflow_lens._version import __version__
 
 PANEL_TYPES = frozenset({
+    # Original 4 (Dash app contract — JSON shape must stay stable):
     "confusion_matrix",
     "roc_curve",
     "feature_importance",
     "learning_curve",
+    # Classification:
+    "classification_report",
+    "precision_recall_curve",
+    "class_prediction_error",
+    "discrimination_threshold",
+    # Regression:
+    "prediction_error",
+    "residuals",
+    "alpha_selection",
+    # Model selection:
+    "validation_curve",
+    "cv_scores",
 })
 
 
