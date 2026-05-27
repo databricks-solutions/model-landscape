@@ -25,18 +25,19 @@ theme:
     - content.code.annotate
     - search.suggest
     - search.highlight
+  # Default to light mode; toggle flips to dark.
+  # System-level prefers-color-scheme is ignored on purpose so the
+  # Databricks-themed light palette is what every first-time visitor sees.
   palette:
-    - media: "(prefers-color-scheme: light)"
-      scheme: default
-      primary: deep orange
-      accent: deep orange
+    - scheme: default
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-night
         name: Switch to dark mode
-    - media: "(prefers-color-scheme: dark)"
-      scheme: slate
-      primary: deep orange
-      accent: deep orange
+    - scheme: slate
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-sunny
         name: Switch to light mode

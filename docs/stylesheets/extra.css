@@ -1,3 +1,50 @@
+/* Databricks color palette */
+:root {
+  --dbx-orange: #FF3621;
+  --dbx-orange-hover: #E0311D;
+  --dbx-ink: #1B3139;
+  --dbx-cream: #F5F5F0;
+  --dbx-gray-100: #EDEEE9;
+  --dbx-gray-300: #D1D5DB;
+  --dbx-gray-500: #6B7280;
+}
+
+/* Light scheme — Databricks themed */
+[data-md-color-scheme="default"][data-md-color-primary="custom"] {
+  --md-primary-fg-color:        var(--dbx-orange);
+  --md-primary-fg-color--light: var(--dbx-orange);
+  --md-primary-fg-color--dark:  var(--dbx-orange-hover);
+  --md-primary-bg-color:        #ffffff;
+  --md-primary-bg-color--light: rgba(255, 255, 255, 0.7);
+
+  --md-default-bg-color: var(--dbx-cream);
+  --md-default-fg-color: var(--dbx-ink);
+  --md-default-fg-color--light: var(--dbx-gray-500);
+
+  --md-typeset-a-color: var(--dbx-orange);
+}
+
+[data-md-color-scheme="default"][data-md-color-accent="custom"] {
+  --md-accent-fg-color:           var(--dbx-orange);
+  --md-accent-fg-color--transparent: rgba(255, 54, 33, 0.1);
+  --md-accent-bg-color:           #ffffff;
+  --md-accent-bg-color--light:    rgba(255, 255, 255, 0.7);
+}
+
+/* Dark scheme — keep the same Databricks orange accent, slate base */
+[data-md-color-scheme="slate"][data-md-color-primary="custom"] {
+  --md-primary-fg-color:        var(--dbx-orange);
+  --md-primary-fg-color--light: var(--dbx-orange);
+  --md-primary-fg-color--dark:  var(--dbx-orange-hover);
+
+  --md-typeset-a-color: #FF6B5C;
+}
+
+[data-md-color-scheme="slate"][data-md-color-accent="custom"] {
+  --md-accent-fg-color:           #FF6B5C;
+  --md-accent-fg-color--transparent: rgba(255, 107, 92, 0.15);
+}
+
 /* Bigger header logo */
 .md-header__button.md-logo img,
 .md-header__button.md-logo svg {
@@ -5,7 +52,19 @@
   width: auto;
 }
 
-/* Give the header a little extra room to accommodate the larger logo */
 .md-header {
   height: 3.6rem;
+}
+
+/* Tighter, more presentational landing-page buttons */
+.md-button.md-button--primary {
+  background-color: var(--dbx-orange);
+  border-color: var(--dbx-orange);
+  color: #ffffff;
+}
+
+.md-button.md-button--primary:hover,
+.md-button.md-button--primary:focus {
+  background-color: var(--dbx-orange-hover);
+  border-color: var(--dbx-orange-hover);
 }
