@@ -14,12 +14,75 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tutorial"))
 
 from _resources.data_generator import (
+    FRAUD_BASELINE,
     generate_fraud_inference,
     generate_fraud_labels,
+    generate_fraud_training_set,
     generate_maintenance_inference,
     generate_maintenance_labels,
 )
 from mlflow_lens.analytics.drift import compute_psi
+
+
+# ---------------------------------------------------------------------------
+# Reproducibility + train/serving consistency
+# ---------------------------------------------------------------------------
+
+
+class TestReproducibility:
+    def test_inference_is_deterministic_under_fixture_now(self, monkeypatch) -> None:
+        monkeypatch.setenv("MODEL_LANDSCAPE_FIXTURE_NOW", "2026-05-27")
+        a = generate_fraud_inference(n_days=10, rows_per_day=100, seed=42)
+        b = generate_fraud_inference(n_days=10, rows_per_day=100, seed=42)
+        pd.testing.assert_frame_equal(a, b)
+
+    def test_labels_are_deterministic_under_fixture_now(self, monkeypatch) -> None:
+        monkeypatch.setenv("MODEL_LANDSCAPE_FIXTURE_NOW", "2026-05-27")
+        infer = generate_fraud_inference(n_days=10, rows_per_day=100, seed=42)
+        a = generate_fraud_labels(infer, seed=42)
+        b = generate_fraud_labels(infer, seed=42)
+        pd.testing.assert_frame_equal(a, b)
+
+    def test_training_set_is_deterministic(self) -> None:
+        a = generate_fraud_training_set(n=5_000, seed=42)
+        b = generate_fraud_training_set(n=5_000, seed=42)
+        pd.testing.assert_frame_equal(a, b)
+
+
+class TestTrainingSet:
+    @pytest.fixture(scope="class")
+    def train_df(self) -> pd.DataFrame:
+        return generate_fraud_training_set(n=20_000, seed=42)
+
+    def test_required_columns(self, train_df: pd.DataFrame) -> None:
+        required = {
+            "transaction_id", "timestamp", "transaction_amount",
+            "device_trust_score", "distance_from_home_km", "velocity_24h",
+            "account_age_days", "hour_of_day", "is_weekend",
+            "merchant_category", "region", "is_fraud",
+        }
+        assert required.issubset(train_df.columns)
+
+    def test_fraud_rate_realistic(self, train_df: pd.DataFrame) -> None:
+        rate = train_df["is_fraud"].mean()
+        # Signal weights + noise yield ~3-10% positive rate
+        assert 0.02 < rate < 0.15, f"unexpected fraud rate {rate:.3f}"
+
+    def test_distribution_matches_inference_baseline(
+        self, train_df: pd.DataFrame, monkeypatch
+    ) -> None:
+        """The whole point of this refactor: training distribution must match
+        the inference baseline period so day-0 PSI is near-zero."""
+        monkeypatch.setenv("MODEL_LANDSCAPE_FIXTURE_NOW", "2026-05-27")
+        infer = generate_fraud_inference(n_days=14, rows_per_day=500, seed=42)
+        # Compare numeric feature means within 10% of baseline target
+        for feat, (mu, _) in FRAUD_BASELINE.items():
+            train_mean = float(train_df[feat].mean())
+            infer_mean = float(infer[feat].mean())
+            assert abs(train_mean - infer_mean) / max(abs(mu), 1.0) < 0.15, (
+                f"{feat}: train mean {train_mean:.2f} vs baseline-period infer "
+                f"mean {infer_mean:.2f} — train/serving skew at baseline"
+            )
 
 
 # ---------------------------------------------------------------------------

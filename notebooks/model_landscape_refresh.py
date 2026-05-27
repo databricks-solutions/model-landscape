@@ -6,7 +6,7 @@ performance metrics, incidents, and comparison windows for all active
 monitors from their source inference tables.
 
 Invoked by:  ``databricks bundle run refresh_control_plane`` (refresh task)
-See also:    src/model_landscape/workflows/refresh_job.py
+See also:    model_landscape/workflows/refresh_job.py
 """
 from __future__ import annotations
 
@@ -14,17 +14,20 @@ import sys
 from pathlib import Path
 
 
-def _bootstrap_repo_src() -> None:
-    src = Path.cwd() / "src"
-    if not src.is_dir():
-        raise RuntimeError("Run this helper from the Model Landscape repo root or set PYTHONPATH=src.")
-    src_path = str(src)
-    if src_path not in sys.path:
-        sys.path.insert(0, src_path)
+def _bootstrap_repo_root() -> None:
+    repo_root = Path.cwd()
+    if not (repo_root / "model_landscape").is_dir():
+        raise RuntimeError(
+            "Run this helper from the Model Landscape repo root or set "
+            "PYTHONPATH to the repo root."
+        )
+    repo_str = str(repo_root)
+    if repo_str not in sys.path:
+        sys.path.insert(0, repo_str)
 
 
 def main() -> int:
-    _bootstrap_repo_src()
+    _bootstrap_repo_root()
     from model_landscape.workflows.refresh_job import main as refresh_main
 
     return int(refresh_main() or 0)

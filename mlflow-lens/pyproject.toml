@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mlflow-lens"
+dynamic = ["version"]
+description = "MLflow enrichment SDK: structured run summaries, training-time drift, cost attribution, and confusion/ROC/feature-importance panels"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE.md" }
+authors = [
+  { name = "Scott McKean", email = "scott.mckean@databricks.com" },
+  { name = "Volo Vragov" },
+]
+keywords = ["mlflow", "machine-learning", "drift", "model-monitoring", "databricks"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: Other/Proprietary License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Typing :: Typed",
+]
+dependencies = [
+  "mlflow-skinny>=2.20,<3.0",
+  "numpy>=1.26,<3.0",
+  "pandas>=2.2,<3.0",
+  "plotly>=5.24,<7.0",
+  "scikit-learn>=1.5,<2.0",
+]
+
+[project.optional-dependencies]
+spark = ["pyspark>=3.5,<4.0"]
+dev = ["pytest>=8.3,<10.0"]
+docs = [
+  "mkdocs-material>=9.5",
+  "mkdocstrings[python]>=0.26",
+  "mkdocs-include-markdown-plugin>=6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/databricks-solutions/model-landscape"
+Repository = "https://github.com/databricks-solutions/model-landscape"
+Issues = "https://github.com/databricks-solutions/model-landscape/issues"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+license-files = ["LICENSE.md", "NOTICE.txt"]
+
+[tool.setuptools.dynamic]
+version = { attr = "mlflow_lens._version.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

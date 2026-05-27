@@ -9,3 +9,6 @@ dist/
 .vscode/
 mlruns/
 *.whl
+
+# MkDocs build output
+site/
