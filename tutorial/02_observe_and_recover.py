@@ -27,7 +27,7 @@
 # clear message if no Champion alias exists yet.
 import mlflow
 
-_registered = model_name("fraud_detector")
+_registered = fqn("fraud_detector")
 try:
     mlflow.MlflowClient().get_model_version_by_alias(_registered, "Champion")
 except mlflow.exceptions.MlflowException as e:
@@ -51,7 +51,7 @@ print(f"✓ Champion model present: {_registered}")
 import mlflow
 from pyspark.sql import functions as F
 
-registered = model_name("fraud_detector")
+registered = fqn("fraud_detector")
 FEATURE_COLS = [
     "transaction_amount", "device_trust_score", "distance_from_home_km",
     "velocity_24h", "hour_of_day", "is_weekend", "account_age_days",
@@ -59,7 +59,7 @@ FEATURE_COLS = [
 
 champion_udf = mlflow.pyfunc.spark_udf(spark, model_uri=f"models:/{registered}@Champion")
 scored = (
-    spark.table(table("fraud_test"))
+    spark.table(fqn("fraud_test"))
     .withColumn("prediction", champion_udf(*[F.col(c) for c in FEATURE_COLS]))
 )
 print(f"✓ Scored {scored.count():,} rows with Champion")
@@ -94,19 +94,19 @@ fraud_start = date.today() - timedelta(days=60)
 fraud_df = generate_fraud_inference(n_days=60, rows_per_day=500, start_date=fraud_start, seed=42, model_version="1")
 fraud_labels = generate_fraud_labels(fraud_df, label_delay_days=(2, 5), seed=42)
 
-spark.createDataFrame(fraud_df).write.mode("overwrite").saveAsTable(table("fraud_inference"))
-spark.createDataFrame(fraud_labels).write.mode("overwrite").saveAsTable(table("fraud_labels"))
-print(f"✓ {table('fraud_inference'):<60s} {len(fraud_df):>6,} rows / 60 days")
-print(f"✓ {table('fraud_labels'):<60s} {len(fraud_labels):>6,} labels (2-5 day delay)")
+spark.createDataFrame(fraud_df).write.mode("overwrite").saveAsTable(fqn("fraud_inference"))
+spark.createDataFrame(fraud_labels).write.mode("overwrite").saveAsTable(fqn("fraud_labels"))
+print(f"✓ {fqn('fraud_inference'):<60s} {len(fraud_df):>6,} rows / 60 days")
+print(f"✓ {fqn('fraud_labels'):<60s} {len(fraud_labels):>6,} labels (2-5 day delay)")
 
 maint_start = date.today() - timedelta(days=90)
 maint_df = generate_maintenance_inference(n_days=90, rows_per_day=280, start_date=maint_start, seed=137)
 maint_labels = generate_maintenance_labels(maint_df, failure_rate=0.03, seed=137)
 
-spark.createDataFrame(maint_df).write.mode("overwrite").saveAsTable(table("maintenance_inference"))
-spark.createDataFrame(maint_labels).write.mode("overwrite").saveAsTable(table("maintenance_labels"))
-print(f"✓ {table('maintenance_inference'):<60s} {len(maint_df):>6,} rows / 90 days")
-print(f"✓ {table('maintenance_labels'):<60s} {len(maint_labels):>6,} labels (sparse, at failures)")
+spark.createDataFrame(maint_df).write.mode("overwrite").saveAsTable(fqn("maintenance_inference"))
+spark.createDataFrame(maint_labels).write.mode("overwrite").saveAsTable(fqn("maintenance_labels"))
+print(f"✓ {fqn('maintenance_inference'):<60s} {len(maint_df):>6,} rows / 90 days")
+print(f"✓ {fqn('maintenance_labels'):<60s} {len(maint_labels):>6,} labels (sparse, at failures)")
 
 # COMMAND ----------
 
@@ -184,13 +184,13 @@ print(f"✓ Observability store ready at {obs}")
 fraud_monitor = make_monitor_config(
     model_key="fraud_detector_v1",
     display_name="Fraud Detector",
-    source_table=table("fraud_inference"),
+    source_table=fqn("fraud_inference"),
     problem_type="classification",
     feature_columns=FRAUD_FEATURES,
     prediction_score_col="prediction_proba",
     slice_columns=("region",),
     categorical_columns=("merchant_category", "region"),
-    labels_table=table("fraud_labels"),
+    labels_table=fqn("fraud_labels"),
     labels_join_col="entity_id",
     labels_order_col="label_timestamp",
     mlflow_experiment=EXPERIMENT_PATH,
@@ -199,12 +199,12 @@ fraud_monitor = make_monitor_config(
 maintenance_monitor = make_monitor_config(
     model_key="rul_predictor_v1",
     display_name="Predictive Maintenance — RUL",
-    source_table=table("maintenance_inference"),
+    source_table=fqn("maintenance_inference"),
     problem_type="regression",
     feature_columns=MAINT_FEATURES,
     slice_columns=("site",),
     categorical_columns=("equipment_class", "site"),
-    labels_table=table("maintenance_labels"),
+    labels_table=fqn("maintenance_labels"),
     labels_join_col="entity_id",
     labels_order_col="label_timestamp",
 )
@@ -271,17 +271,17 @@ import xgboost as xgb
 mlflow.set_experiment(EXPERIMENT_PATH)
 client = MlflowClient()
 
-original = spark.table(table("fraud_train")).toPandas()
+original = spark.table(fqn("fraud_train")).toPandas()
 recent = (
-    spark.table(table("fraud_inference")).alias("inf")
-    .join(spark.table(table("fraud_labels")).alias("lab"), on="entity_id", how="inner")
+    spark.table(fqn("fraud_inference")).alias("inf")
+    .join(spark.table(fqn("fraud_labels")).alias("lab"), on="entity_id", how="inner")
     .select(*[F.col(f"inf.{c}") for c in FEATURE_COLS], F.col("lab.label").alias("is_fraud"))
     .toPandas()
 )
 combined = pd.concat([original[FEATURE_COLS + ["is_fraud"]], recent], ignore_index=True)
 X_train, y_train = combined[FEATURE_COLS], combined["is_fraud"]
 
-test_pdf = spark.table(table("fraud_test")).toPandas()
+test_pdf = spark.table(fqn("fraud_test")).toPandas()
 X_test, y_test = test_pdf[FEATURE_COLS], test_pdf["is_fraud"]
 
 print(f"Original: {len(original):,}  Recent: {len(recent):,}  Combined: {len(combined):,}")
@@ -320,7 +320,7 @@ with mlflow.start_run(run_name="xgboost_v2_retrained") as retrain_run:
 
 # COMMAND ----------
 
-registered = model_name("fraud_detector")
+registered = fqn("fraud_detector")
 mv = mlflow.register_model(f"runs:/{retrain_run.info.run_id}/model", registered)
 client.update_model_version(
     name=registered, version=mv.version,
@@ -362,9 +362,9 @@ v2_start = date.today() - timedelta(days=30)
 v2_df = generate_fraud_inference(n_days=30, rows_per_day=500, start_date=v2_start, seed=1000, model_version="2")
 v2_labels = generate_fraud_labels(v2_df, label_delay_days=(2, 5), seed=1000)
 
-spark.createDataFrame(v2_df).write.mode("append").saveAsTable(table("fraud_inference"))
+spark.createDataFrame(v2_df).write.mode("append").saveAsTable(fqn("fraud_inference"))
 if len(v2_labels):
-    spark.createDataFrame(v2_labels).write.mode("append").saveAsTable(table("fraud_labels"))
+    spark.createDataFrame(v2_labels).write.mode("append").saveAsTable(fqn("fraud_labels"))
 print(f"✓ Appended {len(v2_df):,} v2 inference rows + {len(v2_labels):,} labels")
 
 # COMMAND ----------

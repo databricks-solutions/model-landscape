@@ -78,7 +78,6 @@ nav:
       - Architecture: ARCHITECTURE.md
       - Deploy to a workspace: DEPLOY_TO_WORKSPACE.md
       - Deploy into an existing app: EXISTING_APP_DEPLOYMENT.md
-      - Workspace smoke test: WORKSPACE_SMOKE_TEST.md
   - mlflow-lens SDK:
       - API:
           - api/index.md

@@ -51,17 +51,17 @@ print(f"Fraud rate: {features['is_fraud'].mean():.1%} "
 # COMMAND ----------
 
 features_spark = spark.createDataFrame(features).orderBy("timestamp")
-features_spark.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(table("fraud_features"))
+features_spark.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(fqn("fraud_features"))
 
 split = int(len(features) * 0.8)
 train_df = features_spark.limit(split)
 test_df = features_spark.subtract(train_df)
 
-train_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(table("fraud_train"))
-test_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(table("fraud_test"))
+train_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(fqn("fraud_train"))
+test_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(fqn("fraud_test"))
 
-print(f"✓ {table('fraud_train'):<60s} {train_df.count():>7,} rows")
-print(f"✓ {table('fraud_test'):<60s} {test_df.count():>7,} rows")
+print(f"✓ {fqn('fraud_train'):<60s} {train_df.count():>7,} rows")
+print(f"✓ {fqn('fraud_test'):<60s} {test_df.count():>7,} rows")
 
 # COMMAND ----------
 
@@ -86,8 +86,8 @@ mlflow.set_experiment(EXPERIMENT_PATH)
 mlflow.autolog(disable=True)
 client = MlflowClient()
 
-train_pdf = spark.table(table("fraud_train")).toPandas()
-test_pdf = spark.table(table("fraud_test")).toPandas()
+train_pdf = spark.table(fqn("fraud_train")).toPandas()
+test_pdf = spark.table(fqn("fraud_test")).toPandas()
 
 FEATURE_COLS = [
     "transaction_amount", "device_trust_score", "distance_from_home_km",
@@ -99,7 +99,7 @@ print(f"Train: {len(X_train):,}  Test: {len(X_test):,}  Fraud rate: {y_train.mea
 
 # COMMAND ----------
 
-train_dataset = mlflow.data.from_pandas(train_pdf, source=table("fraud_train"), name="fraud_train")
+train_dataset = mlflow.data.from_pandas(train_pdf, source=fqn("fraud_train"), name="fraud_train")
 
 candidates = {
     "logistic_regression": LogisticRegression(max_iter=1000, class_weight="balanced", random_state=42),
@@ -205,7 +205,7 @@ with mlflow.start_run(run_id=best["run_id"]):
 
 # COMMAND ----------
 
-registered = model_name("fraud_detector")
+registered = fqn("fraud_detector")
 mv = mlflow.register_model(f"runs:/{best['run_id']}/model", registered)
 
 client.update_registered_model(

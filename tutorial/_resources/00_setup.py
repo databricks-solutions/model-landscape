@@ -39,10 +39,9 @@ print(f"User:       {current_user}")
 
 # COMMAND ----------
 
-# Helper: fully qualified table name
-def table(name: str) -> str:
-    return f"{CATALOG}.{SCHEMA}.{name}"
+def fqn(name: str) -> str:
+    """Fully qualified Unity Catalog name: <catalog>.<schema>.<name>.
 
-# Helper: registered model name
-def model_name(name: str) -> str:
+    Used for both Delta tables and registered model names.
+    """
     return f"{CATALOG}.{SCHEMA}.{name}"
