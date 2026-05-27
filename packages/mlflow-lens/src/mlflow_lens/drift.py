@@ -3,9 +3,6 @@
 Computes feature drift (via PSI, KL, JS) and prediction shift between a
 reference run and the current run. Scoped to training-run drift, not
 production inference monitoring.
-
-Delegates to model_landscape.analytics.drift for the actual computation --
-same engine that powers production monitoring, applied to training runs.
 """
 
 from __future__ import annotations
@@ -80,10 +77,7 @@ def log_drift(
 
 
 def compute_psi(reference: np.ndarray, current: np.ndarray, n_bins: int = 20) -> float:
-    """Population Stability Index between two 1-D distributions.
-
-    Uses stable histogram edges from model_landscape.analytics.drift.
-    """
+    """Population Stability Index between two 1-D distributions."""
     return _analytics_psi(reference, current, n_bins)
 
 

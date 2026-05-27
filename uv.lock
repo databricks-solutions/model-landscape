@@ -7,6 +7,12 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 
+[manifest]
+members = [
+    "mlflow-lens",
+    "model-landscape",
+]
+
 [[package]]
 name = "annotated-doc"
 version = "0.0.4"
@@ -741,6 +747,34 @@ wheels = [
 ]
 
 [[package]]
+name = "mlflow-lens"
+source = { editable = "packages/mlflow-lens" }
+dependencies = [
+    { name = "mlflow-skinny" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi-proxy.dev.databricks.com/simple/" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi-proxy.dev.databricks.com/simple/" }, marker = "python_full_version >= '3.11'" },
+    { name = "pandas" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+]
+spark = [
+    { name = "pyspark" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "mlflow-skinny", specifier = ">=2.20,<3.0" },
+    { name = "numpy", specifier = ">=1.26,<3.0" },
+    { name = "pandas", specifier = ">=2.2,<3.0" },
+    { name = "pyspark", marker = "extra == 'spark'", specifier = ">=3.5,<4.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3,<10.0" },
+]
+provides-extras = ["spark", "dev"]
+
+[[package]]
 name = "mlflow-skinny"
 version = "2.22.5"
 source = { registry = "https://pypi-proxy.dev.databricks.com/simple/" }
@@ -770,7 +804,7 @@ wheels = [
 
 [[package]]
 name = "model-landscape"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "dash" },
@@ -789,6 +823,7 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "mlflow-lens" },
     { name = "pyspark" },
     { name = "pytest" },
 ]
@@ -799,6 +834,7 @@ requires-dist = [
     { name = "dash-bootstrap-components", specifier = ">=1.6,<2.0" },
     { name = "databricks-sdk", specifier = ">=0.81,<1.0" },
     { name = "databricks-sql-connector", specifier = ">=3.0,<4.0" },
+    { name = "mlflow-lens", marker = "extra == 'dev'", editable = "packages/mlflow-lens" },
     { name = "mlflow-skinny", specifier = ">=2.20,<3.0" },
     { name = "numpy", specifier = ">=1.26,<3.0" },
     { name = "pandas", specifier = ">=2.2,<3.0" },
