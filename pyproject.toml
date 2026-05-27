@@ -8,8 +8,8 @@ version = "0.1.0"
 description = "Model Landscape: Databricks-native model observability"
 requires-python = ">=3.10"
 dependencies = [
-  "dash>=2.18,<3.0",
-  "dash-bootstrap-components>=1.6,<2.0",
+  "dash>=3.0,<4.0",
+  "dash-bootstrap-components>=2.0,<3.0",
   "databricks-sdk>=0.81,<1.0",
   "databricks-sql-connector>=3.0,<4.0",
   "mlflow-skinny>=2.20,<3.0",
