@@ -82,8 +82,9 @@ fraud and maintenance scenarios with intentional drift):
 databricks bundle run tutorial_mlops
 ```
 
-See [tutorial/README.md](tutorial/README.md) for the full 5-notebook
-walkthrough.
+See [tutorial/README.md](tutorial/README.md) for the full walkthrough —
+two notebooks: train and ship a Champion, then watch 60 days of drift and
+close the loop with a retrained v2.
 
 ## Deployment Modes
 
@@ -115,19 +116,23 @@ src/
     pages/                  # Overview, drift, performance, quality, etc.
     services/               # Control plane, refresh engine, onboarding
     workflows/              # Refresh job + setup entrypoints
-  mlflow_lens/              # MLflow enrichment SDK
-    experiment.py           # Workspace context logging
-    summary.py              # Structured run summaries
+mlflow-lens/                # Publishable SDK (uv workspace member)
+  src/mlflow_lens/
+    classifier/             # ROC, confusion matrix, PR, classification report, …
+    regressor/              # Prediction error, residuals, alpha selection
+    model_selection/        # Learning curve, validation curve, feature importances, CV
     drift.py                # Training-time drift detection
-    panels.py               # Confusion matrix, ROC, feature importance
+    summary.py              # Structured run summaries
+    experiment.py           # Workspace context logging
     cost.py                 # Compute cost attribution
+    panels.py               # Low-level panel artifact API
 notebooks/
   model_landscape_setup.py  # Control plane setup entrypoint
   model_landscape_refresh.py # Refresh job entrypoint
-tutorial/                   # 5-notebook MLOps tutorial
+tutorial/                   # Two-notebook MLOps tutorial
 resources/                  # DABs job + app definitions
+docs/                       # MkDocs site source + architecture/deploy guides
 tests/                      # pytest suite
-docs/                       # Architecture, deployment, SDK reference
 ```
 
 ## Local Development
@@ -148,7 +153,7 @@ PYTHONPATH=src uv run python -m model_landscape.app  # Run app locally
 | [Existing App Deployment](docs/EXISTING_APP_DEPLOYMENT.md) | Deploy into a pre-existing Databricks App |
 | [MLflow Lens SDK](docs/MLFLOW_LENS_SDK.md) | SDK modules and artifact layout |
 | [Workspace Smoke Test](docs/WORKSPACE_SMOKE_TEST.md) | QA/release validation checklist |
-| [Tutorial](tutorial/README.md) | End-to-end MLOps tutorial (5 notebooks) |
+| [Tutorial](tutorial/README.md) | End-to-end MLOps tutorial (two notebooks) |
 | [Intro Deck](docs/intro-deck.html) | Customer-facing slide deck |
 
 ## Current Scope
