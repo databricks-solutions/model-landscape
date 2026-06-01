@@ -30,6 +30,11 @@ dev = [
   "pyspark>=3.5,<4.0",
   "pytest>=8.3,<10.0",
   "ruff>=0.6,<1.0",
+  # Non-sklearn ML frameworks supported by mlflow-lens panels; pulled in
+  # at the workspace level so `uv sync --extra dev` covers the Booster
+  # tests in mlflow-lens/tests/test_boosters.py.
+  "xgboost>=2.0,<4.0",
+  "lightgbm>=4.0,<5.0",
 ]
 
 [project.scripts]

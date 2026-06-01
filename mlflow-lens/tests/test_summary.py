@@ -1,5 +1,6 @@
 import mlflow
 import pandas as pd
+from mlflow_lens import __version__ as lens_version
 from mlflow_lens import summary
 
 
@@ -16,7 +17,7 @@ def test_log_creates_summary_artifact(experiment_id):
 
     assert payload["task"] == "classification"
     assert payload["score"] == 0.91
-    assert payload["lens_version"] == "0.1.0"
+    assert payload["lens_version"] == lens_version
     assert payload["schema_version"] == "1"
 
     client = mlflow.tracking.MlflowClient()

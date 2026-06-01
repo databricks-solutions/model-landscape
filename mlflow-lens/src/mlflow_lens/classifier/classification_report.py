@@ -10,7 +10,7 @@ from sklearn.metrics import classification_report as sk_classification_report
 
 from mlflow_lens._plotly_theme import lens_layout
 from mlflow_lens._quickfn import quickfn
-from mlflow_lens.classifier._utils import class_labels
+from mlflow_lens.classifier._utils import class_labels, predict_labels
 
 _METRICS = ("precision", "recall", "f1-score")
 
@@ -75,7 +75,7 @@ def classification_report(
 ) -> tuple:
     """Per-class precision/recall/F1 heatmap."""
     classes = class_labels(model, y)
-    y_pred = model.predict(X)
+    y_pred = predict_labels(model, X, classes)
     return _build(y, y_pred, classes, **layout)
 
 

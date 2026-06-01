@@ -10,6 +10,7 @@ from sklearn.metrics import r2_score
 
 from mlflow_lens._plotly_theme import LENS_DIAGONAL_COLOR, lens_layout
 from mlflow_lens._quickfn import quickfn
+from mlflow_lens.regressor._utils import predict_values
 
 
 def _build(y_true: Any, y_pred: Any, **layout: Any) -> tuple:
@@ -80,7 +81,7 @@ def prediction_error(
     **layout: Any,
 ) -> tuple:
     """Scatter of true vs predicted with identity and best-fit lines."""
-    y_pred = model.predict(X)
+    y_pred = predict_values(model, X)
     return _build(y, y_pred, **layout)
 
 

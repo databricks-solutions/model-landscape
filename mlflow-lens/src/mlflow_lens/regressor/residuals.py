@@ -10,6 +10,7 @@ from sklearn.metrics import r2_score
 
 from mlflow_lens._plotly_theme import lens_layout
 from mlflow_lens._quickfn import quickfn
+from mlflow_lens.regressor._utils import predict_values
 
 
 def _residuals(y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
@@ -99,8 +100,8 @@ def residuals(
             plots train residuals as a lighter overlay.
         y_train: Optional training targets (see ``X_train``).
     """
-    y_pred = model.predict(X)
-    y_pred_train = model.predict(X_train) if X_train is not None else None
+    y_pred = predict_values(model, X)
+    y_pred_train = predict_values(model, X_train) if X_train is not None else None
     return _build(y, y_pred, y_true_train=y_train, y_pred_train=y_pred_train, **layout)
 
 

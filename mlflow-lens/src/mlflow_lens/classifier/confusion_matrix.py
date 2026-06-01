@@ -10,7 +10,7 @@ from sklearn.metrics import confusion_matrix as sk_confusion_matrix
 
 from mlflow_lens._plotly_theme import lens_layout
 from mlflow_lens._quickfn import quickfn
-from mlflow_lens.classifier._utils import class_labels
+from mlflow_lens.classifier._utils import class_labels, predict_labels
 
 
 def _build(
@@ -77,7 +77,7 @@ def confusion_matrix(
         labels: Explicit class label ordering (defaults to ``model.classes_``).
     """
     classes = labels if labels is not None else class_labels(model, y)
-    y_pred = model.predict(X)
+    y_pred = predict_labels(model, X, classes)
     return _build(y, y_pred, classes, normalize=normalize, **layout)
 
 

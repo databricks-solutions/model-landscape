@@ -1,4 +1,5 @@
 import mlflow
+from mlflow_lens import __version__ as lens_version
 from mlflow_lens import experiment
 
 
@@ -8,11 +9,11 @@ def test_auto_log_context_sets_lens_tags(experiment_id):
         tags = experiment.auto_log_context()
 
     assert "lens.version" in tags
-    assert tags["lens.version"] == "0.1.0"
+    assert tags["lens.version"] == lens_version
 
     client = mlflow.tracking.MlflowClient()
     stored = client.get_run(run.info.run_id)
-    assert stored.data.tags["lens.version"] == "0.1.0"
+    assert stored.data.tags["lens.version"] == lens_version
 
 
 def test_auto_log_context_sets_local_environment(experiment_id):
