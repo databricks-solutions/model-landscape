@@ -116,12 +116,61 @@ with mlflow.start_run() as run:
         predictions=y_pred,
     )
 
-    # Confusion / ROC / feature importance
-    mlflow_lens.panels.log_panel("confusion_matrix", y_true=y_test, y_pred=y_pred)
+    # Confusion / ROC / feature-importance panels (see "Visualization panels")
+    from mlflow_lens.classifier import confusion_matrix, roc_auc
+    confusion_matrix(model, X_test, y_test, log=True)
+    roc_auc(model, X_test, y_test, log=True)
 
     # Compute cost attribution
     mlflow_lens.cost.log_cost_context()
 ```
+
+## Visualization panels
+
+Panels live in three packages — `mlflow_lens.classifier`, `mlflow_lens.regressor`,
+and `mlflow_lens.model_selection`. Each panel has **two ways to call it**:
+
+* **Model-based** — pass a fitted model and data, e.g.
+  `confusion_matrix(model, X, y, log=True)`. Uses scikit-learn conventions
+  (`predict`, `predict_proba`/`decision_function`, `classes_`,
+  `feature_importances_`/`coef_`).
+* **Framework-agnostic** — a `.from_*` classmethod that takes plain arrays you
+  computed yourself, e.g. `confusion_matrix.from_predictions(y_true, y_pred, log=True)`.
+  Use this for any model that isn't a scikit-learn estimator.
+
+```python
+import torch
+from mlflow_lens.classifier import roc_auc, confusion_matrix
+
+# A PyTorch / native-booster model: compute predictions yourself, then pass arrays.
+probs = torch.softmax(net(X_test), dim=1).detach().cpu().numpy()
+preds = probs.argmax(axis=1)
+
+roc_auc.from_scores(y_test, probs, log=True)
+confusion_matrix.from_predictions(y_test, preds, log=True)
+```
+
+### Framework support
+
+| Panel(s) | scikit-learn | XGBoost / LightGBM (sklearn API, e.g. `XGBClassifier`) | XGBoost / LightGBM native `Booster` | PyTorch |
+| --- | --- | --- | --- | --- |
+| `confusion_matrix`, `class_prediction_error`, `classification_report`, `prediction_error`, `residuals` | direct | direct | `.from_predictions` | `.from_predictions` |
+| `roc_auc`, `precision_recall`, `discrimination_threshold` | direct | direct | `.from_scores` | `.from_scores` |
+| `feature_importances` | direct | direct | `.from_values` | `.from_values` |
+| `cv_scores` | direct | direct | `.from_scores` | `.from_scores` |
+| `learning_curve`, `validation_curve`, `alpha_selection` | direct | direct | not supported¹ | not supported¹ |
+
+*"direct" = pass the fitted model. Otherwise use the listed `.from_*` classmethod with pre-computed arrays.*
+
+¹ These panels re-fit the estimator across folds / hyperparameters via
+scikit-learn, so they require a scikit-learn-compatible estimator
+(`get_params`/`set_params`/`fit`). The XGBoost and LightGBM **sklearn wrappers**
+qualify; native `Booster` objects and PyTorch modules do not. Pre-compute
+fold scores yourself and use `cv_scores.from_scores(...)` instead.
+
+> **Native boosters:** `Booster.predict` returns probabilities, not class
+> labels, so use `.from_predictions` / `.from_scores` rather than the
+> model-based entry point even though the booster has a `.predict` method.
 
 ## Modules
 
@@ -130,7 +179,10 @@ with mlflow.start_run() as run:
 | `mlflow_lens.experiment` | Workspace, git, env, and dataset context logging |
 | `mlflow_lens.summary` | Structured run summaries as JSON artifacts |
 | `mlflow_lens.drift` | PSI / KL / JS drift between training runs |
-| `mlflow_lens.panels` | Confusion matrix, ROC, feature importance figures |
+| `mlflow_lens.classifier` | Confusion matrix, ROC, PR, classification report, threshold panels |
+| `mlflow_lens.regressor` | Prediction-error, residuals, alpha-selection panels |
+| `mlflow_lens.model_selection` | Learning/validation curves, feature importances, CV scores |
+| `mlflow_lens.panels` | Low-level `log_panel(panel_type, data, ...)` JSON writer |
 | `mlflow_lens.cost` | Compute cost attribution per run |
 | `mlflow_lens.export` | Export run summaries to Delta (requires `[spark]` extra) |
 
