@@ -7,7 +7,7 @@ This repository is maintained by Databricks and intended for contributions from 
 - **Python**: Follow PEP 8 conventions
 - **Documentation**: Add to docs/ folder
 - **Type hints**: Include type annotations for public functions
-- **Naming**: Use lowercase with hyphens for directories (e.g., `databricks-tools-core`)
+- **Naming**: Use lowercase with hyphens for distribution directories (for example `mlflow-lens`)
 
 ## Linting
 
@@ -20,7 +20,7 @@ uvx ruff@0.11.0 check \
   --ignore=E401,E402,F401,F403,B017,B904,ANN,TCH \
   --line-length=120 \
   --target-version=py311 \
-  databricks-tools-core/ databricks-mcp-server/
+  model_landscape/ mlflow-lens/src/ tests/ mlflow-lens/tests/
 
 # Auto-fix linting errors where possible
 uvx ruff@0.11.0 check --fix \
@@ -28,19 +28,19 @@ uvx ruff@0.11.0 check --fix \
   --ignore=E401,E402,F401,F403,B017,B904,ANN,TCH \
   --line-length=120 \
   --target-version=py311 \
-  databricks-tools-core/ databricks-mcp-server/
+  model_landscape/ mlflow-lens/src/ tests/ mlflow-lens/tests/
 
 # Check formatting
 uvx ruff@0.11.0 format --check \
   --line-length=120 \
   --target-version=py311 \
-  databricks-tools-core/ databricks-mcp-server/
+  model_landscape/ mlflow-lens/src/ tests/ mlflow-lens/tests/
 
 # Auto-format code
 uvx ruff@0.11.0 format \
   --line-length=120 \
   --target-version=py311 \
-  databricks-tools-core/ databricks-mcp-server/
+  model_landscape/ mlflow-lens/src/ tests/ mlflow-lens/tests/
 ```
 
 ## Testing
@@ -49,14 +49,17 @@ Run unit and integration tests before submitting changes:
 
 ```bash
 cd model-landscape
-uv run pytest tests/ -v
+uv run --extra dev pytest -q tests
+uv run --package mlflow-lens --extra dev pytest -q mlflow-lens/tests
+uv build --wheel --out-dir dist
+uv build --wheel --out-dir dist mlflow-lens
 ```
 
 Ensure your changes work with a live Databricks workspace.
 
 ## Pull Request Process
 
-1. Create a feature branch from `main` (fork repo is necessary)
+1. Create a feature branch from `dev`
 2. Make your changes with clear, descriptive commits
 3. Test your changes against a Databricks workspace
 4. Open a PR with:

@@ -51,8 +51,10 @@ Full first-time-setup guide: [Get started](https://databricks-solutions.github.i
 
 ```bash
 uv sync --extra dev               # install workspace + dev deps
-uv run pytest -q                  # run tests
-uv build --wheel --out-dir dist   # build SDK + app wheel
+uv run --extra dev pytest -q tests
+uv run --package mlflow-lens --extra dev pytest -q mlflow-lens/tests
+uv build --wheel --out-dir dist
+uv build --wheel --out-dir dist mlflow-lens
 uv run python -m model_landscape.app  # run app locally
 ```
 

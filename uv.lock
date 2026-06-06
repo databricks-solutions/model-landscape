@@ -951,13 +951,13 @@ requires-dist = [
     { name = "mkdocs-include-markdown-plugin", marker = "extra == 'docs'", specifier = ">=6.0" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5" },
     { name = "mkdocstrings", extras = ["python"], marker = "extra == 'docs'", specifier = ">=0.26" },
-    { name = "mlflow-skinny", specifier = ">=2.20,<3.0" },
-    { name = "numpy", specifier = ">=1.26,<3.0" },
-    { name = "pandas", specifier = ">=2.2,<3.0" },
-    { name = "plotly", specifier = ">=5.24,<7.0" },
+    { name = "mlflow-skinny", specifier = ">=2.20" },
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "pandas", specifier = ">=2.2" },
+    { name = "plotly", specifier = ">=5.24" },
     { name = "pyspark", marker = "extra == 'spark'", specifier = ">=3.5,<4.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3,<10.0" },
-    { name = "scikit-learn", specifier = ">=1.5,<2.0" },
+    { name = "scikit-learn", specifier = ">=1.5" },
 ]
 provides-extras = ["spark", "dev", "docs"]
 
@@ -1022,14 +1022,14 @@ requires-dist = [
     { name = "databricks-sdk", specifier = ">=0.81,<1.0" },
     { name = "databricks-sql-connector", specifier = ">=3.0,<4.0" },
     { name = "mlflow-lens", marker = "extra == 'dev'", editable = "mlflow-lens" },
-    { name = "mlflow-skinny", specifier = ">=2.20,<3.0" },
-    { name = "numpy", specifier = ">=1.26,<3.0" },
-    { name = "pandas", specifier = ">=2.2,<3.0" },
-    { name = "plotly", specifier = ">=5.24,<6.0" },
+    { name = "mlflow-skinny", specifier = ">=2.20" },
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "pandas", specifier = ">=2.2" },
+    { name = "plotly", specifier = ">=5.24" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4.0" },
     { name = "pyspark", marker = "extra == 'dev'", specifier = ">=3.5,<4.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3,<10.0" },
-    { name = "scikit-learn", specifier = ">=1.5,<2.0" },
+    { name = "scikit-learn", specifier = ">=1.5" },
 ]
 provides-extras = ["dev"]
 

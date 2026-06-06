@@ -1,0 +1,125 @@
+name: ci
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  root-tests:
+    name: Root app tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+            mlflow-lens/pyproject.toml
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Run root tests
+        run: uv run --extra dev pytest -q tests
+
+  mlflow-lens-tests:
+    name: mlflow-lens tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            mlflow-lens/pyproject.toml
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Run mlflow-lens tests
+        run: uv run --package mlflow-lens --extra dev pytest -q mlflow-lens/tests
+
+  docs:
+    name: Docs build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+            mlflow-lens/pyproject.toml
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Install docs dependencies
+        run: |
+          uv sync --no-dev
+          uv pip install \
+            'mkdocs-material>=9.5' \
+            'mkdocstrings[python]>=0.26' \
+            'mkdocs-include-markdown-plugin>=6.0'
+
+      - name: Generate gallery figures
+        run: uv run python docs/_build_gallery.py
+
+      - name: Build docs
+        run: uv run mkdocs build --strict
+
+  package-smoke:
+    name: Package smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+            mlflow-lens/pyproject.toml
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Build both wheels
+        run: |
+          uv build --wheel --out-dir dist
+          uv build --wheel --out-dir dist mlflow-lens
+
+      - name: Smoke install both wheels
+        run: |
+          uv venv /tmp/model-landscape-smoke --python 3.12
+          uv pip install --python /tmp/model-landscape-smoke/bin/python dist/*.whl
+          /tmp/model-landscape-smoke/bin/python -c "
+          import mlflow_lens
+          import model_landscape
+          from mlflow_lens.classifier import confusion_matrix
+          from model_landscape.app import create_app
+          assert callable(create_app)
+          assert confusion_matrix is not None
+          print('OK: model_landscape and mlflow_lens import from built wheels')
+          "
