@@ -27,17 +27,23 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
   "Typing :: Typed",
 ]
+# Floor-only pins: these libraries are all provided by Databricks runtimes
+# (Serverless env v5 / DBR ML). Capping their upper bound forces pip to
+# downgrade what the runtime already ships (e.g. mlflow-skinny 3.x -> 2.x,
+# which breaks databricks-agents). Floors keep a too-old runtime erroring
+# clearly; no ceilings means no managed runtime gets downgraded on install.
 dependencies = [
-  "mlflow-skinny>=2.20,<3.0",
-  "numpy>=1.26,<3.0",
-  "pandas>=2.2,<3.0",
-  "plotly>=5.24,<7.0",
-  "scikit-learn>=1.5,<2.0",
+  "mlflow-skinny>=2.20",
+  "numpy>=1.26",
+  "pandas>=2.2",
+  "plotly>=5.24",
+  "scikit-learn>=1.5",
 ]
 
 [project.optional-dependencies]
-spark = ["pyspark>=3.5,<4.0"]
-dev = ["pytest>=8.3,<10.0"]
+spark = ["pyspark>=3.5"]
+shap = ["shap>=0.44"]
+dev = ["pytest>=8.3,<10.0", "shap>=0.44"]
 docs = [
   "mkdocs-material>=9.5",
   "mkdocstrings[python]>=0.26",
