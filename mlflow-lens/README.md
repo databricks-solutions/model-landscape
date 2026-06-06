@@ -157,6 +157,7 @@ confusion_matrix.from_predictions(y_test, preds, log=True)
 | `confusion_matrix`, `class_prediction_error`, `classification_report`, `prediction_error`, `residuals` | direct | direct | `.from_predictions` | `.from_predictions` |
 | `roc_auc`, `precision_recall`, `discrimination_threshold` | direct | direct | `.from_scores` | `.from_scores` |
 | `feature_importances` | direct | direct | `.from_values` | `.from_values` |
+| `feature_importance.shap_importance` | direct (Tree/Kernel) | direct (Tree) | direct (Tree) | `.from_shap_values`² |
 | `cv_scores` | direct | direct | `.from_scores` | `.from_scores` |
 | `learning_curve`, `validation_curve`, `alpha_selection` | direct | direct | not supported¹ | not supported¹ |
 
@@ -168,9 +169,40 @@ scikit-learn, so they require a scikit-learn-compatible estimator
 qualify; native `Booster` objects and PyTorch modules do not. Pre-compute
 fold scores yourself and use `cv_scores.from_scores(...)` instead.
 
+² `shap_importance` auto-uses `TreeExplainer` for tree models (including native
+boosters) and `KernelExplainer` for any model exposing `predict`/`predict_proba`.
+For PyTorch, compute SHAP values with `shap.DeepExplainer`/`GradientExplainer`
+and pass them to `shap_importance.from_shap_values(...)`.
+
 > **Native boosters:** `Booster.predict` returns probabilities, not class
 > labels, so use `.from_predictions` / `.from_scores` rather than the
 > model-based entry point even though the booster has a `.predict` method.
+
+### SHAP feature importance
+
+`mlflow_lens.feature_importance.shap_importance` computes global importance as
+the mean absolute SHAP value per feature and emits the same
+`feature_importance` panel type as `model_selection.feature_importances`. The
+explainer is auto-selected: `shap.TreeExplainer` for tree models (scikit-learn
+ensembles, XGBoost, LightGBM, CatBoost), `shap.KernelExplainer` for everything
+else.
+
+Requires the `[shap]` extra (`shap` is already present in the Serverless env v5
+ML base environment, so `--no-deps` installs need nothing extra there):
+
+```python
+from mlflow_lens.feature_importance import shap_importance
+
+# Auto-detects TreeExplainer; X may be a DataFrame (names inferred) or array.
+shap_importance(model, X_test, top_n=20, log=True)
+
+# KernelExplainer is bounded for cost: max_samples rows explained,
+# background_samples for the background, nsamples coalitions per row ("trials").
+shap_importance(model, X_test, max_samples=100, background_samples=100, nsamples="auto")
+
+# Pre-computed SHAP values (e.g. shap.DeepExplainer / GradientExplainer for PyTorch):
+shap_importance.from_shap_values(feature_names, shap_values, top_n=20, log=True)
+```
 
 ## Modules
 
@@ -182,6 +214,7 @@ fold scores yourself and use `cv_scores.from_scores(...)` instead.
 | `mlflow_lens.classifier` | Confusion matrix, ROC, PR, classification report, threshold panels |
 | `mlflow_lens.regressor` | Prediction-error, residuals, alpha-selection panels |
 | `mlflow_lens.model_selection` | Learning/validation curves, feature importances, CV scores |
+| `mlflow_lens.feature_importance` | SHAP feature importance (auto Tree/Kernel explainer; requires `[shap]`) |
 | `mlflow_lens.panels` | Low-level `log_panel(panel_type, data, ...)` JSON writer |
 | `mlflow_lens.cost` | Compute cost attribution per run |
 | `mlflow_lens.export` | Export run summaries to Delta (requires `[spark]` extra) |

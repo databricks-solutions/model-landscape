@@ -2,7 +2,7 @@
 
 Reads :attr:`feature_importances_` (tree-based) or :attr:`coef_` (linear models).
 For SHAP-derived importance, use :mod:`mlflow_lens.feature_importance` instead
-(it ships in a future release and produces the same panel type).
+(it produces the same panel type).
 """
 
 from __future__ import annotations
@@ -82,8 +82,8 @@ def feature_importances(
     """Horizontal bar of feature importances from a fitted model.
 
     Reads ``model.feature_importances_`` (tree-based) or ``|model.coef_|``
-    (linear models). For SHAP-based importance, use the
-    :mod:`mlflow_lens.feature_importance` module.
+    (linear models). For SHAP-based importance, use
+    :func:`mlflow_lens.feature_importance.shap_importance`.
     """
     values = _extract(model)
     if len(values) != len(feature_names):
