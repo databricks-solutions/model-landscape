@@ -84,6 +84,7 @@ nav:
       - Architecture: architecture.md
       - Deploy to a workspace: deploy.md
       - Deploy into an existing app: existing_app.md
+      - Development history: development-history.md
   - SDK:
       - API overview: api/index.md
       - Classifier panels: api/classifier.md
