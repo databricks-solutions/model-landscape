@@ -7,8 +7,13 @@ dist/
 .pytest_cache/
 .DS_Store
 .vscode/
-mlruns/
 *.whl
+
+# MLflow tracking artifacts
+mlruns/
+mlartifacts/
+mlflow.db
+*.mlflow.db
 
 # MkDocs build output
 site/
