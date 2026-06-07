@@ -30,6 +30,12 @@ dev = [
   "pyspark>=3.5,<4.0",
   "pytest>=8.3,<10.0",
 ]
+docs = [
+  "mlflow-lens",
+  "mkdocs-material>=9.5",
+  "mkdocstrings[python]>=0.26",
+  "mkdocs-include-markdown-plugin>=6.0",
+]
 
 [project.scripts]
 model-landscape = "model_landscape.app:main"

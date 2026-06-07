@@ -51,6 +51,7 @@ Run unit and integration tests before submitting changes:
 cd model-landscape
 uv run --extra dev pytest -q tests
 uv run --package mlflow-lens --extra dev pytest -q mlflow-lens/tests
+uv run --extra docs mkdocs build --strict
 uv build --wheel --out-dir dist
 uv build --wheel --out-dir dist mlflow-lens
 ```
@@ -67,6 +68,13 @@ Ensure your changes work with a live Databricks workspace.
    - Any relevant context or motivation
    - Testing performed
 5. Address review feedback
+
+## CI Readiness
+
+GitHub Actions must be enabled in repository settings before PR checks can
+appear. If `gh pr checks <number>` reports no checks for an open PR, confirm
+an admin has enabled Actions for the repository; workflow files cannot make
+checks run while repository-level Actions are disabled.
 
 ## Security
 

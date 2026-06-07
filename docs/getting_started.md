@@ -79,8 +79,8 @@ pre-existing Databricks App (constrained workspaces), see
 ## Just the SDK
 
 You want to enrich your existing MLflow runs without standing up the app.
-Until the next public wheel is published, install the SDK from this repo's
-`mlflow-lens/` subdirectory:
+Until the `mlflow-lens-v0.2.0` release is published, install the SDK from
+this repo's `mlflow-lens/` subdirectory:
 
 ```bash
 pip install "git+https://github.com/databricks-solutions/model-landscape.git@dev#subdirectory=mlflow-lens"

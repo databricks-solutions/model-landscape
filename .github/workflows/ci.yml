@@ -74,18 +74,13 @@ jobs:
         run: uv python install 3.12
 
       - name: Install docs dependencies
-        run: |
-          uv sync --no-dev
-          uv pip install \
-            'mkdocs-material>=9.5' \
-            'mkdocstrings[python]>=0.26' \
-            'mkdocs-include-markdown-plugin>=6.0'
+        run: uv sync --extra docs --no-dev
 
       - name: Generate gallery figures
-        run: uv run python docs/_build_gallery.py
+        run: uv run --extra docs python docs/_build_gallery.py
 
       - name: Build docs
-        run: uv run mkdocs build --strict
+        run: uv run --extra docs mkdocs build --strict
 
   package-smoke:
     name: Package smoke test
@@ -114,12 +109,18 @@ jobs:
         run: |
           uv venv /tmp/model-landscape-smoke --python 3.12
           uv pip install --python /tmp/model-landscape-smoke/bin/python dist/*.whl
+          cd /tmp
           /tmp/model-landscape-smoke/bin/python -c "
+          import importlib.metadata
           import mlflow_lens
           import model_landscape
           from mlflow_lens.classifier import confusion_matrix
           from model_landscape.app import create_app
+          assert importlib.metadata.version('model-landscape') == '0.2.0'
+          assert importlib.metadata.version('mlflow-lens') == '0.2.0'
+          assert model_landscape.__version__ == '0.2.0', model_landscape.__version__
+          assert mlflow_lens.__version__ == '0.2.0', mlflow_lens.__version__
           assert callable(create_app)
           assert confusion_matrix is not None
-          print('OK: model_landscape and mlflow_lens import from built wheels')
+          print('OK: model_landscape and mlflow_lens 0.2.0 import from built wheels')
           "
