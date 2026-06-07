@@ -33,8 +33,9 @@ For operators who want the shortest working deployment:
 
 ```bash
 # 1. Build
-uv run pytest
+uv run --extra dev pytest -q tests
 uv build --wheel --out-dir dist
+uv build --wheel --out-dir dist mlflow-lens
 
 # 2. Generate deployable source tree
 uv run python notebooks/prepare_existing_app_source.py \

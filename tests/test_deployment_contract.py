@@ -91,6 +91,22 @@ def test_project_dev_dependencies_include_local_spark_support() -> None:
     assert "pyspark>=3.5,<4.0" in dev_dependencies
 
 
+def test_project_docs_dependencies_are_declared_and_used_by_ci() -> None:
+    payload = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+    docs_dependencies = payload["project"]["optional-dependencies"]["docs"]
+
+    assert "mlflow-lens" in docs_dependencies
+    assert "mkdocs-material>=9.5" in docs_dependencies
+    assert "mkdocstrings[python]>=0.26" in docs_dependencies
+    assert "mkdocs-include-markdown-plugin>=6.0" in docs_dependencies
+
+    for relative_path in (".github/workflows/ci.yml", ".github/workflows/docs.yml"):
+        text = (REPO_ROOT / relative_path).read_text()
+        assert "uv run --extra docs mkdocs build --strict" in text
+        assert "uv pip install \\" not in text
+        assert "'mkdocs-material>=9.5'" not in text
+
+
 def test_project_runtime_dependencies_do_not_cap_managed_runtime_libraries() -> None:
     payload = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
     dependencies = set(payload["project"]["dependencies"])

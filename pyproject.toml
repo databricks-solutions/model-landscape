@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "model-landscape"
-version = "0.1.1"
+version = "0.2.0"
 description = "Model Landscape: Databricks-native model observability app"
 requires-python = ">=3.10"
 authors = [
@@ -29,6 +29,12 @@ dev = [
   "mlflow-lens",
   "pyspark>=3.5,<4.0",
   "pytest>=8.3,<10.0",
+]
+docs = [
+  "mlflow-lens",
+  "mkdocs-material>=9.5",
+  "mkdocstrings[python]>=0.26",
+  "mkdocs-include-markdown-plugin>=6.0",
 ]
 
 [project.scripts]

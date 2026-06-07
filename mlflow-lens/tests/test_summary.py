@@ -19,7 +19,7 @@ def test_log_creates_summary_artifact(experiment_id):
 
     assert payload["task"] == "classification"
     assert payload["score"] == 0.91
-    assert payload["lens_version"] == "0.1.0"
+    assert payload["lens_version"] == "0.2.0"
     assert payload["schema_version"] == "1"
 
     client = mlflow.tracking.MlflowClient()

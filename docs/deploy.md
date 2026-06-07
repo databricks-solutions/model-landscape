@@ -163,6 +163,7 @@ Warehouse-only:
 cd <repo-root>
 python3 -m pytest
 python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
+python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir dist ./mlflow-lens
 
 databricks bundle validate \
   -t warehouse_only \
@@ -181,6 +182,7 @@ Lakebase-enabled:
 
 ```bash
 python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
+python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir dist ./mlflow-lens
 
 databricks bundle validate \
   -t dev \
@@ -200,6 +202,17 @@ Expected result:
 - the wheel build succeeds and the bundle can resolve `../dist/*.whl` plus the Spark job-cluster libraries for the shared refresh workflow
 
 If local bundle validation fails with a repo-local `.databricks/bundle` permission error, fix or remove that local bundle directory and rerun. That is a workstation ownership issue, not a Model Landscape bundle contract issue.
+
+If local bundle validation fails while downloading or verifying Terraform, for
+example with `openpgp: key expired`, treat it as a local Databricks
+CLI/Terraform checksum verification issue. Upgrade the Databricks CLI or clear
+the local bundle/Terraform cache, then rerun validation before changing bundle
+configuration. This is a local release-gate blocker, not evidence that the
+checked-in bundle contract is invalid.
+
+Bundle validation is intentionally a local/workspace release gate. It is not a
+default GitHub CI job unless workspace secrets and a validation workspace are
+configured later.
 
 Before calling the build broadly customer-ready, run these focused workspace release gates in addition to the local validation above:
 

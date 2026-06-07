@@ -35,7 +35,7 @@ def test_build_manual_refresh_job_payload_uses_workspace_wheel_path() -> None:
     payload = build_manual_refresh_job_payload(
         ManualRefreshJobSettings(
             app_name="ml-drift-monitor",
-            wheel_workspace_path="/Workspace/Users/test/model-landscape-manual/dist/model_landscape-0.1.0-py3-none-any.whl",
+            wheel_workspace_path="/Workspace/Users/test/model-landscape-manual/dist/model_landscape-0.2.0-py3-none-any.whl",
             sql_warehouse_id="wh-123",
             control_plane_catalog="gc_prod_mlproduct",
             control_plane_schema="mlp_rsch",
