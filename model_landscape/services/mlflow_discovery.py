@@ -4,7 +4,8 @@ import json
 import logging
 from typing import Any
 
-from model_landscape.domain.models import MLflowDiscovery, MLflowLineage
+from model_landscape.domain.models import MLflowDiscovery, MLflowLensArtifacts, MLflowLineage
+from model_landscape.services.mlflow_artifacts import summarize_lens_run
 
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,21 @@ def _field_names_from_signature(inputs: Any) -> tuple[str, ...]:
         if text and text not in names:
             names.append(text)
     return tuple(names)
+
+
+def _merge_lens_artifacts(primary: MLflowLensArtifacts, secondary: MLflowLensArtifacts) -> MLflowLensArtifacts:
+    if not secondary.available:
+        return primary
+    if not primary.available:
+        return secondary
+    panels = tuple(dict.fromkeys(primary.panels + secondary.panels))
+    return MLflowLensArtifacts(
+        run_id=primary.run_id or secondary.run_id,
+        lens_version=primary.lens_version or secondary.lens_version,
+        has_summary=primary.has_summary or secondary.has_summary,
+        has_drift=primary.has_drift or secondary.has_drift,
+        panels=panels,
+    )
 
 
 class MLflowDiscoveryService:
@@ -107,6 +123,7 @@ class MLflowDiscoveryService:
         )
         features = primary.feature_columns or secondary.feature_columns
         problem_type = primary.problem_type or secondary.problem_type
+        lens_artifacts = _merge_lens_artifacts(primary.lens_artifacts, secondary.lens_artifacts)
         if (
             primary.lineage.registered_model_name
             and secondary.lineage.registered_model_name
@@ -117,6 +134,7 @@ class MLflowDiscoveryService:
             lineage=lineage,
             feature_columns=features,
             problem_type=problem_type,
+            lens_artifacts=lens_artifacts,
             warnings=warnings,
         )
 
@@ -174,13 +192,14 @@ class MLflowDiscoveryService:
         run_data = getattr(chosen_run, "data", None)
         tags = getattr(run_data, "tags", {}) or {}
         params = getattr(run_data, "params", {}) or {}
+        run_id = _normalize(getattr(getattr(chosen_run, "info", None), "run_id", None)) or None
         if not feature_columns:
             warnings.append("MLflow run did not expose a model signature; using table heuristics for features.")
         return MLflowDiscovery(
             lineage=MLflowLineage(
                 experiment_name=_normalize(getattr(experiment, "name", None)) or experiment_name_or_id,
                 experiment_id=_normalize(getattr(experiment, "experiment_id", None)),
-                run_id=_normalize(getattr(getattr(chosen_run, "info", None), "run_id", None)) or None,
+                run_id=run_id,
                 registered_model_name=_normalize(tags.get("mlflow.registeredModelName")) or None,
                 model_version=(
                     _normalize(tags.get("model_version"))
@@ -191,6 +210,7 @@ class MLflowDiscoveryService:
             ),
             feature_columns=feature_columns,
             problem_type=self._infer_problem_type(chosen_run),
+            lens_artifacts=summarize_lens_run(run_id, tags),
             warnings=tuple(warnings),
         )
 
@@ -239,6 +259,7 @@ class MLflowDiscoveryService:
             ),
             feature_columns=feature_columns,
             problem_type=self._infer_problem_type(run),
+            lens_artifacts=summarize_lens_run(run_id, getattr(getattr(run, "data", None), "tags", {}) or {}),
             warnings=tuple(warnings),
         )
 

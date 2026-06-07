@@ -607,6 +607,7 @@ class MonitorDiscoveryService:
             label_schema_rows=label_schema_rows,
             label_preview_rows=label_preview_rows,
             label_validation=label_validation,
+            mlflow_lens_artifacts=mlflow.lens_artifacts,
             confidence=confidence,
             requires_review=requires_review,
             warnings=tuple(dict.fromkeys(_option_texts(warnings))),

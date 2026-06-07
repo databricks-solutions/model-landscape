@@ -112,7 +112,7 @@ Every payload has this top-level envelope:
 
 ```json
 {
-  "lens_version": "0.1.0",
+  "lens_version": "0.2.0",
   "schema_version": "1",
   "type": "<panel_type>",
   "data": { ... or [...] }
@@ -137,7 +137,7 @@ When `log=True`, mlflow-lens sets a few tags on the run so panels are
 discoverable without listing the full artifact tree:
 
 ```
-lens.version             # SDK version (e.g. "0.1.0")
+lens.version             # SDK version (e.g. "0.2.0")
 lens.panel.<type>        # "true" if JSON panel artifact exists
 lens.figure.<type>       # "true" if HTML figure artifact exists
 ```

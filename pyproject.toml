@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "model-landscape"
-version = "0.1.1"
+version = "0.2.0"
 description = "Model Landscape: Databricks-native model observability app"
 requires-python = ">=3.10"
 authors = [

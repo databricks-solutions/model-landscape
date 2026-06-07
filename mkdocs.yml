@@ -80,6 +80,7 @@ nav:
   - Intro Deck: intro-deck.html
   - Get Started: getting_started.md
   - Concepts: concepts.md
+  - Product Architecture: product_architecture.md
   - App:
       - Architecture: architecture.md
       - Deploy to a workspace: deploy.md

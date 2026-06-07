@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from model_landscape.domain.models import MLflowDiscovery, MLflowLineage
+from model_landscape.domain.models import MLflowDiscovery, MLflowLensArtifacts, MLflowLineage
 from model_landscape.services.monitor_discovery import MonitorDiscoveryService
 
 
@@ -242,6 +242,13 @@ def test_discovery_uses_mlflow_and_labels_to_fill_scope_and_lineage() -> None:
             ),
             feature_columns=("velocity_7d", "amount", "non_numeric_feature"),
             problem_type="classification",
+            lens_artifacts=MLflowLensArtifacts(
+                run_id="run-1",
+                lens_version="0.2.0",
+                has_summary=True,
+                has_drift=True,
+                panels=("feature_importance",),
+            ),
         )
     )
     service = MonitorDiscoveryService(repository, mlflow=mlflow)
@@ -267,6 +274,7 @@ def test_discovery_uses_mlflow_and_labels_to_fill_scope_and_lineage() -> None:
     assert result.config.mlflow.experiment_id == "exp-1"
     assert result.config.mlflow.run_id == "run-1"
     assert result.config.mlflow.registered_model_name == "fraud_model_demo"
+    assert result.mlflow_lens_artifacts.artifact_types == ("summary", "drift", "feature_importance")
     assert result.requires_review is False
 
 
