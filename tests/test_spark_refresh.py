@@ -388,14 +388,14 @@ def test_spark_refresh_repository_uses_shared_external_join_key_without_entity_i
     labels_table = _label_table_name()
     spark.createDataFrame(
         [
-            {"event_ts": "2026-01-01T00:00:00", "prediction": 0.9, "gc_transaction": "t1", "amount": 100.0},
-            {"event_ts": "2026-01-01T01:00:00", "prediction": 0.2, "gc_transaction": "t2", "amount": 120.0},
+            {"event_ts": "2026-01-01T00:00:00", "prediction": 0.9, "transaction_id": "t1", "amount": 100.0},
+            {"event_ts": "2026-01-01T01:00:00", "prediction": 0.2, "transaction_id": "t2", "amount": 120.0},
         ]
     ).createOrReplaceTempView(source_table)
     spark.createDataFrame(
         [
-            {"gc_transaction": "t1", "label": 1, "label_ts": "2026-01-02T00:00:00"},
-            {"gc_transaction": "t2", "label": 0, "label_ts": "2026-01-02T00:01:00"},
+            {"transaction_id": "t1", "label": 1, "label_ts": "2026-01-02T00:00:00"},
+            {"transaction_id": "t2", "label": 0, "label_ts": "2026-01-02T00:01:00"},
         ]
     ).createOrReplaceTempView(labels_table)
     repository = SparkRefreshRepository(
@@ -404,17 +404,17 @@ def test_spark_refresh_repository_uses_shared_external_join_key_without_entity_i
         spark=spark,
     )
     config = MonitorConfig(
-        model_key="spoof_ios",
-        display_name="Spoof iOS",
+        model_key="risk_ios",
+        display_name="Risk iOS",
         source_table=source_table,
         labels_table=labels_table,
-        labels_join_col="gc_transaction",
+        labels_join_col="transaction_id",
         labels_order_col="label_ts",
         contract=InferenceContract(
             timestamp_col="event_ts",
             prediction_col="prediction",
             label_col="label",
-            feature_columns=("amount", "gc_transaction"),
+            feature_columns=("amount", "transaction_id"),
         ),
         problem_type="classification",
     )

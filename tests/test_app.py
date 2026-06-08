@@ -239,7 +239,7 @@ def test_schema_helpers_flag_non_numeric_selected_features() -> None:
 
 def test_monitor_contract_ready_accepts_shared_labels_join_without_entity_id_column() -> None:
     scan_data = {
-        "columns": ["event_ts", "model_id", "prediction", "gc_transaction", "amount"],
+        "columns": ["event_ts", "model_id", "prediction", "transaction_id", "amount"],
     }
 
     assert callbacks_module._monitor_contract_ready(
@@ -256,7 +256,7 @@ def test_monitor_contract_ready_accepts_shared_labels_join_without_entity_id_col
         source_label_col=None,
         external_label_col="label",
         labels_table="main.demo.labels",
-        labels_join_col="gc_transaction",
+        labels_join_col="transaction_id",
         feature_columns=["amount"],
         baseline_kind="rolling",
         baseline_days=7,
@@ -267,7 +267,7 @@ def test_monitor_contract_ready_accepts_shared_labels_join_without_entity_id_col
 
 def test_monitor_contract_ready_rejects_whitespace_only_source_label_col_for_external_labels() -> None:
     scan_data = {
-        "columns": ["event_ts", "prediction", "gc_transaction", "amount"],
+        "columns": ["event_ts", "prediction", "transaction_id", "amount"],
     }
 
     assert callbacks_module._monitor_contract_ready(
@@ -284,7 +284,7 @@ def test_monitor_contract_ready_rejects_whitespace_only_source_label_col_for_ext
         source_label_col="   ",
         external_label_col="",
         labels_table="main.demo.labels",
-        labels_join_col="gc_transaction",
+        labels_join_col="transaction_id",
         feature_columns=["amount"],
         baseline_kind="rolling",
         baseline_days=7,
@@ -1142,13 +1142,13 @@ def test_render_drift_callback_respects_top_n_selection(monkeypatch) -> None:
                     {"feature": "device_score", "period": "2026-01-20", "psi": 3.10, "js_divergence": 0.26, "kl_divergence": 0.22},
                     {"feature": "ip_risk", "period": "2026-01-20", "psi": 2.60, "js_divergence": 0.22, "kl_divergence": 0.19},
                     {"feature": "txn_count", "period": "2026-01-20", "psi": 1.70, "js_divergence": 0.15, "kl_divergence": 0.13},
-                    {"feature": "geo_score", "period": "2026-01-20", "psi": 1.30, "js_divergence": 0.12, "kl_divergence": 0.1},
+                    {"feature": "location_score", "period": "2026-01-20", "psi": 1.30, "js_divergence": 0.12, "kl_divergence": 0.1},
                     {"feature": "amount", "period": "2026-01-21", "psi": 0.02, "js_divergence": 0.01, "kl_divergence": 0.01},
                     {"feature": "velocity_7d", "period": "2026-01-21", "psi": 0.01, "js_divergence": 0.01, "kl_divergence": 0.01},
                     {"feature": "device_score", "period": "2026-01-21", "psi": 0.01, "js_divergence": 0.01, "kl_divergence": 0.01},
                     {"feature": "ip_risk", "period": "2026-01-21", "psi": 0.01, "js_divergence": 0.01, "kl_divergence": 0.01},
                     {"feature": "txn_count", "period": "2026-01-21", "psi": 0.0, "js_divergence": 0.0, "kl_divergence": 0.0},
-                    {"feature": "geo_score", "period": "2026-01-21", "psi": 0.0, "js_divergence": 0.0, "kl_divergence": 0.0},
+                    {"feature": "location_score", "period": "2026-01-21", "psi": 0.0, "js_divergence": 0.0, "kl_divergence": 0.0},
                 ]
             )
 
