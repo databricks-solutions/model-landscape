@@ -1408,6 +1408,7 @@ def _review_summary(
     lakebase_database_name: str | None,
     mlflow_experiment_name: str | None,
     mlflow_registered_model_name: str | None,
+    mlflow_lens_artifacts: dict | None = None,
 ) -> html.Div:
     label_source = str(labels_table or "").strip() if str(labels_table or "").strip() else (str(source_label_col or "").strip() or "none")
     problem_type_text = str(problem_type or "classification").strip() or "classification"
@@ -1420,6 +1421,7 @@ def _review_summary(
         if str(baseline_kind or "rolling").strip() == "fixed" and str(baseline_start or "").strip() and str(baseline_end or "").strip()
         else build_default_baseline(int(baseline_days or 7))
     )
+    mlflow_lens_text = _format_mlflow_lens_artifacts(mlflow_lens_artifacts)
     rows = [
         ("Control Plane", f"{(control_plane_catalog or '').strip()}.{(control_plane_schema or '').strip()}"),
         ("Source Table", (source_table or "").strip() or "Not scanned yet"),
@@ -1448,6 +1450,7 @@ def _review_summary(
             or (mlflow_experiment_name or "").strip()
             or "Not linked",
         ),
+        ("MLflow Lens Artifacts", mlflow_lens_text) if mlflow_lens_text else None,
         (
             "Lakebase Session",
             f"{(lakebase_instance_name or '').strip()} / {(lakebase_database_name or '').strip()}"
@@ -1455,8 +1458,48 @@ def _review_summary(
             else "Warehouse-only",
         ),
     ]
+    rows = [row for row in rows if row is not None]
     frame = pd.DataFrame(rows, columns=["setting", "value"])
     return _render_frame(frame, empty_message="")
+
+
+def _format_mlflow_lens_artifacts(artifacts: dict | None) -> str:
+    if not isinstance(artifacts, dict):
+        return ""
+    types = [str(value).strip() for value in artifacts.get("artifact_types", []) if str(value).strip()]
+    if not types:
+        return ""
+    version = str(artifacts.get("lens_version") or "").strip()
+    suffix = f" (SDK {version})" if version else ""
+    return f"{', '.join(types[:8])}{'...' if len(types) > 8 else ''}{suffix}"
+
+
+def _training_context_block(config: MonitorConfig) -> object:
+    lineage = getattr(config, "mlflow", None)
+    fields = [
+        ("Experiment", getattr(lineage, "experiment_name", None)),
+        ("Experiment ID", getattr(lineage, "experiment_id", None)),
+        ("Run ID", getattr(lineage, "run_id", None)),
+        ("Registered Model", getattr(lineage, "registered_model_name", None)),
+        ("Model Version", getattr(lineage, "model_version", None)),
+    ]
+    rows = [{"field": field, "value": value} for field, value in fields if str(value or "").strip()]
+    if not rows:
+        return dbc.Alert(
+            "No MLflow training context is linked for this monitor. Production monitoring still works from the inference table contract.",
+            color="secondary",
+            className="py-2",
+        )
+    return html.Div(
+        [
+            _render_frame(pd.DataFrame(rows), "No MLflow lineage linked."),
+            dbc.Alert(
+                "Model Landscape discovers mlflow-lens artifacts from linked run tags during onboarding: lens.has_summary, lens.has_drift, and lens.panel.<type>. Production monitoring does not require those artifacts.",
+                color="secondary",
+                className="py-2 mt-3 mb-0",
+            ),
+        ]
+    )
 
 
 def _render_labels_discovery(
@@ -1801,6 +1844,9 @@ def register_callbacks(app) -> None:
                 lakebase_database_name=lakebase_database_name,
                 mlflow_experiment_name=mlflow_experiment_name,
                 mlflow_registered_model_name=mlflow_registered_model_name,
+                mlflow_lens_artifacts=((scan_data or {}).get("discovery") or {}).get("mlflow_lens_artifacts")
+                if isinstance(scan_data, dict)
+                else None,
             )
             return (
                 [make_wizard_step(index + 1, label, step) for index, label in enumerate(onboarding.STEP_LABELS)],
@@ -2083,6 +2129,16 @@ def register_callbacks(app) -> None:
                 },
             },
         }
+        lens_artifacts = discovery.mlflow_lens_artifacts
+        if lens_artifacts.available:
+            store["discovery"]["mlflow_lens_artifacts"] = {
+                "run_id": lens_artifacts.run_id or "",
+                "lens_version": lens_artifacts.lens_version or "",
+                "has_summary": lens_artifacts.has_summary,
+                "has_drift": lens_artifacts.has_drift,
+                "panels": list(lens_artifacts.panels),
+                "artifact_types": list(lens_artifacts.artifact_types),
+            }
         status_items = [
             (
                 f"Discovered a {discovery.confidence}-confidence monitor draft from {source_table.strip()} with {len(columns)} columns and {numeric_count} numeric candidates.",
@@ -2127,6 +2183,9 @@ def register_callbacks(app) -> None:
                     "info",
                 )
             )
+        if lens_artifacts.available:
+            artifact_text = _format_mlflow_lens_artifacts(store["discovery"].get("mlflow_lens_artifacts"))
+            status_items.append((f"Detected mlflow-lens artifacts: {artifact_text}.", "info"))
         status_items.extend((warning, "warning") for warning in discovery.warnings[:4])
         status = _status_block(status_items)
         preview_div = html.Div(
@@ -4711,6 +4770,9 @@ def register_callbacks(app) -> None:
                     "Read-only contract details and the latest persisted summary for the selected monitor.",
                     className="text-muted mb-3",
                 ),
+                html.H6("Training Context", className="text-light mb-2"),
+                _training_context_block(config),
+                html.Hr(),
                 html.H6("Monitor Contract", className="text-light mb-2"),
                 _render_frame(contract_frame, "No contract data."),
                 html.Hr(),

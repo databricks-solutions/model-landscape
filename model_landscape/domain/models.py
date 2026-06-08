@@ -114,6 +114,29 @@ class MLflowLineage:
 
 
 @dataclass(frozen=True)
+class MLflowLensArtifacts:
+    run_id: str | None = None
+    lens_version: str | None = None
+    has_summary: bool = False
+    has_drift: bool = False
+    panels: tuple[str, ...] = field(default_factory=tuple)
+
+    @property
+    def available(self) -> bool:
+        return bool(self.has_summary or self.has_drift or self.panels)
+
+    @property
+    def artifact_types(self) -> tuple[str, ...]:
+        types: list[str] = []
+        if self.has_summary:
+            types.append("summary")
+        if self.has_drift:
+            types.append("drift")
+        types.extend(self.panels)
+        return tuple(types)
+
+
+@dataclass(frozen=True)
 class MonitorConfig:
     model_key: str
     display_name: str
@@ -179,6 +202,7 @@ class MLflowDiscovery:
     lineage: MLflowLineage = field(default_factory=MLflowLineage)
     feature_columns: tuple[str, ...] = field(default_factory=tuple)
     problem_type: str | None = None
+    lens_artifacts: MLflowLensArtifacts = field(default_factory=MLflowLensArtifacts)
     warnings: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -192,6 +216,7 @@ class MonitorDiscoveryResult:
     label_schema_rows: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     label_preview_rows: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     label_validation: dict[str, Any] = field(default_factory=dict)
+    mlflow_lens_artifacts: MLflowLensArtifacts = field(default_factory=MLflowLensArtifacts)
     confidence: str = "high"
     requires_review: bool = False
     warnings: tuple[str, ...] = field(default_factory=tuple)

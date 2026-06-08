@@ -74,6 +74,6 @@ in production. When the holiday season ships a 25-point shift in
 
 ## Status
 
-`v0.1.x` — alpha. Panel JSON schemas are versioned (`schema_version: "1"`)
+`v0.2.0` — alpha. Panel JSON schemas are versioned (`schema_version: "1"`)
 and considered stable; the Python API may evolve before 1.0. See the
 [changelog](changelog.md) for what shipped in each release.
