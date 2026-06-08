@@ -35,7 +35,7 @@ def test_build_manual_refresh_job_payload_uses_workspace_wheel_path() -> None:
     payload = build_manual_refresh_job_payload(
         ManualRefreshJobSettings(
             app_name="ml-drift-monitor",
-            wheel_workspace_path="/Workspace/Users/test/model-landscape-manual/dist/model_landscape-0.1.0-py3-none-any.whl",
+            wheel_workspace_path="/Workspace/Users/test/model-landscape-manual/dist/model_landscape-0.2.0-py3-none-any.whl",
             sql_warehouse_id="wh-123",
             control_plane_catalog="gc_prod_mlproduct",
             control_plane_schema="mlp_rsch",
@@ -62,10 +62,11 @@ def test_build_manual_refresh_job_payload_uses_workspace_wheel_path() -> None:
     assert task["job_cluster_key"] == "refresh_compute"
     assert task["libraries"][0]["whl"].endswith(".whl")
     assert task["timeout_seconds"] == 14400
-    assert any(
-        library.get("pypi", {}).get("package") == "mlflow-skinny>=2.20,<3.0"
-        for library in task["libraries"][1:]
-    )
+    packages = {library.get("pypi", {}).get("package") for library in task["libraries"][1:]}
+    assert "dash>=3.0,<4.0" in packages
+    assert "dash-bootstrap-components>=2.0,<3.0" in packages
+    assert "mlflow-skinny>=2.20" in packages
+    assert "mlflow-skinny>=2.20,<3.0" not in packages
     assert task["python_wheel_task"]["named_parameters"]["use-lakebase-read-model"] == "{{job.parameters.use_lakebase_read_model}}"
 
 

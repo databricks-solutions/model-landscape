@@ -62,25 +62,25 @@ resources:
           libraries:
             - whl: ../dist/*.whl
             - pypi:
-                package: dash>=2.18,<3.0
+                package: dash>=3.0,<4.0
             - pypi:
-                package: dash-bootstrap-components>=1.6,<2.0
+                package: dash-bootstrap-components>=2.0,<3.0
             - pypi:
                 package: databricks-sdk>=0.81,<1.0
             - pypi:
                 package: databricks-sql-connector>=3.0,<4.0
             - pypi:
-                package: mlflow-skinny>=2.20,<3.0
+                package: mlflow-skinny>=2.20
             - pypi:
-                package: numpy>=1.26,<3.0
+                package: numpy>=1.26
             - pypi:
-                package: pandas>=2.2,<3.0
+                package: pandas>=2.2
             - pypi:
-                package: plotly>=5.24,<6.0
+                package: plotly>=5.24
             - pypi:
                 package: psycopg[binary]>=3.2,<4.0
             - pypi:
-                package: scikit-learn>=1.5,<2.0
+                package: scikit-learn>=1.5
           max_retries: 2
           min_retry_interval_millis: 60000
           timeout_seconds: ${var.refresh_timeout_seconds}

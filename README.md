@@ -20,10 +20,9 @@ there:
 Run it locally:
 
 ```bash
-uv pip install mkdocs-material 'mkdocstrings[python]>=0.26' \
-               mkdocs-include-markdown-plugin
-uv run python docs/_build_gallery.py
-uv run mkdocs serve
+uv sync --extra docs
+uv run --extra docs python docs/_build_gallery.py
+uv run --extra docs mkdocs serve
 ```
 
 ## Quick deploy
@@ -32,6 +31,7 @@ uv run mkdocs serve
 git clone https://github.com/databricks-solutions/model-landscape.git
 cd model-landscape
 uv build --wheel --out-dir dist
+uv build --wheel --out-dir dist mlflow-lens
 
 databricks bundle deploy -t warehouse_only \
   --var "sql_warehouse_id=<id>" \
@@ -51,8 +51,11 @@ Full first-time-setup guide: [Get started](https://databricks-solutions.github.i
 
 ```bash
 uv sync --extra dev               # install workspace + dev deps
-uv run pytest -q                  # run tests
-uv build --wheel --out-dir dist   # build SDK + app wheel
+uv run --extra dev pytest -q tests
+uv run --package mlflow-lens --extra dev pytest -q mlflow-lens/tests
+uv run --extra docs mkdocs build --strict
+uv build --wheel --out-dir dist
+uv build --wheel --out-dir dist mlflow-lens
 uv run python -m model_landscape.app  # run app locally
 ```
 

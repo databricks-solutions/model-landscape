@@ -17,7 +17,18 @@ def test_jobs_bundle_uses_spark_cluster_libraries() -> None:
     assert "${var.lakebase_instance_name}" in text
     assert "${var.lakebase_database_name}" in text
     assert "${var.lakebase_pguser}" in text
-    assert "mlflow-skinny>=2.20,<3.0" in text
+    assert "dash>=3.0,<4.0" in text
+    assert "dash-bootstrap-components>=2.0,<3.0" in text
+    assert "mlflow-skinny>=2.20" in text
+    assert "mlflow-skinny>=2.20,<3.0" not in text
+
+
+def test_bundle_builds_app_and_mlflow_lens_wheels() -> None:
+    text = (REPO_ROOT / "databricks.yml").read_text()
+
+    assert "uv build --wheel --out-dir dist\n" in text
+    assert "uv build --wheel --out-dir dist mlflow-lens" in text
+    assert "../dist/*.whl" in (REPO_ROOT / "resources" / "tutorial.yml").read_text()
 
 
 def test_app_resource_uses_only_supported_sql_warehouse_binding() -> None:
@@ -78,3 +89,31 @@ def test_project_dev_dependencies_include_local_spark_support() -> None:
     dev_dependencies = payload["project"]["optional-dependencies"]["dev"]
 
     assert "pyspark>=3.5,<4.0" in dev_dependencies
+
+
+def test_project_docs_dependencies_are_declared_and_used_by_ci() -> None:
+    payload = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+    docs_dependencies = payload["project"]["optional-dependencies"]["docs"]
+
+    assert "mlflow-lens" in docs_dependencies
+    assert "mkdocs-material>=9.5" in docs_dependencies
+    assert "mkdocstrings[python]>=0.26" in docs_dependencies
+    assert "mkdocs-include-markdown-plugin>=6.0" in docs_dependencies
+
+    for relative_path in (".github/workflows/ci.yml", ".github/workflows/docs.yml"):
+        text = (REPO_ROOT / relative_path).read_text()
+        assert "uv run --extra docs mkdocs build --strict" in text
+        assert "uv pip install \\" not in text
+        assert "'mkdocs-material>=9.5'" not in text
+
+
+def test_project_runtime_dependencies_do_not_cap_managed_runtime_libraries() -> None:
+    payload = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+    dependencies = set(payload["project"]["dependencies"])
+
+    assert "mlflow-skinny>=2.20" in dependencies
+    assert "numpy>=1.26" in dependencies
+    assert "pandas>=2.2" in dependencies
+    assert "plotly>=5.24" in dependencies
+    assert "scikit-learn>=1.5" in dependencies
+    assert "mlflow-skinny>=2.20,<3.0" not in dependencies
