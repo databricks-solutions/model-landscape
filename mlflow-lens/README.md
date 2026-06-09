@@ -64,7 +64,7 @@ Once a release is cut, `mlflow-lens` is distributed through GitHub Releases on
 this repo (not PyPI). Pin to a specific version:
 
 ```bash
-pip install "https://github.com/databricks-solutions/model-landscape/releases/download/mlflow-lens-v0.1.0/mlflow_lens-0.1.0-py3-none-any.whl"
+pip install "https://github.com/databricks-solutions/model-landscape/releases/download/mlflow-lens-v0.2.0/mlflow_lens-0.2.0-py3-none-any.whl"
 ```
 
 Find the latest version at
@@ -75,7 +75,7 @@ In `pyproject.toml`:
 
 ```toml
 dependencies = [
-  "mlflow-lens @ https://github.com/databricks-solutions/model-landscape/releases/download/mlflow-lens-v0.1.0/mlflow_lens-0.1.0-py3-none-any.whl",
+  "mlflow-lens @ https://github.com/databricks-solutions/model-landscape/releases/download/mlflow-lens-v0.2.0/mlflow_lens-0.2.0-py3-none-any.whl",
 ]
 ```
 
@@ -83,14 +83,14 @@ For the Spark `export` module (`mlflow_lens.export.to_delta`), append the
 `[spark]` extra:
 
 ```bash
-pip install "https://.../mlflow_lens-0.1.0-py3-none-any.whl[spark]"
+pip install "https://.../mlflow_lens-0.2.0-py3-none-any.whl[spark]"
 ```
 
 Each release attaches a `SHA256SUMS` file. To verify the wheel before installing:
 
 ```bash
-curl -LO https://github.com/databricks-solutions/model-landscape/releases/download/mlflow-lens-v0.1.0/SHA256SUMS
-curl -LO https://github.com/databricks-solutions/model-landscape/releases/download/mlflow-lens-v0.1.0/mlflow_lens-0.1.0-py3-none-any.whl
+curl -LO https://github.com/databricks-solutions/model-landscape/releases/download/mlflow-lens-v0.2.0/SHA256SUMS
+curl -LO https://github.com/databricks-solutions/model-landscape/releases/download/mlflow-lens-v0.2.0/mlflow_lens-0.2.0-py3-none-any.whl
 sha256sum -c SHA256SUMS
 ```
 

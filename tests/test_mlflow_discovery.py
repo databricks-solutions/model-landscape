@@ -57,7 +57,13 @@ class _FakeClient:
             "run-123",
             metrics={"auc": 0.93, "f1": 0.84},
             params={"problem_type": "classification"},
-            tags={"mlflow.registeredModelName": "catalog.schema.fraud_model"},
+            tags={
+                "mlflow.registeredModelName": "catalog.schema.fraud_model",
+                "lens.version": "0.2.0",
+                "lens.has_summary": "true",
+                "lens.has_drift": "true",
+                "lens.panel.feature_importance": "true",
+            },
         )
 
     def get_experiment_by_name(self, name: str):
@@ -97,6 +103,8 @@ def test_mlflow_discovery_reads_registered_model_signature(monkeypatch) -> None:
     assert discovery.lineage.run_id == "run-123"
     assert discovery.feature_columns == ("amount", "velocity_7d")
     assert discovery.problem_type == "classification"
+    assert discovery.lens_artifacts.run_id == "run-123"
+    assert discovery.lens_artifacts.artifact_types == ("summary", "drift", "feature_importance")
 
 
 def test_mlflow_discovery_reads_experiment_metadata(monkeypatch) -> None:
@@ -115,3 +123,5 @@ def test_mlflow_discovery_reads_experiment_metadata(monkeypatch) -> None:
     assert discovery.lineage.run_id == "run-123"
     assert discovery.lineage.registered_model_name == "catalog.schema.fraud_model"
     assert discovery.feature_columns == ("amount", "velocity_7d")
+    assert discovery.lens_artifacts.lens_version == "0.2.0"
+    assert discovery.lens_artifacts.panels == ("feature_importance",)

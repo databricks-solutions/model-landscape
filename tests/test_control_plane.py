@@ -531,19 +531,19 @@ def test_load_monitor_frame_uses_shared_labels_join_when_entity_id_is_absent() -
                 {"col_name": "event_ts", "data_type": "timestamp"},
                 {"col_name": "model_id", "data_type": "string"},
                 {"col_name": "prediction", "data_type": "double"},
-                {"col_name": "gc_transaction", "data_type": "string"},
+                {"col_name": "transaction_id", "data_type": "string"},
                 {"col_name": "amount", "data_type": "double"},
             ])
 
         def get_columns(self, table_name: str) -> list[str]:
             if table_name == "catalog.schema.labels":
-                return ["gc_transaction", "label", "label_timestamp"]
-            return ["event_ts", "model_id", "prediction", "gc_transaction", "amount"]
+                return ["transaction_id", "label", "label_timestamp"]
+            return ["event_ts", "model_id", "prediction", "transaction_id", "amount"]
 
     warehouse = _SharedJoinWarehouse()
     repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
     contract = build_contract(
-        columns=["event_ts", "model_id", "prediction", "gc_transaction", "label", "amount"],
+        columns=["event_ts", "model_id", "prediction", "transaction_id", "label", "amount"],
         timestamp_col="event_ts",
         model_id_col="model_id",
         prediction_col="prediction",
@@ -560,7 +560,7 @@ def test_load_monitor_frame_uses_shared_labels_join_when_entity_id_is_absent() -
         problem_type="classification",
         model_id_value="m1",
         labels_table="catalog.schema.labels",
-        labels_join_col="gc_transaction",
+        labels_join_col="transaction_id",
         labels_order_col="label_timestamp",
     )
 
@@ -568,7 +568,7 @@ def test_load_monitor_frame_uses_shared_labels_join_when_entity_id_is_absent() -
 
     assert not frame.empty
     data_query, params = warehouse.query_param_calls[-1]
-    assert "ON s.`gc_transaction` = l.`gc_transaction`" in data_query
+    assert "ON s.`transaction_id` = l.`transaction_id`" in data_query
     assert params == ("m1",)
 
 
@@ -576,13 +576,13 @@ def test_load_monitor_frame_sampling_keeps_external_label_join_column() -> None:
     class _SharedJoinWarehouse(FakeWarehouse):
         def get_columns(self, table_name: str) -> list[str]:
             if table_name == "catalog.schema.labels":
-                return ["gc_transaction", "label", "label_timestamp"]
-            return ["event_ts", "model_id", "prediction", "gc_transaction", "amount"]
+                return ["transaction_id", "label", "label_timestamp"]
+            return ["event_ts", "model_id", "prediction", "transaction_id", "amount"]
 
     warehouse = _SharedJoinWarehouse()
     repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
     contract = build_contract(
-        columns=["event_ts", "model_id", "prediction", "gc_transaction", "label", "amount"],
+        columns=["event_ts", "model_id", "prediction", "transaction_id", "label", "amount"],
         timestamp_col="event_ts",
         model_id_col="model_id",
         prediction_col="prediction",
@@ -599,7 +599,7 @@ def test_load_monitor_frame_sampling_keeps_external_label_join_column() -> None:
         problem_type="classification",
         model_id_value="m1",
         labels_table="catalog.schema.labels",
-        labels_join_col="gc_transaction",
+        labels_join_col="transaction_id",
         labels_order_col="label_timestamp",
     )
 
@@ -613,8 +613,8 @@ def test_load_monitor_frame_sampling_keeps_external_label_join_column() -> None:
     assert not frame.empty
     data_query, params = warehouse.query_param_calls[-1]
     assert "ROW_NUMBER() OVER" in data_query
-    assert "SELECT `event_ts`, `prediction`, `model_id`, `amount`, `gc_transaction`" in data_query
-    assert "ON s.`gc_transaction` = l.`gc_transaction`" in data_query
+    assert "SELECT `event_ts`, `prediction`, `model_id`, `amount`, `transaction_id`" in data_query
+    assert "ON s.`transaction_id` = l.`transaction_id`" in data_query
     assert params == ("m1",)
 
 
@@ -759,13 +759,13 @@ def test_validate_monitor_source_allows_shared_labels_join_without_entity_id_col
     class _SharedJoinWarehouse(FakeWarehouse):
         def get_columns(self, table_name: str) -> list[str]:
             if table_name == "catalog.schema.labels":
-                return ["gc_transaction", "label"]
-            return ["event_ts", "model_id", "prediction", "gc_transaction", "amount"]
+                return ["transaction_id", "label"]
+            return ["event_ts", "model_id", "prediction", "transaction_id", "amount"]
 
     warehouse = _SharedJoinWarehouse()
     repository = ControlPlaneRepository(warehouse=warehouse, table_names=TableNames("model_observability", "control_plane"))
     contract = build_contract(
-        columns=["event_ts", "model_id", "prediction", "gc_transaction", "label", "amount"],
+        columns=["event_ts", "model_id", "prediction", "transaction_id", "label", "amount"],
         timestamp_col="event_ts",
         model_id_col="model_id",
         prediction_col="prediction",
@@ -782,7 +782,7 @@ def test_validate_monitor_source_allows_shared_labels_join_without_entity_id_col
         problem_type="classification",
         model_id_value="m1",
         labels_table="catalog.schema.labels",
-        labels_join_col="gc_transaction",
+        labels_join_col="transaction_id",
     )
 
     repository.validate_monitor_source(config)

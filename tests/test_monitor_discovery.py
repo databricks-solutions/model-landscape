@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from model_landscape.domain.models import MLflowDiscovery, MLflowLineage
+from model_landscape.domain.models import MLflowDiscovery, MLflowLensArtifacts, MLflowLineage
 from model_landscape.services.monitor_discovery import MonitorDiscoveryService
 
 
@@ -242,6 +242,13 @@ def test_discovery_uses_mlflow_and_labels_to_fill_scope_and_lineage() -> None:
             ),
             feature_columns=("velocity_7d", "amount", "non_numeric_feature"),
             problem_type="classification",
+            lens_artifacts=MLflowLensArtifacts(
+                run_id="run-1",
+                lens_version="0.2.0",
+                has_summary=True,
+                has_drift=True,
+                panels=("feature_importance",),
+            ),
         )
     )
     service = MonitorDiscoveryService(repository, mlflow=mlflow)
@@ -267,6 +274,7 @@ def test_discovery_uses_mlflow_and_labels_to_fill_scope_and_lineage() -> None:
     assert result.config.mlflow.experiment_id == "exp-1"
     assert result.config.mlflow.run_id == "run-1"
     assert result.config.mlflow.registered_model_name == "fraud_model_demo"
+    assert result.mlflow_lens_artifacts.artifact_types == ("summary", "drift", "feature_importance")
     assert result.requires_review is False
 
 
@@ -288,7 +296,7 @@ def test_discovery_marks_multi_model_tables_for_review_without_mlflow_scope_hint
 
 
 def test_discovery_prefers_shared_string_join_key_and_string_timestamps() -> None:
-    class _GeoComplyRepository(FakeRepository):
+    class _StringJoinRepository(FakeRepository):
         def __init__(self) -> None:
             super().__init__()
             self.source_schema = pd.DataFrame(
@@ -297,7 +305,7 @@ def test_discovery_prefers_shared_string_join_key_and_string_timestamps() -> Non
                     {"col_name": "model_version", "data_type": "string"},
                     {"col_name": "prediction", "data_type": "double"},
                     {"col_name": "unique_hash", "data_type": "string"},
-                    {"col_name": "anti_spoof_debug_process_id", "data_type": "bigint"},
+                    {"col_name": "debug_process_id", "data_type": "bigint"},
                     {"col_name": "velocity_7d", "data_type": "double"},
                     {"col_name": "amount", "data_type": "double"},
                 ]
@@ -306,19 +314,19 @@ def test_discovery_prefers_shared_string_join_key_and_string_timestamps() -> Non
                 [
                     {
                         "event_time": "2026-01-17T19:47:22.366Z",
-                        "model_version": "gc_prod_aiguardian.ios.ali_ios@5",
+                        "model_version": "prod_risk_model.ios.v5",
                         "prediction": 0.91,
                         "unique_hash": "hash-1",
-                        "anti_spoof_debug_process_id": 101,
+                        "debug_process_id": 101,
                         "velocity_7d": 2.4,
                         "amount": 120.0,
                     },
                     {
                         "event_time": "2026-01-17T19:48:22.366Z",
-                        "model_version": "gc_prod_aiguardian.ios.ali_ios@5",
+                        "model_version": "prod_risk_model.ios.v5",
                         "prediction": 0.13,
                         "unique_hash": "hash-2",
-                        "anti_spoof_debug_process_id": 202,
+                        "debug_process_id": 202,
                         "velocity_7d": 1.1,
                         "amount": 83.0,
                     },
@@ -327,7 +335,7 @@ def test_discovery_prefers_shared_string_join_key_and_string_timestamps() -> Non
             self.labels_schema = pd.DataFrame(
                 [
                     {"col_name": "unique_hash", "data_type": "string"},
-                    {"col_name": "anti_spoof_debug_process_id", "data_type": "bigint"},
+                    {"col_name": "debug_process_id", "data_type": "bigint"},
                     {"col_name": "label", "data_type": "int"},
                     {"col_name": "label_timestamp", "data_type": "string"},
                 ]
@@ -336,14 +344,14 @@ def test_discovery_prefers_shared_string_join_key_and_string_timestamps() -> Non
                 [
                     {
                         "unique_hash": "hash-9",
-                        "anti_spoof_debug_process_id": 101,
+                        "debug_process_id": 101,
                         "label": 1,
                         "label_timestamp": "2026-01-17T20:00:00.000Z",
                     }
                 ]
             )
             self.bounded_samples["main.demo.inference_logs"] = pd.DataFrame(
-                [{"model_version": "gc_prod_aiguardian.ios.ali_ios@5"}]
+                [{"model_version": "prod_risk_model.ios.v5"}]
             )
             self.labels_validation = {
                 "inference_rows": 2,
@@ -361,7 +369,7 @@ def test_discovery_prefers_shared_string_join_key_and_string_timestamps() -> Non
             assert kwargs["labels_order_col"] == "label_timestamp"
             return dict(self.labels_validation)
 
-    repository = _GeoComplyRepository()
+    repository = _StringJoinRepository()
     service = MonitorDiscoveryService(repository, mlflow=FakeMLflow(MLflowDiscovery()))
 
     result = service.discover(
@@ -372,7 +380,7 @@ def test_discovery_prefers_shared_string_join_key_and_string_timestamps() -> Non
     assert result.config.contract.timestamp_col == "event_time"
     assert result.config.contract.model_id_col == "model_version"
     assert result.config.contract.model_version_col is None
-    assert result.config.model_id_value == "gc_prod_aiguardian.ios.ali_ios@5"
+    assert result.config.model_id_value == "prod_risk_model.ios.v5"
     assert result.config.labels_join_col == "unique_hash"
     assert result.config.labels_order_col == "label_timestamp"
     assert result.label_validation["matched_rows"] == 0
@@ -425,7 +433,7 @@ def test_discovery_uses_shared_labels_join_when_entity_id_is_absent() -> None:
                     {"col_name": "event_ts", "data_type": "timestamp"},
                     {"col_name": "model_id", "data_type": "string"},
                     {"col_name": "prediction", "data_type": "double"},
-                    {"col_name": "gc_transaction", "data_type": "string"},
+                    {"col_name": "transaction_id", "data_type": "string"},
                     {"col_name": "amount", "data_type": "double"},
                 ]
             )
@@ -435,18 +443,18 @@ def test_discovery_uses_shared_labels_join_when_entity_id_is_absent() -> None:
                         "event_ts": "2026-01-01T00:00:00",
                         "model_id": "fraud_model_demo",
                         "prediction": 0.91,
-                        "gc_transaction": "tx-1",
+                        "transaction_id": "tx-1",
                         "amount": 120.0,
                     }
                 ]
             )
             self.labels_schema = pd.DataFrame(
                 [
-                    {"col_name": "gc_transaction", "data_type": "string"},
+                    {"col_name": "transaction_id", "data_type": "string"},
                     {"col_name": "label", "data_type": "int"},
                 ]
             )
-            self.labels_preview = pd.DataFrame([{"gc_transaction": "tx-1", "label": 1}])
+            self.labels_preview = pd.DataFrame([{"transaction_id": "tx-1", "label": 1}])
             self.labels_validation = {
                 "inference_rows": 1,
                 "matched_rows": 1,
@@ -458,8 +466,8 @@ def test_discovery_uses_shared_labels_join_when_entity_id_is_absent() -> None:
             }
 
         def profile_labels_mapping(self, **kwargs) -> dict:
-            assert kwargs["source_join_col"] == "gc_transaction"
-            assert kwargs["labels_join_col"] == "gc_transaction"
+            assert kwargs["source_join_col"] == "transaction_id"
+            assert kwargs["labels_join_col"] == "transaction_id"
             return dict(self.labels_validation)
 
     repository = _SharedJoinRepository()
@@ -470,6 +478,6 @@ def test_discovery_uses_shared_labels_join_when_entity_id_is_absent() -> None:
         labels_table="main.demo.labels",
     )
 
-    assert result.config.labels_join_col == "gc_transaction"
+    assert result.config.labels_join_col == "transaction_id"
     assert result.label_validation["matched_rows"] == 1
     assert result.requires_review is False

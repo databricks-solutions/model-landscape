@@ -19,8 +19,8 @@ def test_build_manual_app_yaml_uses_literal_warehouse_id() -> None:
         ManualAppSettings(
             app_name="ml-drift-monitor",
             sql_warehouse_id="wh-123",
-            control_plane_catalog="gc_prod_mlproduct",
-            control_plane_schema="mlp_rsch",
+            control_plane_catalog="demo_catalog",
+            control_plane_schema="monitoring_schema",
             bootstrap_refresh_job_name="ml-drift-monitor-bootstrap-refresh",
         )
     )
@@ -37,8 +37,8 @@ def test_build_manual_refresh_job_payload_uses_workspace_wheel_path() -> None:
             app_name="ml-drift-monitor",
             wheel_workspace_path="/Workspace/Users/test/model-landscape-manual/dist/model_landscape-0.2.0-py3-none-any.whl",
             sql_warehouse_id="wh-123",
-            control_plane_catalog="gc_prod_mlproduct",
-            control_plane_schema="mlp_rsch",
+            control_plane_catalog="demo_catalog",
+            control_plane_schema="monitoring_schema",
             node_type_id="m5d.large",
             use_lakebase_read_model=True,
             lakebase_instance_name="lakebase-instance",
@@ -81,9 +81,9 @@ def test_prepare_existing_app_source_script_writes_manual_app_yaml(tmp_path: Pat
             "--sql-warehouse-id",
             "wh-123",
             "--control-plane-catalog",
-            "gc_prod_mlproduct",
+            "demo_catalog",
             "--control-plane-schema",
-            "mlp_rsch",
+            "monitoring_schema",
             "--output-dir",
             str(output_dir),
         ],
