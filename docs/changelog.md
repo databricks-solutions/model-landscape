@@ -44,7 +44,7 @@ under the same version as a tagged GitHub Release
   mkdocstrings) + 13-panel interactive Plotly gallery + changelog.
 - **GitHub Pages workflow** (`.github/workflows/docs.yml`) — strict
   build on PRs that touch the docs or SDK source, deploy on push to
-  `main` or `mlflow-lens-v*` tag.
+  `dev`, `main`, or `mlflow-lens-v*` tag.
 - **mlflow-lens GitHub Release workflow**
   (`.github/workflows/mlflow-lens-release.yml`) — on tag push: build
   sdist + wheel, `twine check`, smoke-install in a clean venv, publish
