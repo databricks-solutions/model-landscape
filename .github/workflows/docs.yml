@@ -2,7 +2,7 @@ name: docs
 
 on:
   push:
-    branches: [main]
+    branches: [dev, main]
     tags: ["mlflow-lens-v*"]
   pull_request:
     paths:
@@ -52,7 +52,7 @@ jobs:
           path: site
 
   deploy:
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/mlflow-lens-v'))
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/mlflow-lens-v'))
     needs: build
     runs-on: ubuntu-latest
     permissions:

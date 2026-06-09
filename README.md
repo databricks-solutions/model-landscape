@@ -45,7 +45,7 @@ databricks apps deploy model-landscape \
 databricks bundle run tutorial_mlops
 ```
 
-Full first-time-setup guide: [Get started](https://databricks-solutions.github.io/model-landscape/getting_started/).
+Full first-time-setup guide: [Get started](https://databricks-solutions.github.io/model-landscape/getting_started.html).
 
 ## Local development
 
